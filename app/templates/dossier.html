@@ -75,7 +75,7 @@
         {% for event in events %}
           <div class="card sev-{{ event.severity }}" style="margin-top: 8px;">
             <div><strong>{{ event.title }}</strong></div>
-            <div class="meta">{{ event.category }} · {{ event.type }} · {{ event.detected_at.strftime('%Y-%m-%d') }}</div>
+            <div class="meta">{{ event.category }} · {{ event.type }} · {{ event.detected_at_str }}</div>
             {% if event.why_it_matters %}
               <div class="meta">Why it matters: {{ event.why_it_matters }}</div>
             {% endif %}

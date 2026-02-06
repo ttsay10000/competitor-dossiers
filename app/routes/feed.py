@@ -9,15 +9,23 @@ from ..digest import build_weekly_digest
 router = APIRouter()
 
 
+def _run_log_summary(log) -> dict:
+    """Serializable RunLog summary so templates don't touch detached ORM."""
+    return {
+        "status": log.status,
+        "created_at_str": log.created_at.strftime("%Y-%m-%d %H:%M"),
+    }
+
+
 @router.get("/feed")
 def feed(request: Request, competitor_id: Optional[int] = None, severity: Optional[str] = None, category: Optional[str] = None, show_low: int = 0):
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         recent_logs = session.query(RunLog).order_by(RunLog.created_at.desc()).limit(100).all()
-        last_runs: dict[str, RunLog] = {}
+        last_runs: dict = {}
         for log in recent_logs:
             if log.channel not in last_runs:
-                last_runs[log.channel] = log
+                last_runs[log.channel] = _run_log_summary(log)
         query = session.query(Event).order_by(Event.detected_at.desc())
 
         if competitor_id:
@@ -29,7 +37,21 @@ def feed(request: Request, competitor_id: Optional[int] = None, severity: Option
         if category:
             query = query.filter(Event.category == category)
 
-        events = query.limit(200).all()
+        events_rows = query.limit(200).all()
+        events = [
+            {
+                "title": e.title,
+                "summary": e.summary,
+                "severity": e.severity,
+                "category": e.category,
+                "type": e.type,
+                "detected_at_str": e.detected_at.strftime("%Y-%m-%d"),
+                "why_it_matters": e.why_it_matters,
+                "evidence_json": e.evidence_json,
+            }
+            for e in events_rows
+        ]
+        competitors_data = [{"id": c.id, "name": c.name} for c in competitors]
         last_refreshed = get_last_refreshed(session)
 
     return request.app.state.templates.TemplateResponse(
@@ -37,7 +59,7 @@ def feed(request: Request, competitor_id: Optional[int] = None, severity: Option
         {
             "request": request,
             "events": events,
-            "competitors": competitors,
+            "competitors": competitors_data,
             "selected_competitor": competitor_id,
             "selected_severity": severity,
             "selected_category": category,
@@ -53,10 +75,10 @@ def digest(request: Request):
     digest_text = build_weekly_digest()
     with get_session() as session:
         recent_logs = session.query(RunLog).order_by(RunLog.created_at.desc()).limit(100).all()
-        last_runs: dict[str, RunLog] = {}
+        last_runs = {}
         for log in recent_logs:
             if log.channel not in last_runs:
-                last_runs[log.channel] = log
+                last_runs[log.channel] = _run_log_summary(log)
         last_refreshed = get_last_refreshed(session)
     return request.app.state.templates.TemplateResponse(
         "digest.html",

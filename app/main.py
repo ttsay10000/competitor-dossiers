@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -8,7 +9,9 @@ from .routes import competitors, feed, runs, dossier
 
 app = FastAPI(title="Competitor Signals")
 
-templates = Jinja2Templates(directory="app/templates")
+# Paths relative to this file so they work on Render regardless of cwd
+_app_dir = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=str(_app_dir / "templates"))
 templates.env.globals["utcnow"] = datetime.utcnow
 app.state.templates = templates
 
@@ -17,7 +20,7 @@ app.include_router(feed.router)
 app.include_router(runs.router)
 app.include_router(dossier.router)
 
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+app.mount("/static", StaticFiles(directory=str(_app_dir / "static")), name="static")
 
 
 @app.get("/health")

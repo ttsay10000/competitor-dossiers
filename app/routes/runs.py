@@ -20,7 +20,17 @@ def runs(request: Request, competitor_id: Optional[int] = None, channel: Optiona
             query = query.filter(RunLog.channel == channel)
         if status:
             query = query.filter(RunLog.status == status)
-        logs = query.limit(200).all()
+        logs_rows = query.limit(200).all()
+        logs = [
+            {
+                "created_at_str": log.created_at.strftime("%Y-%m-%d %H:%M"),
+                "competitor_id": log.competitor_id,
+                "channel": log.channel,
+                "status": log.status,
+                "message": log.message,
+            }
+            for log in logs_rows
+        ]
         last_refreshed = get_last_refreshed(session)
 
     return request.app.state.templates.TemplateResponse(

@@ -19,10 +19,11 @@ def root():
 def competitors_list(request: Request):
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        competitors_data = [{"id": c.id, "name": c.name, "primary_domain": c.primary_domain} for c in competitors]
         last_refreshed = get_last_refreshed(session)
     return request.app.state.templates.TemplateResponse(
         "competitors.html",
-        {"request": request, "competitors": competitors, "last_refreshed": last_refreshed},
+        {"request": request, "competitors": competitors_data, "last_refreshed": last_refreshed},
     )
 
 
@@ -51,14 +52,26 @@ def competitors_edit(request: Request, competitor_id: int):
             .limit(100)
             .all()
         )
-        last_runs: dict[str, RunLog] = {}
+        last_runs = {}
         for log in recent_logs:
             if log.channel not in last_runs:
-                last_runs[log.channel] = log
+                last_runs[log.channel] = {
+                    "status": log.status,
+                    "created_at_str": log.created_at.strftime("%Y-%m-%d %H:%M"),
+                }
         last_refreshed = get_last_refreshed(session)
+        competitor_data = {
+            "id": competitor.id,
+            "name": competitor.name,
+            "primary_domain": competitor.primary_domain,
+        }
+        endpoints_data = [
+            {"id": ep.id, "channel": ep.channel, "url": ep.url, "confidence": ep.confidence, "js_required": ep.js_required, "use_sitemap_first": ep.use_sitemap_first}
+            for ep in endpoints
+        ]
     return request.app.state.templates.TemplateResponse(
         "competitor_edit.html",
-        {"request": request, "competitor": competitor, "endpoints": endpoints, "last_runs": last_runs, "last_refreshed": last_refreshed},
+        {"request": request, "competitor": competitor_data, "endpoints": endpoints_data, "last_runs": last_runs, "last_refreshed": last_refreshed},
     )
 
 

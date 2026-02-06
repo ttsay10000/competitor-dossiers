@@ -25,6 +25,20 @@ RECOMMENDATIONS_MAP = {
 }
 
 
+def _event_dict(e) -> dict:
+    """Serializable event for templates (avoids DetachedInstanceError)."""
+    return {
+        "title": e.title,
+        "summary": e.summary,
+        "severity": e.severity,
+        "category": e.category,
+        "type": e.type,
+        "detected_at_str": e.detected_at.strftime("%Y-%m-%d"),
+        "why_it_matters": e.why_it_matters,
+        "evidence_json": e.evidence_json,
+    }
+
+
 def build_recommendations(events: list) -> list[dict]:
     """Build suggested next actions from events (deduplicated by type)."""
     seen_types = set()
@@ -103,19 +117,19 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     # New this week (asset-related events in last 7 days) for operational signals.
     week_cutoff = datetime.utcnow() - timedelta(days=7)
     events_this_week = [e for e in events if e.detected_at >= week_cutoff]
-    new_this_week = [e for e in events_this_week if e.category == "asset" or e.type.startswith("asset.")]
+    new_this_week = [e for e in events_this_week if e.category == "asset" or (e.type or "").startswith("asset.")]
 
     return {
-        "competitor": competitor,
+        "competitor": {"id": competitor.id, "name": competitor.name},
         "markets": markets,
-        "capabilities": capabilities,
-        "events": events,
+        "capabilities": [{"capability": c.capability} for c in capabilities],
+        "events": [_event_dict(e) for e in events],
         "talent_jobs": talent_jobs,
         "press_items": press_items,
         "takeaways": takeaways,
         "recommendations": recommendations,
-        "new_this_week": new_this_week,
-        "events_this_week": events_this_week,
+        "new_this_week": [_event_dict(e) for e in new_this_week],
+        "events_this_week": [_event_dict(e) for e in events_this_week],
     }
 
 
@@ -137,17 +151,17 @@ def build_summary_context(session, competitor_id: int, days: int = 7) -> dict:
 
     by_category = {}
     for e in events:
-        by_category.setdefault(e.category, []).append(e)
+        by_category.setdefault(e.category, []).append(_event_dict(e))
 
     recommendations = build_recommendations(events)
     new_this_week = [e for e in events if e.category == "asset" or (e.type or "").startswith("asset.")]
 
     return {
-        "competitor": competitor,
-        "events": events,
+        "competitor": {"id": competitor.id, "name": competitor.name},
+        "events": [_event_dict(e) for e in events],
         "events_by_category": by_category,
         "recommendations": recommendations,
-        "new_this_week": new_this_week,
+        "new_this_week": [_event_dict(e) for e in new_this_week],
         "summary_days": days,
     }
 

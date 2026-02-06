@@ -7,7 +7,7 @@
     <div class="meta">
       {% if last_runs %}
         {% for channel, log in last_runs.items() %}
-          <div>{{ channel }} · {{ log.status }} · {{ log.created_at.strftime('%Y-%m-%d %H:%M') }}</div>
+          <div>{{ channel }} · {{ log.status }} · {{ log.created_at_str }}</div>
         {% endfor %}
       {% else %}
         <div>No run history yet.</div>
