@@ -27,11 +27,9 @@ target_metadata = Base.metadata
 
 
 def _get_url():
-    """Use DATABASE_URL on Render/production; else alembic.ini."""
-    url = os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
-    if url and url.startswith("postgres://"):
-        url = "postgresql://" + url[len("postgres://"):]
-    return url or "postgresql://postgres:postgres@localhost:5432/competitor_signals"
+    """Use app config so we get the same URL (and driver) as the app (postgresql+psycopg on Render)."""
+    from app.config import settings
+    return settings.database_url
 
 
 def run_migrations_offline() -> None:
