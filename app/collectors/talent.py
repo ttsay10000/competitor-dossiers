@@ -136,6 +136,7 @@ def extract_jobs_from_html(html: str) -> list[dict[str, Any]]:
     # Fallback to capture job links; allow common ATS path segments (WizeHire, Kula, etc.).
     soup = BeautifulSoup(html, "html.parser")
     href_lower_ok = ("job", "career", "position", "opening", "role", "career-site", "apply", "wizehire")
+    generic_cta = ("apply", "apply now", "view", "view all", "see more", "learn more")
     jobs = []
     seen = set()
     for link in soup.find_all("a"):
@@ -143,16 +144,21 @@ def extract_jobs_from_html(html: str) -> list[dict[str, Any]]:
         if not href:
             continue
         h = href.lower()
-        if not any(seg in h for seg in href_lower_ok):
-            link_text = (link.get_text() or "").strip().lower()
-            if "apply" not in link_text:
+        href_ok = any(seg in h for seg in href_lower_ok)
+        # Many ATSes (e.g. WizeHire) use <a href="#">Job Title</a> or fragment-only; accept when link text looks like a job title
+        is_fragment = h in ("#", "") or h.startswith("#")
+        if not href_ok and not is_fragment:
+            link_text_lower = (link.get_text() or "").strip().lower()
+            if "apply" not in link_text_lower:
                 continue
         title = (link.get_text() or "").strip()
         if not title or len(title) < 2:
             title = None
-        if not title or title.lower() in ("apply", "apply now", "view"):
+        if not title or title.lower() in generic_cta:
             title = _title_from_apply_link(link)
         if not title or len(title) < 4 or len(title) > 120:
+            continue
+        if title.lower() in generic_cta:
             continue
         # Dedupe by normalized url (or title if url is #)
         url_norm = href.split("?")[0].rstrip("/") or ("title:" + title[:80])
@@ -168,6 +174,31 @@ def extract_jobs_from_html(html: str) -> list[dict[str, Any]]:
                 "posted_date": None,
                 "url": href if href.startswith("http") else None,
             }
+        )
+    return jobs
+
+
+def extract_jobs_from_headings(html: str) -> list[dict[str, Any]]:
+    """Fallback when link-based extraction finds nothing (e.g. WizeHire SPA with titles in headings)."""
+    soup = BeautifulSoup(html, "html.parser")
+    jobs = []
+    seen = set()
+    skip_phrases = ("we're hiring", "open position", "check out", "join our", "careers at", "job board")
+    for tag in soup.find_all(["h2", "h3", "h4"]):
+        title = (tag.get_text() or "").strip()
+        if not title or len(title) < 4 or len(title) > 120:
+            continue
+        lower = title.lower()
+        if any(phrase in lower for phrase in skip_phrases):
+            continue
+        if lower in ("apply", "apply now", "view", "other", "all departments"):
+            continue
+        key = title[:80]
+        if key in seen:
+            continue
+        seen.add(key)
+        jobs.append(
+            {"job_id": None, "title": title, "location": None, "dept": None, "posted_date": None, "url": None}
         )
     return jobs
 
@@ -261,6 +292,8 @@ def collect_talent_snapshot(source_url: str) -> dict[str, Any]:
     else:
         fetched = fetch_url(source_url)
     jobs = extract_jobs_from_html(fetched.text)
+    if not jobs and "wizehire.com" in source_url.lower():
+        jobs = extract_jobs_from_headings(fetched.text)
     return {
         "provider": "generic",
         "source_url": fetched.url,

@@ -5,7 +5,7 @@ from fastapi.responses import Response
 
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, Snapshot, Capability
-from ..rules.talent_rules import job_functional_area, FUNCTIONAL_AREA_DISPLAY_ORDER
+from ..rules.talent_rules import job_functional_area, FUNCTIONAL_AREA_DISPLAY_ORDER, PROPERTY_OPERATIONS_LABEL
 
 router = APIRouter()
 
@@ -101,8 +101,9 @@ def build_dossier_context(session, competitor_id: int) -> dict:
 
     talent_jobs = (latest_talent.structured_json or {}).get("jobs", []) if latest_talent else []
 
-    # Summarize jobs by functional area (startup-relevant: Sales, Marketing, Product, etc.)
+    # Summarize jobs by functional area; split into business vs property operations.
     jobs_by_function = []
+    jobs_by_function_property = []
     by_func: dict[str, list[dict]] = {}
     for job in talent_jobs:
         func = job_functional_area(job)
@@ -111,7 +112,11 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     for func in sorted(by_func.keys(), key=lambda f: (order.get(f, 99), f)):
         jobs_list = by_func[func]
         senior_count = sum(1 for j in jobs_list if j.get("is_senior"))
-        jobs_by_function.append({"function": func, "total": len(jobs_list), "senior": senior_count})
+        row = {"function": func, "total": len(jobs_list), "senior": senior_count}
+        if func == PROPERTY_OPERATIONS_LABEL:
+            jobs_by_function_property.append(row)
+        else:
+            jobs_by_function.append(row)
 
     press_items = (latest_press.structured_json or {}).get("items", []) if latest_press else []
 
@@ -127,10 +132,62 @@ def build_dossier_context(session, competitor_id: int) -> dict:
 
     recommendations = build_recommendations(events)
 
-    # New this week (asset-related events in last 7 days) for operational signals.
     week_cutoff = datetime.utcnow() - timedelta(days=7)
     events_this_week = [e for e in events if e.detected_at >= week_cutoff]
-    new_this_week = [e for e in events_this_week if e.category == "asset" or (e.type or "").startswith("asset.")]
+    events_this_week_dicts = [_event_dict(e) for e in events_this_week]
+
+    # Major events (past 7 days) in four buckets for the top of the dossier.
+    major_events_buckets = {
+        "Talent Radar": [],
+        "Asset Watch": [],
+        "Digital Footprint": [],
+        "Public Record": [],
+    }
+    for e in events_this_week_dicts:
+        t = e.get("type") or ""
+        cat = e.get("category") or ""
+        if t.startswith("talent."):
+            major_events_buckets["Talent Radar"].append(e)
+        elif t.startswith("asset."):
+            major_events_buckets["Asset Watch"].append(e)
+        elif t in ("narrative.homepage_updated", "asset.pipeline_signal"):
+            major_events_buckets["Digital Footprint"].append(e)
+        elif cat == "public_record" or t == "public_record.filing" or cat in ("partner", "capital") or t == "narrative.priority_shift":
+            major_events_buckets["Public Record"].append(e)
+
+    # Top 5 news: exclude blog-like; prefer major business topics (fundraising, partnerships, markets).
+    blog_like = ("blog", "post", "update:", "weekly", "monthly")
+    relevance_hints = ("fundraise", "funding", "partnership", "acquisition", "expansion", "launch", "series", "market", "executive", "ceo", "strategic")
+    candidates = []
+    for item in press_items:
+        title = (item.get("title") or "").lower()
+        link = (item.get("link") or item.get("url") or "").lower()
+        if any(x in title or x in link for x in blog_like):
+            continue
+        score = sum(1 for h in relevance_hints if h in title)
+        candidates.append((score, item))
+    candidates.sort(key=lambda x: -x[0])
+    top_news = [item for _, item in candidates[:5]]
+
+    # Summary of business points (bullets for at-a-glance).
+    summary_business_points = []
+    if markets:
+        summary_business_points.append("Markets: " + ", ".join(markets))
+    if capabilities:
+        summary_business_points.append("Capabilities: " + ", ".join(c["capability"] for c in capabilities))
+    if any(e.get("type") == "asset.new_market" for e in events_this_week_dicts):
+        summary_business_points.append("New market(s) added this week.")
+    if any(e.get("type", "").startswith("talent.") for e in events_this_week_dicts):
+        summary_business_points.append("Talent activity this week.")
+    if not summary_business_points:
+        summary_business_points.append("No major business updates in the last 90 days.")
+
+    # Properties by location (city/market and count) from asset snapshot.
+    location_counts = {}
+    for prop in asset_props:
+        loc = (prop.get("market") or prop.get("location") or "Unspecified").strip() or "Unspecified"
+        location_counts[loc] = location_counts.get(loc, 0) + 1
+    properties_by_location = [{"location": loc, "count": n} for loc, n in sorted(location_counts.items(), key=lambda x: (-x[1], x[0]))]
 
     return {
         "competitor": {"id": competitor.id, "name": competitor.name},
@@ -139,11 +196,15 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         "events": [_event_dict(e) for e in events],
         "talent_jobs": talent_jobs,
         "jobs_by_function": jobs_by_function,
+        "jobs_by_function_property": jobs_by_function_property,
         "press_items": press_items,
         "takeaways": takeaways,
         "recommendations": recommendations,
-        "new_this_week": [_event_dict(e) for e in new_this_week],
-        "events_this_week": [_event_dict(e) for e in events_this_week],
+        "major_events_buckets": major_events_buckets,
+        "events_this_week": events_this_week_dicts,
+        "top_news": top_news,
+        "summary_business_points": summary_business_points,
+        "properties_by_location": properties_by_location,
     }
 
 

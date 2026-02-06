@@ -8,15 +8,17 @@ CAPABILITY_KEYWORDS = {
     "real_estate": ["acquisitions", "development", "portfolio", "asset management"],
 }
 
-# Functional areas for dossier summary (startup-relevant). Order: match priority then display order.
-# Each job is bucketed by title + dept into one of these for "Jobs by function" on the dossier.
+# Functional areas for dossier summary. Split into:
+# - Business & strategy: roles that indicate business health at large (growth, strategy, product, etc.)
+# - Property operations: on-property roles (front desk, housekeeping, F&B) shown separately.
 FUNCTIONAL_AREA_KEYWORDS = [
     ("AI / Data", ["ai", " ml", "machine learning", "data science", "data engineer", "data analyst", "analytics"]),
     ("Product", ["product manager", "product owner", "product design", "ux design", "ux researcher"]),
-    ("Operations", [
-        "operations", "field ops", "housekeeping", "maintenance", "front desk", "guest experience",
-        "hospitality", "property management", "concierge", "housekeeper", "dishwasher", "cook", "server",
-        "bartender", "runner", "host", "auditor", "valet", "bellman", "room attendant", "supervisor",
+    ("Property operations", [
+        "housekeeping", "maintenance", "front desk", "guest experience", "hospitality", "concierge",
+        "housekeeper", "dishwasher", "cook", "server", "bartender", "runner", "host", "auditor", "valet",
+        "bellman", "room attendant", "hotel ", "restaurant ", "line cook", "waiter", "waitress", "busser",
+        "food runner", "guest service", "night auditor", "property management", "field ops", "supervisor",
     ]),
     ("Engineering", ["software engineer", "backend", "frontend", "full stack", "developer", " engineer", "R&D"]),
     ("Marketing", ["marketing", "brand", "content", "demand gen", "growth marketing", "performance marketing", "creative", "communications"]),
@@ -24,11 +26,14 @@ FUNCTIONAL_AREA_KEYWORDS = [
     ("Business & Strategy", [
         "strategy", "corp dev", "bizops", "fp&a", "finance", "legal", "accounting", "controller",
         "people", "talent", " hr", "human resources", "strategic initiatives", "investments", "real estate",
+        "market manager", "area manager", "operations manager",
     ]),
 ]
+# "Property operations" is shown in its own section; the rest are "Business & strategy".
 FUNCTIONAL_AREA_DISPLAY_ORDER = [
-    "Sales / Growth", "Marketing", "Business & Strategy", "AI / Data", "Product", "Engineering", "Operations", "Other",
+    "Sales / Growth", "Marketing", "Business & Strategy", "AI / Data", "Product", "Engineering", "Property operations", "Other",
 ]
+PROPERTY_OPERATIONS_LABEL = "Property operations"
 
 SENIOR_TITLES = [
     "chief",

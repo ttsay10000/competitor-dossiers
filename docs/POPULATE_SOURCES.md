@@ -36,7 +36,7 @@ After that, a **second run** (later the same day or next day) will diff against 
 |------------|--------|--------|-------|
 | Placemakr  | jobs.lever.co/placemakr (Lever API) | placemakr.com/locations | placemakr.com/blog |
 | AvantStay  | careers.kula.ai/avantstay (Kula; we use JS render when available to get full list) | avantstay.com/search (sitemap_first, js_required) | avantstay.com/blog/ |
-| Lark       | ats.wizehire.com/career-site/lark-hospitality (generic; we use JS when available) | larkhospitality.com/portfolio/ | larkhospitality.com/press/ |
+| Lark       | ats.wizehire.com/career-site/lark-hospitality (generic; JS + link/heading fallback—see below) | larkhospitality.com/portfolio/ | larkhospitality.com/press/ |
 
 No homepage or public_records sources are seeded (optional; add later if needed).
 
@@ -49,7 +49,9 @@ No homepage or public_records sources are seeded (optional; add later if needed)
 1. **Lever** — if the URL is a Lever jobs page, we use the Lever API and store all jobs.
 2. **Greenhouse** — else if Greenhouse, we use the Greenhouse API and store all jobs.
 3. **Ashby** — else if Ashby, we use the Ashby API and store all jobs.
-4. **Generic** — else we fetch the career page HTML and scrape links whose `href` contains `job`, `career`, `position`, `opening`, `role`, or `career-site` (so WizeHire and similar ATSes are covered).
+4. **Generic** — else we fetch the career page HTML and scrape job links (or headings as fallback for WizeHire).
+
+**Lark / WizeHire:** The source is harder to pull from because (1) the job list is often JS-rendered, so we use Playwright when `PLAYWRIGHT_ENABLED=true`; (2) the page may use `<a href="#">Job Title</a>` or headings instead of normal job URLs, so we accept fragment links with job-like text and, if that yields 0 jobs, we fall back to extracting titles from `<h2>`/`<h3>`/`<h4>`. Enable Playwright and re-run talent to populate Lark.
 
 If an API fails (e.g. wrong format), we fall back to generic HTML for that URL. Every run persists the **full current job list** for that source so the next run can diff and detect changes.
 

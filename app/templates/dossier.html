@@ -9,17 +9,75 @@
       <a href="/dossier/{{ competitor.id }}/pdf"><button>Export PDF</button></a>
     </div>
 
+    <!-- 1. Major events (past 7 days) in four buckets -->
     <div class="card">
-      <strong>Recommended next actions</strong>
+      <strong>Major events (past 7 days)</strong>
+      <p class="meta">Talent, asset, digital footprint, and public record signals.</p>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 12px;">
+        <div>
+          <strong style="font-size: 13px;">Talent Radar</strong>
+          <p class="meta" style="margin: 2px 0 4px 0;">New roles, senior hires, hiring surges.</p>
+          {% if major_events_buckets["Talent Radar"]|length %}
+            <ul style="margin: 0; padding-left: 16px; font-size: 14px;">
+              {% for e in major_events_buckets["Talent Radar"] %}
+              <li><span class="pill {{ e.severity }}">{{ e.severity }}</span> {{ e.title }}</li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="meta">None this week.</div>
+          {% endif %}
+        </div>
+        <div>
+          <strong style="font-size: 13px;">Asset Watch</strong>
+          <p class="meta" style="margin: 2px 0 4px 0;">Properties added/removed, pipeline.</p>
+          {% if major_events_buckets["Asset Watch"]|length %}
+            <ul style="margin: 0; padding-left: 16px; font-size: 14px;">
+              {% for e in major_events_buckets["Asset Watch"] %}
+              <li><span class="pill {{ e.severity }}">{{ e.severity }}</span> {{ e.title }}</li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="meta">None this week.</div>
+          {% endif %}
+        </div>
+        <div>
+          <strong style="font-size: 13px;">Digital Footprint</strong>
+          <p class="meta" style="margin: 2px 0 4px 0;">Homepage changes, Coming Soon.</p>
+          {% if major_events_buckets["Digital Footprint"]|length %}
+            <ul style="margin: 0; padding-left: 16px; font-size: 14px;">
+              {% for e in major_events_buckets["Digital Footprint"] %}
+              <li><span class="pill {{ e.severity }}">{{ e.severity }}</span> {{ e.title }}</li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="meta">None this week.</div>
+          {% endif %}
+        </div>
+        <div>
+          <strong style="font-size: 13px;">Public Record</strong>
+          <p class="meta" style="margin: 2px 0 4px 0;">Filings, press, partnerships.</p>
+          {% if major_events_buckets["Public Record"]|length %}
+            <ul style="margin: 0; padding-left: 16px; font-size: 14px;">
+              {% for e in major_events_buckets["Public Record"] %}
+              <li><span class="pill {{ e.severity }}">{{ e.severity }}</span> {{ e.title }}</li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="meta">None this week.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. Strategic takeaways (action items) -->
+    <div class="card">
+      <strong>Strategic takeaways</strong>
+      <p class="meta">Action items based on recent events.</p>
       <ul>
         {% for rec in recommendations %}
         <li><strong>{{ rec.action }}</strong> {% if rec.reason %}<span class="meta">({{ rec.reason }})</span>{% endif %}</li>
         {% endfor %}
       </ul>
-    </div>
-
-    <div class="card">
-      <strong>Strategic takeaways (Last 90 Days)</strong>
       <ul>
         {% for takeaway in takeaways %}
         <li>{{ takeaway }}</li>
@@ -27,105 +85,116 @@
       </ul>
     </div>
 
-    {% if new_this_week|length %}
+    <!-- 3. Top news (5 most relevant articles) -->
     <div class="card">
-      <strong>New this week (properties / footprint)</strong>
-      <ul>
-        {% for event in new_this_week %}
-        <li>
-          <span class="pill {{ event.severity }}">{{ event.severity }}</span>
-          {{ event.title }}
-          {% set ev = event.evidence_json or {} %}
-          {% set src = ev.get('property') or ev.get('item') %}
-          {% if src and src.get('url') %}
-            <a href="{{ src.url }}" target="_blank" rel="noopener">Source</a>
-          {% endif %}
-          <div class="meta">Why it matters: {{ event.why_it_matters or event.summary }}</div>
-        </li>
+      <strong>Top news</strong>
+      <p class="meta">Up to 5 most relevant articles: major business changes, fundraising, markets, partnerships. Blog-style posts excluded.</p>
+      {% if top_news|length %}
+        <ul style="margin: 0; padding-left: 20px;">
+          {% for item in top_news %}
+          <li>
+            <a href="{{ item.get('url') or item.get('link') }}" target="_blank" rel="noopener">{{ item.get('title') or 'Article' }}</a>
+            {% if item.get('date') %}<span class="meta"> · {{ item.date }}</span>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="meta">No press items in snapshot, or none passed relevance filter.</div>
+      {% endif %}
+    </div>
+
+    <!-- 4. Summary of business points -->
+    <div class="card">
+      <strong>Summary of business points</strong>
+      <ul style="margin: 0; padding-left: 20px;">
+        {% for point in summary_business_points %}
+        <li>{{ point }}</li>
         {% endfor %}
       </ul>
     </div>
-    {% endif %}
 
+    <!-- 5. Properties by location -->
     <div class="card">
-      <strong>Footprint</strong>
-      {% if markets|length %}
-        <div class="meta">Markets: {{ markets|join(', ') }}</div>
-      {% else %}
-        <div class="meta">No market data captured yet.</div>
-      {% endif %}
-    </div>
-
-    <div class="card">
-      <strong>Capabilities</strong>
-      {% if capabilities|length %}
-        <div class="meta">
-          {% for cap in capabilities %}
-            <span class="pill">{{ cap.capability }}</span>
+      <strong>Properties by location</strong>
+      <p class="meta">From latest asset pull: city/market and number of properties.</p>
+      {% if properties_by_location|length %}
+        <ul style="margin: 0; padding-left: 20px;">
+          {% for row in properties_by_location %}
+          <li><strong>{{ row.location }}</strong>: {{ row.count }} propert{{ 'ies' if row.count != 1 else 'y' }}</li>
           {% endfor %}
-        </div>
+        </ul>
       {% else %}
-        <div class="meta">No capabilities recorded yet.</div>
+        <div class="meta">No property data yet. Run the asset collector to populate.</div>
       {% endif %}
     </div>
 
-    <div class="card">
-      <strong>Recent Events (90 Days)</strong>
-      {% if events|length %}
-        {% for event in events %}
-          <div class="card sev-{{ event.severity }}" style="margin-top: 8px;">
-            <div><strong>{{ event.title }}</strong></div>
-            <div class="meta">{{ event.category }} · {{ event.type }} · {{ event.detected_at_str }}</div>
-            {% if event.why_it_matters %}
-              <div class="meta">Why it matters: {{ event.why_it_matters }}</div>
-            {% endif %}
-            {% if event.evidence_json %}
-              {% set job = event.evidence_json.get('job') %}
-              {% set item = event.evidence_json.get('item') %}
-              {% set prop = event.evidence_json.get('property') %}
-              {% set src_url = event.evidence_json.get('source_url') %}
-              {% if job and job.get('url') %}
-                <a href="{{ job.url }}" target="_blank" rel="noopener">View role</a>
-              {% elif item and item.get('url') %}
-                <a href="{{ item.url }}" target="_blank" rel="noopener">Source</a>
-              {% elif prop and prop.get('url') %}
-                <a href="{{ prop.url }}" target="_blank" rel="noopener">Source</a>
-              {% elif src_url %}
-                <a href="{{ src_url }}" target="_blank" rel="noopener">View page</a>
-              {% endif %}
-            {% endif %}
-          </div>
-        {% endfor %}
-      {% else %}
-        <div class="meta">No recent events.</div>
-      {% endif %}
-    </div>
-
+    <!-- 6. Talent snapshot -->
     <div class="card">
       <strong>Talent snapshot</strong>
-      <p class="meta">Types of jobs and number of roles from latest talent pull (for comparison with future runs).</p>
+      <p class="meta">Roles by function. Business & strategy vs property operations.</p>
       {% if talent_jobs|length %}
-        <div class="meta" style="margin-bottom: 8px;">{{ talent_jobs|length }} total role{{ 's' if talent_jobs|length != 1 else '' }}{% if jobs_by_function|length %} across {{ jobs_by_function|length }} function{{ 's' if jobs_by_function|length != 1 else '' }}{% endif %}.</div>
-        {% if jobs_by_function|length %}
-          <ul style="margin: 0; padding-left: 20px;">
-            {% for row in jobs_by_function %}
-            <li><strong>{{ row.function }}</strong>: {{ row.total }} role{{ 's' if row.total != 1 else '' }}{% if row.senior %} ({{ row.senior }} senior){% endif %}</li>
-            {% endfor %}
-          </ul>
-        {% else %}
-          <div class="meta">No department breakdown; all roles listed under Other.</div>
-        {% endif %}
+        <div class="meta" style="margin-bottom: 10px;">{{ talent_jobs|length }} total role{{ 's' if talent_jobs|length != 1 else '' }}.</div>
+        <div style="margin-bottom: 12px;">
+          <strong style="font-size: 13px;">Business & strategy</strong>
+          <p class="meta" style="margin: 2px 0 6px 0;">Market managers, strategy, growth, product, engineering, etc.</p>
+          {% if jobs_by_function|length %}
+            <ul style="margin: 0; padding-left: 20px;">
+              {% for row in jobs_by_function %}
+              <li><strong>{{ row.function }}</strong>: {{ row.total }} role{{ 's' if row.total != 1 else '' }}{% if row.senior %} ({{ row.senior }} senior){% endif %}</li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="meta">No business/strategy roles in this snapshot.</div>
+          {% endif %}
+        </div>
+        <div>
+          <strong style="font-size: 13px;">Property operations</strong>
+          <p class="meta" style="margin: 2px 0 6px 0;">Front desk, housekeeping, F&B, maintenance—on-property roles.</p>
+          {% if jobs_by_function_property|length %}
+            <ul style="margin: 0; padding-left: 20px;">
+              {% for row in jobs_by_function_property %}
+              <li><strong>{{ row.function }}</strong>: {{ row.total }} role{{ 's' if row.total != 1 else '' }}{% if row.senior %} ({{ row.senior }} senior){% endif %}</li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="meta">No property operations roles in this snapshot.</div>
+          {% endif %}
+        </div>
       {% else %}
         <div class="meta">No talent data yet. Run the talent collector to populate.</div>
       {% endif %}
     </div>
 
+    <!-- 7. Recent events feed (90 days) - at bottom -->
     <div class="card">
-      <strong>Latest Press Snapshot</strong>
-      {% if press_items|length %}
-        <div class="meta">{{ press_items|length }} items captured.</div>
+      <strong>Recent events (past 90 days)</strong>
+      {% if events|length %}
+        {% for event in events %}
+        <div class="card sev-{{ event.severity }}" style="margin-top: 8px;">
+          <div><strong>{{ event.title }}</strong></div>
+          <div class="meta">{{ event.category }} · {{ event.type }} · {{ event.detected_at_str }}</div>
+          {% if event.why_it_matters %}
+            <div class="meta">Why it matters: {{ event.why_it_matters }}</div>
+          {% endif %}
+          {% if event.evidence_json %}
+            {% set job = event.evidence_json.get('job') %}
+            {% set item = event.evidence_json.get('item') %}
+            {% set prop = event.evidence_json.get('property') %}
+            {% set src_url = event.evidence_json.get('source_url') %}
+            {% if job and job.get('url') %}
+              <a href="{{ job.url }}" target="_blank" rel="noopener">View role</a>
+            {% elif item and item.get('url') %}
+              <a href="{{ item.url }}" target="_blank" rel="noopener">Source</a>
+            {% elif prop and prop.get('url') %}
+              <a href="{{ prop.url }}" target="_blank" rel="noopener">Source</a>
+            {% elif src_url %}
+              <a href="{{ src_url }}" target="_blank" rel="noopener">View page</a>
+            {% endif %}
+          {% endif %}
+        </div>
+        {% endfor %}
       {% else %}
-        <div class="meta">No press data captured yet.</div>
+        <div class="meta">No recent events.</div>
       {% endif %}
     </div>
   {% endif %}
