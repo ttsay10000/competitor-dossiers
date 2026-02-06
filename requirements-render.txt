@@ -1,3 +1,5 @@
+# Lean requirements for Render (no weasyprint/playwright - they need system libs).
+# Use this as Build Command: pip install -r requirements-render.txt
 fastapi==0.115.8
 uvicorn==0.27.1
 jinja2==3.1.4
@@ -8,5 +10,3 @@ python-multipart==0.0.9
 requests==2.32.3
 beautifulsoup4==4.12.3
 feedparser==6.0.11
-playwright==1.42.0
-weasyprint==61.2

@@ -45,6 +45,7 @@
             <option value="partner" {% if selected_category == "partner" %}selected{% endif %}>partner</option>
             <option value="capital" {% if selected_category == "capital" %}selected{% endif %}>capital</option>
             <option value="narrative" {% if selected_category == "narrative" %}selected{% endif %}>narrative</option>
+            <option value="public_record" {% if selected_category == "public_record" %}selected{% endif %}>public_record</option>
           </select>
         </div>
         <div>
@@ -86,6 +87,13 @@
     <div style="margin-top: 8px;">
       <strong>Why it matters:</strong> {{ event.why_it_matters }}
     </div>
+    {% endif %}
+    {% if event.evidence_json %}
+      {% set ev = event.evidence_json %}
+      {% set link = ev.get('job', {}).get('url') or ev.get('item', {}).get('url') or ev.get('property', {}).get('url') or ev.get('source_url') %}
+      {% if link %}
+    <div style="margin-top: 6px;"><a href="{{ link }}" target="_blank" rel="noopener">Source</a></div>
+      {% endif %}
     {% endif %}
   </div>
   {% endfor %}

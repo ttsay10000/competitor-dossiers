@@ -2,7 +2,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Request
 
-from ..db import get_session
+from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, RunLog
 from ..digest import build_weekly_digest
 
@@ -30,6 +30,7 @@ def feed(request: Request, competitor_id: Optional[int] = None, severity: Option
             query = query.filter(Event.category == category)
 
         events = query.limit(200).all()
+        last_refreshed = get_last_refreshed(session)
 
     return request.app.state.templates.TemplateResponse(
         "feed.html",
@@ -42,6 +43,7 @@ def feed(request: Request, competitor_id: Optional[int] = None, severity: Option
             "selected_category": category,
             "show_low": bool(show_low),
             "last_runs": last_runs,
+            "last_refreshed": last_refreshed,
         },
     )
 
@@ -55,7 +57,8 @@ def digest(request: Request):
         for log in recent_logs:
             if log.channel not in last_runs:
                 last_runs[log.channel] = log
+        last_refreshed = get_last_refreshed(session)
     return request.app.state.templates.TemplateResponse(
         "digest.html",
-        {"request": request, "digest_text": digest_text, "last_runs": last_runs},
+        {"request": request, "digest_text": digest_text, "last_runs": last_runs, "last_refreshed": last_refreshed},
     )

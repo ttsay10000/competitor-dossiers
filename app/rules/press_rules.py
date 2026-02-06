@@ -5,6 +5,19 @@ PARTNER_KEYWORDS = ["partnership", "alliance", "distribution", "channel", "platf
 CAPITAL_KEYWORDS = ["fundraise", "funding", "debt", "restructuring", "layoff", "recap", "recapitalization"]
 NARRATIVE_KEYWORDS = ["strategy change", "focus shift", "new strategy", "repositioning", "pivot"]
 
+# Executive-level relevance: titles containing these are more likely high-signal (reduce noise).
+EXECUTIVE_RELEVANCE_HINTS = [
+    "ceo", "cfo", "cto", "coo", "cmo", "chief", "executive", "leadership",
+    "fundraise", "funding", "series", "acquisition", "acquired", "partnership",
+    "expansion", "launch", "strategic", "restructuring", "layoff",
+]
+
+
+def is_executive_relevant(item: dict) -> bool:
+    """True if the press item title suggests executive-level relevance (reduces noise)."""
+    title = (item.get("title") or "").lower()
+    return any(hint in title for hint in EXECUTIVE_RELEVANCE_HINTS)
+
 
 def classify_press(item: dict) -> Optional[str]:
     title = (item.get("title") or "").lower()

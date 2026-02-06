@@ -2,7 +2,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Request
 
-from ..db import get_session
+from ..db import get_session, get_last_refreshed
 from ..models import Competitor, RunLog
 
 router = APIRouter()
@@ -21,6 +21,7 @@ def runs(request: Request, competitor_id: Optional[int] = None, channel: Optiona
         if status:
             query = query.filter(RunLog.status == status)
         logs = query.limit(200).all()
+        last_refreshed = get_last_refreshed(session)
 
     return request.app.state.templates.TemplateResponse(
         "runs.html",
@@ -32,5 +33,6 @@ def runs(request: Request, competitor_id: Optional[int] = None, channel: Optiona
             "selected_competitor": competitor_id,
             "selected_channel": channel,
             "selected_status": status,
+            "last_refreshed": last_refreshed,
         },
     )

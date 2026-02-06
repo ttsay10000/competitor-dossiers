@@ -1,7 +1,7 @@
 # SIGNALS
 
 ## Event Taxonomy (MVP)
-Top-level categories: talent, asset, partner, capital, narrative
+Top-level categories: talent, asset, partner, capital, narrative, public_record
 Event types:
 - talent.senior_hire_or_role_posted
 - talent.new_capability
@@ -13,6 +13,8 @@ Event types:
 - partner.partnership_surge
 - capital.fundraise_or_restructuring
 - narrative.priority_shift (only when explicit)
+- narrative.homepage_updated (digital footprint change)
+- public_record.filing (trademark, regulatory, etc.)
 
 ## Capability Buckets (Talent)
 - ai_data: ai, ml, machine learning, data, analytics, automation
