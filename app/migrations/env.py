@@ -1,6 +1,7 @@
+import os
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
+from sqlalchemy import create_engine, engine_from_config
 from sqlalchemy import pool
 
 from alembic import context
@@ -17,8 +18,16 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def _get_url():
+    """Use DATABASE_URL on Render/production; else alembic.ini."""
+    url = os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
+    if url and url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    return url or "postgresql://postgres:postgres@localhost:5432/competitor_signals"
+
+
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
+    url = _get_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -31,11 +40,8 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    url = _get_url()
+    connectable = create_engine(url, poolclass=pool.NullPool)
 
     with connectable.connect() as connection:
         context.configure(
