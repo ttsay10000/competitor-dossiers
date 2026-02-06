@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Run Status</h1>
+
+  <div class="card">
+    <form method="get" action="/runs">
+      <div class="row">
+        <div>
+          <label>Competitor</label>
+          <select name="competitor_id">
+            <option value="">All</option>
+            {% for competitor in competitors %}
+            <option value="{{ competitor.id }}" {% if selected_competitor == competitor.id %}selected{% endif %}>{{ competitor.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label>Channel</label>
+          <select name="channel">
+            <option value="">All</option>
+            <option value="talent" {% if selected_channel == "talent" %}selected{% endif %}>talent</option>
+            <option value="asset" {% if selected_channel == "asset" %}selected{% endif %}>asset</option>
+            <option value="press" {% if selected_channel == "press" %}selected{% endif %}>press</option>
+          </select>
+        </div>
+        <div>
+          <label>Status</label>
+          <select name="status">
+            <option value="">All</option>
+            <option value="success" {% if selected_status == "success" %}selected{% endif %}>success</option>
+            <option value="skipped" {% if selected_status == "skipped" %}selected{% endif %}>skipped</option>
+          </select>
+        </div>
+        <div>
+          <button type="submit">Filter</button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Competitor</th>
+          <th>Channel</th>
+          <th>Status</th>
+          <th>Message</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in logs %}
+        <tr>
+          <td class="muted">{{ log.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td>{{ competitor_names.get(log.competitor_id, "—") }}</td>
+          <td>{{ log.channel }}</td>
+          <td>{{ log.status }}</td>
+          <td class="muted">{{ log.message or "" }}</td>
+        </tr>
+        {% endfor %}
+        {% if logs|length == 0 %}
+        <tr>
+          <td colspan="5" class="muted">No runs yet.</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}

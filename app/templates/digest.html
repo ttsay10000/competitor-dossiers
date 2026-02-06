@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Weekly Digest</h1>
+  <div class="card">
+    <strong>Last Runs</strong>
+    <div class="meta">
+      {% if last_runs %}
+        {% for channel, log in last_runs.items() %}
+          <div>{{ channel }} · {{ log.status }} · {{ log.created_at.strftime('%Y-%m-%d %H:%M') }}</div>
+        {% endfor %}
+      {% else %}
+        <div>No run history yet.</div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="card">
+    {% if digest_text %}
+      {% for line in digest_text.split('\n') %}
+        {% if line.startswith('- [HIGH]') %}
+          <div class="card sev-high" style="margin-top: 8px;">
+            <span class="pill high">high</span> {{ line[9:] }}
+          </div>
+        {% elif line.startswith('- [MED]') %}
+          <div class="card sev-med" style="margin-top: 8px;">
+            <span class="pill med">med</span> {{ line[8:] }}
+          </div>
+        {% elif line.startswith('- [LOW]') %}
+          <div class="card sev-low" style="margin-top: 8px;">
+            <span class="pill low">low</span> {{ line[8:] }}
+          </div>
+        {% elif line.startswith('- ') %}
+          <div>{{ line[2:] }}</div>
+        {% elif line %}
+          <div style="margin-top: 12px;"><strong>{{ line }}</strong></div>
+        {% else %}
+          <div style="height: 8px;"></div>
+        {% endif %}
+      {% endfor %}
+    {% else %}
+      <div class="empty">No digest yet. Run collectors and generate digest.</div>
+    {% endif %}
+  </div>
+{% endblock %}

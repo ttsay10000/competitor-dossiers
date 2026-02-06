@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block content %}
+  {% if error %}
+    <div class="card empty">{{ error }}</div>
+  {% else %}
+    <h1>{{ competitor.name }} Dossier</h1>
+    <div style="margin-bottom: 12px;">
+      <a href="/dossier/{{ competitor.id }}/summary"><button class="secondary">Executive summary (weekly)</button></a>
+      <a href="/dossier/{{ competitor.id }}/pdf"><button>Export PDF</button></a>
+    </div>
+
+    <div class="card">
+      <strong>Recommended next actions</strong>
+      <ul>
+        {% for rec in recommendations %}
+        <li><strong>{{ rec.action }}</strong> {% if rec.reason %}<span class="meta">({{ rec.reason }})</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    <div class="card">
+      <strong>Strategic takeaways (Last 90 Days)</strong>
+      <ul>
+        {% for takeaway in takeaways %}
+        <li>{{ takeaway }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    {% if new_this_week|length %}
+    <div class="card">
+      <strong>New this week (properties / footprint)</strong>
+      <ul>
+        {% for event in new_this_week %}
+        <li>
+          <span class="pill {{ event.severity }}">{{ event.severity }}</span>
+          {{ event.title }}
+          {% set ev = event.evidence_json or {} %}
+          {% set src = ev.get('property') or ev.get('item') %}
+          {% if src and src.get('url') %}
+            <a href="{{ src.url }}" target="_blank" rel="noopener">Source</a>
+          {% endif %}
+          <div class="meta">Why it matters: {{ event.why_it_matters or event.summary }}</div>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <strong>Footprint</strong>
+      {% if markets|length %}
+        <div class="meta">Markets: {{ markets|join(', ') }}</div>
+      {% else %}
+        <div class="meta">No market data captured yet.</div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <strong>Capabilities</strong>
+      {% if capabilities|length %}
+        <div class="meta">
+          {% for cap in capabilities %}
+            <span class="pill">{{ cap.capability }}</span>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="meta">No capabilities recorded yet.</div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <strong>Recent Events (90 Days)</strong>
+      {% if events|length %}
+        {% for event in events %}
+          <div class="card sev-{{ event.severity }}" style="margin-top: 8px;">
+            <div><strong>{{ event.title }}</strong></div>
+            <div class="meta">{{ event.category }} · {{ event.type }} · {{ event.detected_at.strftime('%Y-%m-%d') }}</div>
+            {% if event.why_it_matters %}
+              <div class="meta">Why it matters: {{ event.why_it_matters }}</div>
+            {% endif %}
+            {% if event.evidence_json %}
+              {% set job = event.evidence_json.get('job') %}
+              {% set item = event.evidence_json.get('item') %}
+              {% set prop = event.evidence_json.get('property') %}
+              {% set src_url = event.evidence_json.get('source_url') %}
+              {% if job and job.get('url') %}
+                <a href="{{ job.url }}" target="_blank" rel="noopener">View role</a>
+              {% elif item and item.get('url') %}
+                <a href="{{ item.url }}" target="_blank" rel="noopener">Source</a>
+              {% elif prop and prop.get('url') %}
+                <a href="{{ prop.url }}" target="_blank" rel="noopener">Source</a>
+              {% elif src_url %}
+                <a href="{{ src_url }}" target="_blank" rel="noopener">View page</a>
+              {% endif %}
+            {% endif %}
+          </div>
+        {% endfor %}
+      {% else %}
+        <div class="meta">No recent events.</div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <strong>Latest Talent Snapshot</strong>
+      {% if talent_jobs|length %}
+        <div class="meta">{{ talent_jobs|length }} roles captured.</div>
+      {% else %}
+        <div class="meta">No talent data captured yet.</div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <strong>Latest Press Snapshot</strong>
+      {% if press_items|length %}
+        <div class="meta">{{ press_items|length }} items captured.</div>
+      {% else %}
+        <div class="meta">No press data captured yet.</div>
+      {% endif %}
+    </div>
+  {% endif %}
+{% endblock %}

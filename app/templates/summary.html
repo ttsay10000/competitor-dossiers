@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block content %}
+  {% if error %}
+    <div class="card empty">{{ error }}</div>
+  {% else %}
+    <h1>Executive Summary — {{ competitor.name }}</h1>
+    <p class="meta">Last {{ summary_days }} days · High-signal updates only</p>
+    <div style="margin-bottom: 12px;">
+      <a href="/dossier/{{ competitor.id }}"><button class="secondary">Full dossier</button></a>
+    </div>
+
+    <div class="card">
+      <strong>Recommended next actions</strong>
+      <ul>
+        {% for rec in recommendations %}
+        <li><strong>{{ rec.action }}</strong> {% if rec.reason %}<span class="meta">({{ rec.reason }})</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    {% if new_this_week|length %}
+    <div class="card">
+      <strong>New this week (properties / footprint)</strong>
+      <ul>
+        {% for event in new_this_week %}
+        <li>
+          <span class="pill {{ event.severity }}">{{ event.severity }}</span>
+          {{ event.title }}
+          {% if event.evidence_json and (event.evidence_json.get('property') or event.evidence_json.get('item')) %}
+            {% set src = event.evidence_json.get('property', event.evidence_json.get('item', {})) %}
+            {% if src is mapping and src.get('url') %}
+              <a href="{{ src.url }}" target="_blank" rel="noopener">Source</a>
+            {% endif %}
+          {% endif %}
+          <div class="meta">Why it matters: {{ event.why_it_matters or event.summary }}</div>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    {% if events_by_category %}
+    <div class="card">
+      <strong>High-signal updates by category</strong>
+      {% for category, cat_events in events_by_category.items() %}
+      <div style="margin-top: 12px;">
+        <span class="pill">{{ category }}</span>
+        {% for event in cat_events %}
+        <div class="card sev-{{ event.severity }}" style="margin-top: 8px;">
+          <div><strong>{{ event.title }}</strong></div>
+          <div class="meta">{{ event.detected_at.strftime('%Y-%m-%d') }}</div>
+          {% if event.why_it_matters %}
+          <div style="margin-top: 6px;">Why it matters: {{ event.why_it_matters }}</div>
+          {% endif %}
+          {% if event.evidence_json %}
+            {% set job = event.evidence_json.get('job') %}
+            {% set item = event.evidence_json.get('item') %}
+            {% set prop = event.evidence_json.get('property') %}
+            {% if job and job.get('url') %}
+              <a href="{{ job.url }}" target="_blank" rel="noopener">View role</a>
+            {% elif item and item.get('url') %}
+              <a href="{{ item.url }}" target="_blank" rel="noopener">Source</a>
+            {% elif prop and prop.get('url') %}
+              <a href="{{ prop.url }}" target="_blank" rel="noopener">Source</a>
+            {% elif event.evidence_json.get('source_url') %}
+              <a href="{{ event.evidence_json.source_url }}" target="_blank" rel="noopener">View page</a>
+            {% endif %}
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if events|length == 0 %}
+    <div class="card empty">No high-signal events in the last {{ summary_days }} days.</div>
+    {% endif %}
+  {% endif %}
+{% endblock %}

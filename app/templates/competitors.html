@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Competitors</h1>
+
+  <div class="card">
+    <h3>Add Competitor</h3>
+    <form method="post" action="/competitors">
+      <div class="row">
+        <div>
+          <label>Name</label>
+          <input name="name" required />
+        </div>
+        <div>
+          <label>Primary Domain</label>
+          <input name="primary_domain" placeholder="example.com" />
+        </div>
+        <div>
+          <button type="submit">Add</button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3>Existing</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Domain</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for competitor in competitors %}
+        <tr>
+          <td>{{ competitor.name }}</td>
+          <td class="muted">{{ competitor.primary_domain or "" }}</td>
+          <td>
+            <a href="/competitors/{{ competitor.id }}">Edit</a> ·
+            <a href="/dossier/{{ competitor.id }}">Dossier</a> ·
+            <a href="/dossier/{{ competitor.id }}/summary">Summary</a>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if competitors|length == 0 %}
+        <tr>
+          <td colspan="3" class="muted">No competitors yet.</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}

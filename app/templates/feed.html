@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Event Feed</h1>
+
+  <div class="card">
+    <strong>Last Runs</strong>
+    <div class="meta">
+      {% if last_runs %}
+        {% for channel, log in last_runs.items() %}
+          <div>{{ channel }} · {{ log.status }} · {{ log.created_at.strftime('%Y-%m-%d %H:%M') }}</div>
+        {% endfor %}
+      {% else %}
+        <div>No run history yet.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <form method="get" action="/feed">
+      <div class="row">
+        <div>
+          <label>Competitor</label>
+          <select name="competitor_id">
+            <option value="">All</option>
+            {% for competitor in competitors %}
+            <option value="{{ competitor.id }}" {% if selected_competitor == competitor.id %}selected{% endif %}>{{ competitor.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label>Severity</label>
+          <select name="severity">
+            <option value="">All</option>
+            <option value="high" {% if selected_severity == "high" %}selected{% endif %}>high</option>
+            <option value="med" {% if selected_severity == "med" %}selected{% endif %}>med</option>
+            <option value="low" {% if selected_severity == "low" %}selected{% endif %}>low</option>
+          </select>
+        </div>
+        <div>
+          <label>Category</label>
+          <select name="category">
+            <option value="">All</option>
+            <option value="talent" {% if selected_category == "talent" %}selected{% endif %}>talent</option>
+            <option value="asset" {% if selected_category == "asset" %}selected{% endif %}>asset</option>
+            <option value="partner" {% if selected_category == "partner" %}selected{% endif %}>partner</option>
+            <option value="capital" {% if selected_category == "capital" %}selected{% endif %}>capital</option>
+            <option value="narrative" {% if selected_category == "narrative" %}selected{% endif %}>narrative</option>
+            <option value="public_record" {% if selected_category == "public_record" %}selected{% endif %}>public_record</option>
+          </select>
+        </div>
+        <div>
+          <label>Show Low</label>
+          <select name="show_low">
+            <option value="0" {% if not show_low %}selected{% endif %}>No</option>
+            <option value="1" {% if show_low %}selected{% endif %}>Yes</option>
+          </select>
+        </div>
+        <div>
+          <button type="submit">Filter</button>
+        </div>
+      </div>
+    </form>
+    <div class="meta">
+      {% if selected_competitor or selected_severity or selected_category or show_low %}
+        Filters active.
+      {% else %}
+        Default view hides low severity events.
+      {% endif %}
+    </div>
+  </div>
+
+  {% for event in events %}
+  <div class="card sev-{{ event.severity }}">
+    <div class="row" style="grid-template-columns: 1fr auto;">
+      <div>
+        <strong>{{ event.title }}</strong>
+        <div class="muted">{{ event.summary }}</div>
+      </div>
+      <div>
+        <span class="pill {{ event.severity }}">{{ event.severity }}</span>
+      </div>
+    </div>
+    <div class="meta">
+      {{ event.category }} · {{ event.type }} · detected {{ event.detected_at.strftime('%Y-%m-%d') }}
+    </div>
+    {% if event.why_it_matters %}
+    <div style="margin-top: 8px;">
+      <strong>Why it matters:</strong> {{ event.why_it_matters }}
+    </div>
+    {% endif %}
+    {% if event.evidence_json %}
+      {% set ev = event.evidence_json %}
+      {% set link = ev.get('job', {}).get('url') or ev.get('item', {}).get('url') or ev.get('property', {}).get('url') or ev.get('source_url') %}
+      {% if link %}
+    <div style="margin-top: 6px;"><a href="{{ link }}" target="_blank" rel="noopener">Source</a></div>
+      {% endif %}
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% if events|length == 0 %}
+  <div class="card empty">No events yet. Try adjusting filters or run the collectors.</div>
+  {% endif %}
+{% endblock %}

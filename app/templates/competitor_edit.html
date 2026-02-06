@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Edit Competitor</h1>
+
+  <div class="card">
+    <strong>Last Runs</strong>
+    <div class="meta">
+      {% if last_runs %}
+        {% for channel, log in last_runs.items() %}
+          <div>{{ channel }} · {{ log.status }} · {{ log.created_at.strftime('%Y-%m-%d %H:%M') }}</div>
+        {% endfor %}
+      {% else %}
+        <div>No run history yet.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Details</h3>
+    <form method="post" action="/competitors/{{ competitor.id }}">
+      <div class="row">
+        <div>
+          <label>Name</label>
+          <input name="name" value="{{ competitor.name }}" required />
+        </div>
+        <div>
+          <label>Primary Domain</label>
+          <input name="primary_domain" value="{{ competitor.primary_domain or '' }}" />
+        </div>
+        <div>
+          <button type="submit">Save</button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3>Source Endpoints</h3>
+    <form method="post" action="/competitors/{{ competitor.id }}/sources">
+      <div class="row">
+        <div>
+          <label>Channel</label>
+          <select name="channel">
+            <option value="talent">talent</option>
+            <option value="asset">asset</option>
+            <option value="press">press</option>
+            <option value="homepage">homepage</option>
+            <option value="public_records">public_records</option>
+          </select>
+        </div>
+        <div>
+          <label>URL</label>
+          <input name="url" required />
+        </div>
+        <div>
+          <label>Confidence</label>
+          <select name="confidence">
+            <option value="high">high</option>
+            <option value="low">low</option>
+          </select>
+        </div>
+        <div>
+          <label>JS Required</label>
+          <select name="js_required">
+            <option value="">No</option>
+            <option value="1">Yes</option>
+          </select>
+        </div>
+        <div>
+          <label>Sitemap First</label>
+          <select name="use_sitemap_first">
+            <option value="">No</option>
+            <option value="1">Yes</option>
+          </select>
+        </div>
+        <div>
+          <button type="submit">Add Source</button>
+        </div>
+      </div>
+    </form>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Channel</th>
+          <th>URL</th>
+          <th>Confidence</th>
+          <th>JS</th>
+          <th>Sitemap</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for endpoint in endpoints %}
+        <tr>
+          <td>{{ endpoint.channel }}</td>
+          <td class="muted">{{ endpoint.url }}</td>
+          <td>{{ endpoint.confidence }}</td>
+          <td>{{ "yes" if endpoint.js_required else "no" }}</td>
+          <td>{{ "yes" if endpoint.use_sitemap_first else "no" }}</td>
+          <td>
+            <form method="post" action="/competitors/{{ competitor.id }}/sources/{{ endpoint.id }}">
+              <div class="row">
+                <div>
+                  <select name="channel">
+                    <option value="talent" {% if endpoint.channel == "talent" %}selected{% endif %}>talent</option>
+                    <option value="asset" {% if endpoint.channel == "asset" %}selected{% endif %}>asset</option>
+                    <option value="press" {% if endpoint.channel == "press" %}selected{% endif %}>press</option>
+                    <option value="homepage" {% if endpoint.channel == "homepage" %}selected{% endif %}>homepage</option>
+                    <option value="public_records" {% if endpoint.channel == "public_records" %}selected{% endif %}>public_records</option>
+                  </select>
+                </div>
+                <div>
+                  <input name="url" value="{{ endpoint.url }}" />
+                </div>
+                <div>
+                  <select name="confidence">
+                    <option value="high" {% if endpoint.confidence == "high" %}selected{% endif %}>high</option>
+                    <option value="low" {% if endpoint.confidence == "low" %}selected{% endif %}>low</option>
+                  </select>
+                </div>
+                <div>
+                  <select name="js_required">
+                    <option value="" {% if not endpoint.js_required %}selected{% endif %}>No</option>
+                    <option value="1" {% if endpoint.js_required %}selected{% endif %}>Yes</option>
+                  </select>
+                </div>
+                <div>
+                  <select name="use_sitemap_first">
+                    <option value="" {% if not endpoint.use_sitemap_first %}selected{% endif %}>No</option>
+                    <option value="1" {% if endpoint.use_sitemap_first %}selected{% endif %}>Yes</option>
+                  </select>
+                </div>
+                <div>
+                  <button class="secondary" type="submit">Update</button>
+                </div>
+              </div>
+            </form>
+            <form method="post" action="/competitors/{{ competitor.id }}/sources/{{ endpoint.id }}/delete">
+              <button class="secondary" type="submit">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if endpoints|length == 0 %}
+        <tr>
+          <td colspan="4" class="muted">No sources yet.</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}

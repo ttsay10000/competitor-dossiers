@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Competitor Signals</title>
+  <style>
+    :root {
+      --bg: #f7f4ef;
+      --card: #ffffff;
+      --text: #1d1c1a;
+      --muted: #6b6863;
+      --accent: #1f5b4f;
+      --border: #e0d7ce;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Georgia", "Times New Roman", serif;
+      background: linear-gradient(120deg, #f7f4ef, #f1e8dc);
+      color: var(--text);
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 32px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.8);
+      backdrop-filter: blur(6px);
+      position: sticky;
+      top: 0;
+    }
+    nav a {
+      margin-right: 16px;
+      color: var(--text);
+      text-decoration: none;
+      font-weight: 600;
+    }
+    nav a:last-child { margin-right: 0; }
+    main {
+      max-width: 1100px;
+      margin: 24px auto 64px;
+      padding: 0 24px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.05);
+    }
+    .card.sev-high { border-left: 6px solid #b84a2b; }
+    .card.sev-med { border-left: 6px solid #b08a1d; }
+    .card.sev-low { border-left: 6px solid #2f6b4f; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      text-align: left;
+      padding: 8px 6px;
+      border-bottom: 1px solid var(--border);
+    }
+    .muted { color: var(--muted); }
+    .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: #efe9e2;
+      color: #403d39;
+      border: 1px solid rgba(0, 0, 0, 0.05);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+    }
+    .pill.high { background: #f7d7c4; color: #7a2d1a; }
+    .pill.med { background: #f3e8c8; color: #735b18; }
+    .pill.low { background: #e2f0e8; color: #20523e; }
+    .meta {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+    .empty {
+      text-align: center;
+      padding: 20px;
+      color: var(--muted);
+    }
+    input, select {
+      padding: 8px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      width: 100%;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      align-items: end;
+    }
+    button {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 8px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    @media (max-width: 700px) {
+      header { flex-direction: column; align-items: flex-start; gap: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <strong>Competitor Signals</strong>
+      <span class="meta" style="display: block; margin-top: 4px;">
+        Data last refreshed: {% if last_refreshed %}{{ last_refreshed.strftime('%Y-%m-%d %H:%M') }} UTC{% else %}—{% endif %}
+        · Dossiers refreshed daily; full data weekly
+      </span>
+    </div>
+    <nav>
+      <a href="/feed">Feed</a>
+      <a href="/digest">Digest</a>
+      <a href="/runs">Runs</a>
+      <a href="/competitors">Competitors</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="meta" style="text-align: center; padding: 16px; margin-top: 24px; border-top: 1px solid var(--border);">
+    Page generated: {{ utcnow().strftime('%Y-%m-%d %H:%M') }} UTC
+  </footer>
+</body>
+</html>
