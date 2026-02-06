@@ -8,7 +8,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Competitor Signals Runner")
     parser.add_argument(
         "--channel",
-        choices=["talent", "asset", "press", "homepage", "public_records", "all"],
+        choices=["talent", "asset", "press", "all"],
         default="all",
         help="Which channel to run",
     )

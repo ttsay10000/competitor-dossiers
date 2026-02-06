@@ -5,8 +5,6 @@ from typing import Optional
 from .collectors.talent import collect_talent_snapshot, build_structured_json as build_talent_structured
 from .collectors.asset import collect_asset_snapshot, build_structured_json as build_asset_structured
 from .collectors.press import collect_press_snapshot, build_structured_json as build_press_structured
-from .collectors.homepage import collect_homepage_snapshot, build_structured_json as build_homepage_structured
-from .collectors.public_records import collect_public_records_snapshot, build_structured_json as build_public_records_structured
 from .db import get_session
 from .diff.talent_diff import diff_jobs, count_recent_by_capability
 from .diff.asset_diff import diff_properties, extract_markets
@@ -25,9 +23,7 @@ from .rules.asset_rules import (
     build_market_exit_event,
     build_pipeline_event,
 )
-from .rules.press_rules import classify_press, build_press_event, is_executive_relevant
-from .rules.homepage_rules import build_homepage_updated_event
-from .rules.public_records_rules import build_filing_event
+from .rules.press_rules import classify_press, build_press_event
 
 
 def load_latest_snapshot(session, competitor_id: int, channel: str) -> Optional[Snapshot]:
@@ -108,8 +104,6 @@ DEDUPE_WINDOWS_DAYS = {
     "partner.partnership_surge": 60,
     "capital.fundraise_or_restructuring": 90,
     "narrative.priority_shift": 90,
-    "narrative.homepage_updated": 14,
-    "public_record.filing": 60,
 }
 
 
@@ -280,14 +274,6 @@ def run_talent() -> None:
                             window_days=dedupe_window_for(event["type"]),
                         ):
                             create_event(session, competitor.id, event)
-
-                log_run(
-                    session,
-                    competitor.id,
-                    "talent",
-                    "success",
-                    extra={"added_jobs": len(added_jobs)},
-                )
 
 
 def run_asset() -> None:
@@ -483,8 +469,6 @@ def run_press() -> None:
                     category = classify_press(item)
                     if not category:
                         continue
-                    if not is_executive_relevant(item):
-                        continue
                     event = build_press_event(category, item)
                     if not event_recently_created(
                         session,
@@ -504,145 +488,6 @@ def run_press() -> None:
                 )
 
 
-def run_homepage() -> None:
-    with get_session() as session:
-        competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
-        for competitor in competitors:
-            endpoints = [
-                ep
-                for ep in competitor.source_endpoints
-                if ep.channel == "homepage"
-            ]
-            for endpoint in endpoints:
-                print(
-                    f"[{datetime.utcnow().isoformat()}] homepage run: "
-                    f"{competitor.name} {endpoint.url}"
-                )
-                try:
-                    snapshot = collect_homepage_snapshot(
-                        endpoint.url,
-                        js_required=getattr(endpoint, "js_required", False),
-                    )
-                except Exception as exc:
-                    log_run(
-                        session,
-                        competitor.id,
-                        "homepage",
-                        "error",
-                        message=str(exc),
-                        extra={"url": endpoint.url},
-                    )
-                    continue
-                if should_skip_due_to_hash(session, competitor.id, "homepage", snapshot.get("raw_hash")):
-                    log_run(
-                        session,
-                        competitor.id,
-                        "homepage",
-                        "skipped",
-                        message="snapshot_unchanged",
-                        extra={"url": endpoint.url},
-                    )
-                    continue
-                structured = build_homepage_structured(snapshot)
-                persist_snapshot(
-                    session,
-                    competitor.id,
-                    "homepage",
-                    snapshot.get("raw_content") or "",
-                    snapshot.get("raw_hash") or "",
-                    structured,
-                )
-                event = build_homepage_updated_event(snapshot.get("source_url") or endpoint.url)
-                if not event_recently_created(
-                    session,
-                    competitor.id,
-                    event["type"],
-                    event["title"],
-                    window_days=dedupe_window_for(event["type"]),
-                ):
-                    create_event(session, competitor.id, event)
-                log_run(
-                    session,
-                    competitor.id,
-                    "homepage",
-                    "success",
-                    extra={"source_url": snapshot.get("source_url")},
-                )
-
-
-def run_public_records() -> None:
-    with get_session() as session:
-        competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
-        for competitor in competitors:
-            endpoints = [
-                ep
-                for ep in competitor.source_endpoints
-                if ep.channel == "public_records"
-            ]
-            for endpoint in endpoints:
-                print(
-                    f"[{datetime.utcnow().isoformat()}] public_records run: "
-                    f"{competitor.name} {endpoint.url}"
-                )
-                try:
-                    snapshot = collect_public_records_snapshot(endpoint.url)
-                except Exception as exc:
-                    log_run(
-                        session,
-                        competitor.id,
-                        "public_records",
-                        "error",
-                        message=str(exc),
-                        extra={"url": endpoint.url},
-                    )
-                    continue
-                if should_skip_due_to_hash(session, competitor.id, "public_records", snapshot.get("raw_hash")):
-                    log_run(
-                        session,
-                        competitor.id,
-                        "public_records",
-                        "skipped",
-                        message="snapshot_unchanged",
-                        extra={"url": endpoint.url},
-                    )
-                    continue
-                structured = build_public_records_structured(snapshot)
-                latest = load_latest_snapshot(session, competitor.id, "public_records")
-                previous_items = (latest.structured_json or {}).get("items", []) if latest else []
-                current_items = structured.get("items", [])
-
-                persist_snapshot(
-                    session,
-                    competitor.id,
-                    "public_records",
-                    snapshot.get("raw_content") or "",
-                    snapshot.get("raw_hash") or "",
-                    structured,
-                )
-
-                diff = diff_items(previous_items, current_items)
-                added_items = diff["added"]
-
-                for item in added_items:
-                    event = build_filing_event(item)
-                    if not event_recently_created(
-                        session,
-                        competitor.id,
-                        event["type"],
-                        event["title"],
-                        window_days=dedupe_window_for(event["type"]),
-                    ):
-                        create_event(session, competitor.id, event)
-
-                log_run(
-                    session,
-                    competitor.id,
-                    "public_records",
-                    "success",
-                    extra={"added_items": len(added_items)},
-                )
-
-
 def run(channel: Optional[str] = None) -> None:
     if channel in (None, "talent"):
         run_talent()
@@ -650,12 +495,9 @@ def run(channel: Optional[str] = None) -> None:
         run_asset()
     if channel in (None, "press"):
         run_press()
-    if channel in (None, "homepage"):
-        run_homepage()
-    if channel in (None, "public_records"):
-        run_public_records()
-    if channel is not None and channel not in ("talent", "asset", "press", "homepage", "public_records"):
-        print(f"[{datetime.utcnow().isoformat()}] unknown channel: {channel}")
+    else:
+        if channel not in (None, "talent", "asset", "press"):
+            print(f"[{datetime.utcnow().isoformat()}] unknown channel: {channel}")
 
 
 if __name__ == "__main__":

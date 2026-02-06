@@ -1,6 +1,4 @@
 from contextlib import contextmanager
-from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
@@ -28,10 +26,3 @@ def get_session():
         raise
     finally:
         session.close()
-
-
-def get_last_refreshed(session) -> Optional[datetime]:
-    """Latest RunLog.created_at across all channels (for dashboard 'last refreshed')."""
-    from .models import RunLog
-    row = session.query(RunLog).order_by(RunLog.created_at.desc()).first()
-    return row.created_at if row else None

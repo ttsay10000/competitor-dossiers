@@ -1,5 +1,5 @@
 from app.rules.talent_rules import detect_capability, is_senior_role
-from app.rules.press_rules import classify_press, is_executive_relevant
+from app.rules.press_rules import classify_press
 
 
 def test_detect_capability():
@@ -18,9 +18,3 @@ def test_classify_press():
     assert classify_press({"title": "Company completes funding round"}) == "capital"
     assert classify_press({"title": "Repositioning strategy for growth"}) == "narrative"
     assert classify_press({"title": "Summer travel tips"}) is None
-
-
-def test_is_executive_relevant():
-    assert is_executive_relevant({"title": "CEO announces partnership"}) is True
-    assert is_executive_relevant({"title": "Series B fundraise"}) is True
-    assert is_executive_relevant({"title": "Summer travel tips"}) is False

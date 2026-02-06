@@ -1,15 +1,6 @@
-import os
-import sys
-from pathlib import Path
-
-# Ensure project root is on path so "app" is importable (e.g. on Render)
-_root = Path(__file__).resolve().parent.parent.parent
-if str(_root) not in sys.path:
-    sys.path.insert(0, str(_root))
-
 from logging.config import fileConfig
 
-from sqlalchemy import create_engine
+from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
 from alembic import context
@@ -26,14 +17,8 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
-def _get_url():
-    """Use app config so we get the same URL (and driver) as the app (postgresql+psycopg on Render)."""
-    from app.config import settings
-    return settings.database_url
-
-
 def run_migrations_offline() -> None:
-    url = _get_url()
+    url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -46,8 +31,11 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    url = _get_url()
-    connectable = create_engine(url, poolclass=pool.NullPool)
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
 
     with connectable.connect() as connection:
         context.configure(

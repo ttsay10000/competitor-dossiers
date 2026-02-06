@@ -4,7 +4,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 from starlette.status import HTTP_303_SEE_OTHER
 
-from ..db import get_session, get_last_refreshed
+from ..db import get_session
 from ..models import Competitor, SourceEndpoint, RunLog
 
 router = APIRouter()
@@ -19,10 +19,9 @@ def root():
 def competitors_list(request: Request):
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
-        last_refreshed = get_last_refreshed(session)
     return request.app.state.templates.TemplateResponse(
         "competitors.html",
-        {"request": request, "competitors": competitors, "last_refreshed": last_refreshed},
+        {"request": request, "competitors": competitors},
     )
 
 
@@ -55,10 +54,9 @@ def competitors_edit(request: Request, competitor_id: int):
         for log in recent_logs:
             if log.channel not in last_runs:
                 last_runs[log.channel] = log
-        last_refreshed = get_last_refreshed(session)
     return request.app.state.templates.TemplateResponse(
         "competitor_edit.html",
-        {"request": request, "competitor": competitor, "endpoints": endpoints, "last_runs": last_runs, "last_refreshed": last_refreshed},
+        {"request": request, "competitor": competitor, "endpoints": endpoints, "last_runs": last_runs},
     )
 
 

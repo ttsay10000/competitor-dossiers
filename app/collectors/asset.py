@@ -1,7 +1,7 @@
 import re
 import gzip
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from bs4 import BeautifulSoup
 
@@ -106,7 +106,7 @@ def collect_asset_snapshot(
             "note": "js_rendered",
         }
 
-    def fetch_from_sitemap() -> Optional[Dict[str, Any]]:
+    def fetch_from_sitemap() -> Optional[dict]:
         for sitemap_url in discover_sitemap(source_url):
             urls = expand_sitemap(sitemap_url)
             if not urls:
