@@ -52,6 +52,7 @@ def feed(request: Request, competitor_id: Optional[int] = None, severity: Option
             for e in events_rows
         ]
         competitors_data = [{"id": c.id, "name": c.name} for c in competitors]
+        nav_competitors = competitors_data
         last_refreshed = get_last_refreshed(session)
 
     return request.app.state.templates.TemplateResponse(
@@ -60,6 +61,7 @@ def feed(request: Request, competitor_id: Optional[int] = None, severity: Option
             "request": request,
             "events": events,
             "competitors": competitors_data,
+            "nav_competitors": nav_competitors,
             "selected_competitor": competitor_id,
             "selected_severity": severity,
             "selected_category": category,
@@ -79,8 +81,10 @@ def digest(request: Request):
         for log in recent_logs:
             if log.channel not in last_runs:
                 last_runs[log.channel] = _run_log_summary(log)
+        all_competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        nav_competitors = [{"id": c.id, "name": c.name} for c in all_competitors]
         last_refreshed = get_last_refreshed(session)
     return request.app.state.templates.TemplateResponse(
         "digest.html",
-        {"request": request, "digest_text": digest_text, "last_runs": last_runs, "last_refreshed": last_refreshed},
+        {"request": request, "digest_text": digest_text, "last_runs": last_runs, "last_refreshed": last_refreshed, "nav_competitors": nav_competitors},
     )

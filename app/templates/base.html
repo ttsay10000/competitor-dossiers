@@ -123,14 +123,19 @@
       <strong>Competitor Signals</strong>
       <span class="meta" style="display: block; margin-top: 4px;">
         Data last refreshed: {% if last_refreshed %}{{ last_refreshed.strftime('%Y-%m-%d %H:%M') }} UTC{% else %}—{% endif %}
-        · Dossiers refreshed daily; full data weekly
       </span>
     </div>
-    <nav>
-      <a href="/feed">Feed</a>
+    <nav style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+      <label for="competitor-select" class="meta">Competitor:</label>
+      <select id="competitor-select" onchange="if(this.value){ window.location.href='/dossier/'+this.value; }" style="width: auto; min-width: 160px;">
+        <option value="">—</option>
+        {% for c in (nav_competitors or []) %}
+        <option value="{{ c.id }}">{{ c.name }}</option>
+        {% endfor %}
+      </select>
+      <a href="/competitors">Dossiers</a>
       <a href="/digest">Digest</a>
       <a href="/runs">Runs</a>
-      <a href="/competitors">Competitors</a>
     </nav>
   </header>
   <main>

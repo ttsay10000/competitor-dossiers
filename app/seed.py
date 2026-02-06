@@ -10,7 +10,8 @@ SEED_COMPETITORS = [
         "name": "Placemakr",
         "primary_domain": "placemakr.com",
         "sources": [
-            {"channel": "talent", "url": "https://www.placemakr.com/corporate/join-our-team", "confidence": "high"},
+            # Use Lever jobs URL so we get full list via API; placemakr.com/corporate/join-our-team only gave 3 (generic scrape).
+            {"channel": "talent", "url": "https://jobs.lever.co/placemakr", "confidence": "high"},
             {"channel": "asset", "url": "https://www.placemakr.com/locations", "confidence": "high"},
             {"channel": "press", "url": "https://www.placemakr.com/blog", "confidence": "high"},
         ],
@@ -62,16 +63,17 @@ def upsert_source(
     js_required: bool = False,
     use_sitemap_first: bool = False,
 ) -> None:
+    # Match by competitor + channel so re-seeding updates URL when we change it (e.g. to Lever).
     existing = (
         session.query(SourceEndpoint)
         .filter(
             SourceEndpoint.competitor_id == competitor_id,
             SourceEndpoint.channel == channel,
-            SourceEndpoint.url == url,
         )
         .first()
     )
     if existing:
+        existing.url = url
         existing.confidence = confidence
         existing.js_required = js_required
         existing.use_sitemap_first = use_sitemap_first

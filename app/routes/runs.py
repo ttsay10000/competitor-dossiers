@@ -32,6 +32,7 @@ def runs(request: Request, competitor_id: Optional[int] = None, channel: Optiona
             for log in logs_rows
         ]
         last_refreshed = get_last_refreshed(session)
+        nav_competitors = [{"id": c.id, "name": c.name} for c in competitors]
 
     return request.app.state.templates.TemplateResponse(
         "runs.html",
@@ -40,6 +41,7 @@ def runs(request: Request, competitor_id: Optional[int] = None, channel: Optiona
             "logs": logs,
             "competitors": competitors,
             "competitor_names": competitor_names,
+            "nav_competitors": nav_competitors,
             "selected_competitor": competitor_id,
             "selected_channel": channel,
             "selected_status": status,

@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 import json
-from typing import Optional
+from typing import Any, Optional
 
 from .collectors.talent import collect_talent_snapshot, build_structured_json as build_talent_structured
 from .collectors.asset import collect_asset_snapshot, build_structured_json as build_asset_structured
@@ -64,6 +64,23 @@ def persist_snapshot(session, competitor_id: int, channel: str, raw_content: str
     return snapshot
 
 
+def _normalize_occurred_at(value: Any) -> Optional[datetime]:
+    """DB expects datetime; rules may pass ms (int), iso str, or datetime."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, (int, float)):
+        # Lever etc. use milliseconds since epoch
+        return datetime.utcfromtimestamp(value / 1000.0)
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
 def create_event(session, competitor_id: int, event: dict) -> None:
     session.add(
         Event(
@@ -75,7 +92,7 @@ def create_event(session, competitor_id: int, event: dict) -> None:
             summary=event["summary"],
             why_it_matters=event.get("why_it_matters"),
             evidence_json=event.get("evidence"),
-            occurred_at=event.get("occurred_at"),
+            occurred_at=_normalize_occurred_at(event.get("occurred_at")),
         )
     )
 

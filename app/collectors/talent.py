@@ -4,15 +4,19 @@ from typing import Any, Optional
 
 from bs4 import BeautifulSoup
 
-from .http import fetch_url
+from .http import fetch_url, fetch_url_js
+
+
+# Priority order: Lever > Greenhouse > Ashby > generic (competitor career pages).
+# Use the first matching provider so we prefer structured APIs over HTML scraping.
 
 
 def detect_provider(url: str) -> str:
     lowered = url.lower()
-    if "greenhouse" in lowered:
-        return "greenhouse"
     if "lever.co" in lowered or "api.lever.co" in lowered:
         return "lever"
+    if "greenhouse" in lowered:
+        return "greenhouse"
     if "ashbyhq.com" in lowered:
         return "ashby"
     return "generic"
@@ -108,19 +112,53 @@ def extract_lever_jobs(payload: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return jobs
 
 
+def _title_from_apply_link(link) -> Optional[str]:
+    """For 'Apply' / 'Apply Now' links, get job title from parent card (e.g. Kula-style layout)."""
+    parent = link.parent
+    while parent and parent.name not in ("body", "html"):
+        for tag in ("h1", "h2", "h3", "h4", "h5", "strong"):
+            heading = parent.find(tag)
+            if heading:
+                t = (heading.get_text() or "").strip()
+                if len(t) >= 4 and len(t) <= 120 and "apply" not in t.lower():
+                    return t
+        # Try first text-heavy child that isn't the link
+        for child in parent.children:
+            if hasattr(child, "get_text") and child != link:
+                t = (child.get_text() or "").strip()
+                if len(t) >= 4 and len(t) <= 120 and "apply" not in t.lower():
+                    return t
+        parent = parent.parent
+    return None
+
+
 def extract_jobs_from_html(html: str) -> list[dict[str, Any]]:
-    # Minimal fallback to capture job links without overfitting.
+    # Fallback to capture job links; allow common ATS path segments (WizeHire, Kula, etc.).
     soup = BeautifulSoup(html, "html.parser")
+    href_lower_ok = ("job", "career", "position", "opening", "role", "career-site", "apply")
     jobs = []
+    seen = set()
     for link in soup.find_all("a"):
+        href = link.get("href") or ""
+        if not href:
+            continue
+        h = href.lower()
+        if not any(seg in h for seg in href_lower_ok):
+            link_text = (link.get_text() or "").strip().lower()
+            if "apply" not in link_text:
+                continue
         title = (link.get_text() or "").strip()
-        href = link.get("href")
-        if not title or not href:
+        if not title or len(title) < 2:
+            title = None
+        if not title or title.lower() in ("apply", "apply now", "view"):
+            title = _title_from_apply_link(link)
+        if not title or len(title) < 4 or len(title) > 120:
             continue
-        if "job" not in href and "career" not in href:
+        # Dedupe by normalized url (or title if url is #)
+        url_norm = href.split("?")[0].rstrip("/") or ("title:" + title[:80])
+        if url_norm in seen:
             continue
-        if len(title) < 4 or len(title) > 120:
-            continue
+        seen.add(url_norm)
         jobs.append(
             {
                 "job_id": None,
@@ -128,7 +166,7 @@ def extract_jobs_from_html(html: str) -> list[dict[str, Any]]:
                 "location": None,
                 "dept": None,
                 "posted_date": None,
-                "url": href,
+                "url": href if href.startswith("http") else None,
             }
         )
     return jobs
@@ -151,55 +189,79 @@ def normalize_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def collect_talent_snapshot(source_url: str) -> dict[str, Any]:
+    """Pull all current jobs for a talent source. Priority: Lever API > Greenhouse API > Ashby API > generic HTML.
+    Every run persists the full job list so we can diff later (surges, new executive postings)."""
     provider = detect_provider(source_url)
 
-    if provider == "greenhouse":
-        api_url = greenhouse_jobs_api(source_url)
-        if api_url:
-            fetched = fetch_url(api_url)
-            payload = json.loads(fetched.text)
-            jobs = extract_greenhouse_jobs(payload.get("jobs", payload))
-            return {
-                "provider": "greenhouse",
-                "source_url": fetched.url,
-                "raw_content": fetched.text,
-                "raw_hash": fetched.raw_hash,
-                "jobs": normalize_jobs(jobs),
-            }
-
+    # 1. Lever
     if provider == "lever":
         api_url = lever_jobs_api(source_url)
         if api_url:
-            fetched = fetch_url(api_url)
-            payload = json.loads(fetched.text)
-            jobs = extract_lever_jobs(payload)
-            return {
-                "provider": "lever",
-                "source_url": fetched.url,
-                "raw_content": fetched.text,
-                "raw_hash": fetched.raw_hash,
-                "jobs": normalize_jobs(jobs),
-            }
+            try:
+                fetched = fetch_url(api_url)
+                payload = json.loads(fetched.text)
+                jobs = extract_lever_jobs(payload)
+                return {
+                    "provider": "lever",
+                    "source_url": fetched.url,
+                    "raw_content": fetched.text,
+                    "raw_hash": fetched.raw_hash,
+                    "jobs": normalize_jobs(jobs),
+                }
+            except (json.JSONDecodeError, KeyError):
+                pass
+        # Fall through to generic if API fails
 
+    # 2. Greenhouse
+    if provider == "greenhouse":
+        api_url = greenhouse_jobs_api(source_url)
+        if api_url:
+            try:
+                fetched = fetch_url(api_url)
+                payload = json.loads(fetched.text)
+                jobs = extract_greenhouse_jobs(payload.get("jobs", payload))
+                return {
+                    "provider": "greenhouse",
+                    "source_url": fetched.url,
+                    "raw_content": fetched.text,
+                    "raw_hash": fetched.raw_hash,
+                    "jobs": normalize_jobs(jobs),
+                }
+            except (json.JSONDecodeError, KeyError):
+                pass
+        # Fall through to generic if API fails
+
+    # 3. Ashby
     if provider == "ashby":
         api_url = ashby_jobs_api(source_url)
         if api_url:
-            fetched = fetch_url(api_url)
-            data = json.loads(fetched.text)
-            raw_jobs = data.get("jobs", [])
-            jobs = extract_ashby_jobs(raw_jobs)
-            return {
-                "provider": "ashby",
-                "source_url": fetched.url,
-                "raw_content": fetched.text,
-                "raw_hash": fetched.raw_hash,
-                "jobs": normalize_jobs(jobs),
-            }
+            try:
+                fetched = fetch_url(api_url)
+                data = json.loads(fetched.text)
+                raw_jobs = data.get("jobs", [])
+                jobs = extract_ashby_jobs(raw_jobs)
+                return {
+                    "provider": "ashby",
+                    "source_url": fetched.url,
+                    "raw_content": fetched.text,
+                    "raw_hash": fetched.raw_hash,
+                    "jobs": normalize_jobs(jobs),
+                }
+            except (json.JSONDecodeError, KeyError):
+                pass
+        # Fall through to generic if API fails
 
-    fetched = fetch_url(source_url)
+    # 4. Generic: competitor career page (HTML scrape). Kula (careers.kula.ai) is JS-rendered.
+    if "kula.ai" in source_url.lower():
+        try:
+            fetched = fetch_url_js(source_url)
+        except (RuntimeError, Exception):
+            fetched = fetch_url(source_url)
+    else:
+        fetched = fetch_url(source_url)
     jobs = extract_jobs_from_html(fetched.text)
     return {
-        "provider": provider,
+        "provider": "generic",
         "source_url": fetched.url,
         "raw_content": fetched.text,
         "raw_hash": fetched.raw_hash,

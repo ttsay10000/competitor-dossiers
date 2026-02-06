@@ -100,6 +100,17 @@ def build_dossier_context(session, competitor_id: int) -> dict:
 
     talent_jobs = (latest_talent.structured_json or {}).get("jobs", []) if latest_talent else []
 
+    # Summarize jobs by function (dept) for dossier: e.g. "Marketing: 9 job postings, 2 senior positions"
+    jobs_by_function = []
+    by_func: dict[str, list[dict]] = {}
+    for job in talent_jobs:
+        func = (job.get("dept") or "").strip() or "Other"
+        by_func.setdefault(func, []).append(job)
+    for func in sorted(by_func.keys()):
+        jobs_list = by_func[func]
+        senior_count = sum(1 for j in jobs_list if j.get("is_senior"))
+        jobs_by_function.append({"function": func, "total": len(jobs_list), "senior": senior_count})
+
     press_items = (latest_press.structured_json or {}).get("items", []) if latest_press else []
 
     takeaways = []
@@ -125,6 +136,7 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         "capabilities": [{"capability": c.capability} for c in capabilities],
         "events": [_event_dict(e) for e in events],
         "talent_jobs": talent_jobs,
+        "jobs_by_function": jobs_by_function,
         "press_items": press_items,
         "takeaways": takeaways,
         "recommendations": recommendations,
@@ -172,10 +184,12 @@ def summary(request: Request, competitor_id: int, days: int = 7):
     with get_session() as session:
         context = build_summary_context(session, competitor_id, days=days)
         context["last_refreshed"] = get_last_refreshed(session)
+        all_competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        context["nav_competitors"] = [{"id": c.id, "name": c.name} for c in all_competitors]
     if "error" in context:
         return request.app.state.templates.TemplateResponse(
             "summary.html",
-            {"request": request, "error": context["error"], "last_refreshed": context.get("last_refreshed")},
+            {"request": request, "error": context["error"], "last_refreshed": context.get("last_refreshed"), "nav_competitors": context.get("nav_competitors", [])},
         )
     return request.app.state.templates.TemplateResponse(
         "summary.html",
@@ -188,10 +202,12 @@ def dossier(request: Request, competitor_id: int):
     with get_session() as session:
         context = build_dossier_context(session, competitor_id)
         context["last_refreshed"] = get_last_refreshed(session)
+        all_competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        context["nav_competitors"] = [{"id": c.id, "name": c.name} for c in all_competitors]
     if "error" in context:
         return request.app.state.templates.TemplateResponse(
             "dossier.html",
-            {"request": request, "error": context["error"], "last_refreshed": context.get("last_refreshed")},
+            {"request": request, "error": context["error"], "last_refreshed": context.get("last_refreshed"), "nav_competitors": context.get("nav_competitors", [])},
         )
     return request.app.state.templates.TemplateResponse(
         "dossier.html",

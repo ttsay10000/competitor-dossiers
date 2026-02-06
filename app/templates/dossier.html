@@ -111,6 +111,20 @@
     </div>
 
     <div class="card">
+      <strong>Jobs by function</strong>
+      <p class="meta">Summarized from latest talent pull so we can compare against future runs (surges, new executive postings).</p>
+      {% if jobs_by_function|length %}
+        <ul style="margin: 8px 0 0; padding-left: 20px;">
+          {% for row in jobs_by_function %}
+          <li><strong>{{ row.function }}</strong>: {{ row.total }} job posting{{ 's' if row.total != 1 else '' }}{% if row.senior %}, {{ row.senior }} senior position{{ 's' if row.senior != 1 else '' }}{% endif %}</li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="meta">No job data yet. Run the talent collector to populate.</div>
+      {% endif %}
+    </div>
+
+    <div class="card">
       <strong>Latest Press Snapshot</strong>
       {% if press_items|length %}
         <div class="meta">{{ press_items|length }} items captured.</div>
