@@ -36,7 +36,7 @@ After that, a **second run** (later the same day or next day) will diff against 
 |------------|--------|--------|-------|
 | Placemakr  | jobs.lever.co/placemakr (Lever API) | placemakr.com/locations | placemakr.com/blog |
 | AvantStay  | careers.kula.ai/avantstay (Kula; we use JS render when available to get full list) | avantstay.com/search (sitemap_first, js_required) | avantstay.com/blog/ |
-| Lark       | ats.wizehire.com/career-site/lark-hospitality (generic scrape) | larkhospitality.com/portfolio/ | larkhospitality.com/press/ |
+| Lark       | ats.wizehire.com/career-site/lark-hospitality (generic; we use JS when available) | larkhospitality.com/portfolio/ | larkhospitality.com/press/ |
 
 No homepage or public_records sources are seeded (optional; add later if needed).
 

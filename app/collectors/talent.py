@@ -135,7 +135,7 @@ def _title_from_apply_link(link) -> Optional[str]:
 def extract_jobs_from_html(html: str) -> list[dict[str, Any]]:
     # Fallback to capture job links; allow common ATS path segments (WizeHire, Kula, etc.).
     soup = BeautifulSoup(html, "html.parser")
-    href_lower_ok = ("job", "career", "position", "opening", "role", "career-site", "apply")
+    href_lower_ok = ("job", "career", "position", "opening", "role", "career-site", "apply", "wizehire")
     jobs = []
     seen = set()
     for link in soup.find_all("a"):
@@ -251,8 +251,9 @@ def collect_talent_snapshot(source_url: str) -> dict[str, Any]:
                 pass
         # Fall through to generic if API fails
 
-    # 4. Generic: competitor career page (HTML scrape). Kula (careers.kula.ai) is JS-rendered.
-    if "kula.ai" in source_url.lower():
+    # 4. Generic: competitor career page (HTML scrape). Kula and WizeHire are JS-rendered.
+    use_js = "kula.ai" in source_url.lower() or "wizehire.com" in source_url.lower()
+    if use_js:
         try:
             fetched = fetch_url_js(source_url)
         except (RuntimeError, Exception):

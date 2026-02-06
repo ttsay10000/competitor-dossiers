@@ -5,6 +5,7 @@ from fastapi.responses import Response
 
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, Snapshot, Capability
+from ..rules.talent_rules import job_functional_area, FUNCTIONAL_AREA_DISPLAY_ORDER
 
 router = APIRouter()
 
@@ -100,13 +101,14 @@ def build_dossier_context(session, competitor_id: int) -> dict:
 
     talent_jobs = (latest_talent.structured_json or {}).get("jobs", []) if latest_talent else []
 
-    # Summarize jobs by function (dept) for dossier: e.g. "Marketing: 9 job postings, 2 senior positions"
+    # Summarize jobs by functional area (startup-relevant: Sales, Marketing, Product, etc.)
     jobs_by_function = []
     by_func: dict[str, list[dict]] = {}
     for job in talent_jobs:
-        func = (job.get("dept") or "").strip() or "Other"
+        func = job_functional_area(job)
         by_func.setdefault(func, []).append(job)
-    for func in sorted(by_func.keys()):
+    order = {name: i for i, name in enumerate(FUNCTIONAL_AREA_DISPLAY_ORDER)}
+    for func in sorted(by_func.keys(), key=lambda f: (order.get(f, 99), f)):
         jobs_list = by_func[func]
         senior_count = sum(1 for j in jobs_list if j.get("is_senior"))
         jobs_by_function.append({"function": func, "total": len(jobs_list), "senior": senior_count})

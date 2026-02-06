@@ -8,6 +8,28 @@ CAPABILITY_KEYWORDS = {
     "real_estate": ["acquisitions", "development", "portfolio", "asset management"],
 }
 
+# Functional areas for dossier summary (startup-relevant). Order: match priority then display order.
+# Each job is bucketed by title + dept into one of these for "Jobs by function" on the dossier.
+FUNCTIONAL_AREA_KEYWORDS = [
+    ("AI / Data", ["ai", " ml", "machine learning", "data science", "data engineer", "data analyst", "analytics"]),
+    ("Product", ["product manager", "product owner", "product design", "ux design", "ux researcher"]),
+    ("Operations", [
+        "operations", "field ops", "housekeeping", "maintenance", "front desk", "guest experience",
+        "hospitality", "property management", "concierge", "housekeeper", "dishwasher", "cook", "server",
+        "bartender", "runner", "host", "auditor", "valet", "bellman", "room attendant", "supervisor",
+    ]),
+    ("Engineering", ["software engineer", "backend", "frontend", "full stack", "developer", " engineer", "R&D"]),
+    ("Marketing", ["marketing", "brand", "content", "demand gen", "growth marketing", "performance marketing", "creative", "communications"]),
+    ("Sales / Growth", ["sales", "account executive", "SDR", "BDR", "business development", "revenue", "growth"]),
+    ("Business & Strategy", [
+        "strategy", "corp dev", "bizops", "fp&a", "finance", "legal", "accounting", "controller",
+        "people", "talent", " hr", "human resources", "strategic initiatives", "investments", "real estate",
+    ]),
+]
+FUNCTIONAL_AREA_DISPLAY_ORDER = [
+    "Sales / Growth", "Marketing", "Business & Strategy", "AI / Data", "Product", "Engineering", "Operations", "Other",
+]
+
 SENIOR_TITLES = [
     "chief",
     "cfo",
@@ -67,6 +89,18 @@ def detect_capability(title: Optional[str], dept: Optional[str]) -> Optional[str
             if keyword in haystack:
                 return capability
     return None
+
+
+def job_functional_area(job: dict) -> str:
+    """Bucket job by title + dept into a startup-relevant functional area for dossier summary."""
+    title = job.get("title") or ""
+    dept = job.get("dept") or ""
+    haystack = (title + " " + dept).lower()
+    for area_name, keywords in FUNCTIONAL_AREA_KEYWORDS:
+        for keyword in keywords:
+            if keyword in haystack:
+                return area_name
+    return "Other"
 
 
 def is_senior_role(title: Optional[str]) -> bool:
