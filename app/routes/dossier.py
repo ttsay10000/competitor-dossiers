@@ -97,10 +97,12 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         .all()
     )
 
-    asset_props = (latest_asset.structured_json or {}).get("properties", []) if latest_asset else []
+    raw_asset_props = (latest_asset.structured_json or {}).get("properties", []) if latest_asset else []
+    asset_props = [p for p in raw_asset_props if isinstance(p, dict)]
     markets = sorted({prop.get("market") for prop in asset_props if prop.get("market")})
 
-    talent_jobs = (latest_talent.structured_json or {}).get("jobs", []) if latest_talent else []
+    raw_talent_jobs = (latest_talent.structured_json or {}).get("jobs", []) if latest_talent else []
+    talent_jobs = [j for j in raw_talent_jobs if isinstance(j, dict)]
 
     # Summarize jobs by functional area; split into business vs property operations.
     jobs_by_function = []
@@ -119,7 +121,8 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         else:
             jobs_by_function.append(row)
 
-    press_items = (latest_press.structured_json or {}).get("items", []) if latest_press else []
+    raw_press_items = (latest_press.structured_json or {}).get("items", []) if latest_press else []
+    press_items = [i for i in raw_press_items if isinstance(i, dict)]
 
     takeaways = []
     if any(event.type == "asset.new_market" for event in events):
@@ -175,7 +178,7 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     if markets:
         summary_business_points.append("Markets: " + ", ".join(markets))
     if capabilities:
-        summary_business_points.append("Capabilities: " + ", ".join(c["capability"] for c in capabilities))
+        summary_business_points.append("Capabilities: " + ", ".join(c.capability for c in capabilities))
     if any(e.get("type") == "asset.new_market" for e in events_this_week_dicts):
         summary_business_points.append("New market(s) added this week.")
     if any(e.get("type", "").startswith("talent.") for e in events_this_week_dicts):
@@ -203,7 +206,8 @@ def build_dossier_context(session, competitor_id: int) -> dict:
             .first()
         )
         if baseline_asset and baseline_asset.id != latest_asset.id:
-            baseline_props = (baseline_asset.structured_json or {}).get("properties", [])
+            raw_baseline = (baseline_asset.structured_json or {}).get("properties", [])
+            baseline_props = [p for p in raw_baseline if isinstance(p, dict)]
             diff = diff_properties(baseline_props, asset_props)
             asset_added_since_baseline = len(diff["added"])
             asset_removed_since_baseline = len(diff["removed"])
