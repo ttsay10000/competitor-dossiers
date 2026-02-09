@@ -14,6 +14,7 @@ class Settings:
             url = url.replace("postgresql://", "postgresql+psycopg://", 1)
         self.database_url = url
         self.playwright_enabled = os.getenv("PLAYWRIGHT_ENABLED", "false").lower() in {"1", "true", "yes"}
+        self.openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
         self.version = os.getenv("APP_VERSION", "0.1.0")
 
 

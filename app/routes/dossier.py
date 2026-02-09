@@ -5,7 +5,8 @@ from fastapi.responses import Response
 
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, Snapshot, Capability
-from ..diff.asset_diff import diff_properties, delta_by_city
+from ..diff.asset_diff import diff_properties, delta_by_city, infer_location_for_property
+from ..executive_summary import generate_executive_summary
 from ..rules.talent_rules import job_functional_area, FUNCTIONAL_AREA_DISPLAY_ORDER, PROPERTY_OPERATIONS_LABEL
 
 router = APIRouter()
@@ -99,7 +100,9 @@ def build_dossier_context(session, competitor_id: int) -> dict:
 
     raw_asset_props = (latest_asset.structured_json or {}).get("properties", []) if latest_asset else []
     asset_props = [p for p in raw_asset_props if isinstance(p, dict)]
-    markets = sorted({prop.get("market") for prop in asset_props if prop.get("market")})
+    # Inferred locations (state/city from URL when possible) for summary and counts
+    _locations = [infer_location_for_property(p) for p in asset_props]
+    markets = sorted({loc for loc in _locations if loc != "Unspecified"})
 
     raw_talent_jobs = (latest_talent.structured_json or {}).get("jobs", []) if latest_talent else []
     talent_jobs = [j for j in raw_talent_jobs if isinstance(j, dict)]
@@ -186,10 +189,9 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     if not summary_business_points:
         summary_business_points.append("No major business updates in the last 90 days.")
 
-    # Properties by location (city/market and count) from asset snapshot.
+    # Properties by location (state/city) for high-level week-over-week tracking.
     location_counts = {}
-    for prop in asset_props:
-        loc = (prop.get("market") or prop.get("location") or "Unspecified").strip() or "Unspecified"
+    for loc in _locations:
         location_counts[loc] = location_counts.get(loc, 0) + 1
     properties_by_location = [{"location": loc, "count": n} for loc, n in sorted(location_counts.items(), key=lambda x: (-x[1], x[0]))]
 
@@ -214,7 +216,7 @@ def build_dossier_context(session, competitor_id: int) -> dict:
             asset_baseline_date = baseline_asset.captured_at.strftime("%Y-%m-%d")
             asset_delta_by_city = delta_by_city(diff["added"], diff["removed"])
 
-    return {
+    context = {
         "competitor": {"id": competitor.id, "name": competitor.name},
         "markets": markets,
         "capabilities": [{"capability": c.capability} for c in capabilities],
@@ -235,6 +237,8 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         "asset_removed_since_baseline": asset_removed_since_baseline,
         "asset_delta_by_city": asset_delta_by_city,
     }
+    context["executive_summary"] = generate_executive_summary(context)
+    return context
 
 
 def build_summary_context(session, competitor_id: int, days: int = 7) -> dict:

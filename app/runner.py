@@ -326,6 +326,7 @@ def run_asset() -> None:
                         endpoint.url,
                         js_required=endpoint.js_required,
                         use_sitemap_first=endpoint.use_sitemap_first,
+                        extra_options=endpoint.extra_options,
                     )
                 except Exception as exc:
                     log_run(

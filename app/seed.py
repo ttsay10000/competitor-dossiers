@@ -36,7 +36,21 @@ SEED_COMPETITORS = [
         "primary_domain": "larkhospitality.com",
         "sources": [
             {"channel": "talent", "url": "https://ats.wizehire.com/career-site/lark-hospitality", "confidence": "high"},
-            {"channel": "asset", "url": "https://www.larkhospitality.com/portfolio/", "confidence": "high"},
+            {
+                "channel": "asset",
+                "url": "https://www.larkhospitality.com/portfolio/",
+                "confidence": "high",
+                "js_required": True,
+                "extra_options": {
+                    "strategy": "js_exhaust",
+                    "load_more": {
+                        "click_selector": "button:has-text('Load more'), a:has-text('Load more')",
+                        "stop_when_selector_gone": True,
+                        "wait_after_click_ms": 1500,
+                        "max_clicks": 50,
+                    },
+                },
+            },
             {"channel": "press", "url": "https://www.larkhospitality.com/press/", "confidence": "high"},
         ],
     },
@@ -62,6 +76,7 @@ def upsert_source(
     confidence: str,
     js_required: bool = False,
     use_sitemap_first: bool = False,
+    extra_options: Optional[dict] = None,
 ) -> None:
     # Match by competitor + channel so re-seeding updates URL when we change it (e.g. to Lever).
     existing = (
@@ -77,6 +92,7 @@ def upsert_source(
         existing.confidence = confidence
         existing.js_required = js_required
         existing.use_sitemap_first = use_sitemap_first
+        existing.extra_options = extra_options
         return
     session.add(
         SourceEndpoint(
@@ -86,6 +102,7 @@ def upsert_source(
             confidence=confidence,
             js_required=js_required,
             use_sitemap_first=use_sitemap_first,
+            extra_options=extra_options,
         )
     )
 
@@ -107,6 +124,7 @@ def run_seed() -> None:
                     source["confidence"],
                     js_required=bool(source.get("js_required")),
                     use_sitemap_first=bool(source.get("use_sitemap_first")),
+                    extra_options=source.get("extra_options"),
                 )
 
 

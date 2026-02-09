@@ -10,3 +10,4 @@ beautifulsoup4==4.12.3
 feedparser==6.0.11
 playwright==1.42.0
 weasyprint==61.2
+openai>=1.0.0

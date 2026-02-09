@@ -37,6 +37,7 @@ class SourceEndpoint(Base):
     confidence: Mapped[str] = mapped_column(String(16), default="high", nullable=False)
     js_required: Mapped[bool] = mapped_column(default=False)
     use_sitemap_first: Mapped[bool] = mapped_column(default=False)
+    extra_options: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     competitor: Mapped[Competitor] = relationship(back_populates="source_endpoints")
