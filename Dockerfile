@@ -17,4 +17,4 @@ COPY . .
 # Default: run web server. Cron overrides via dockerCommand in render.yaml.
 ENV PORT=10000
 EXPOSE 10000
-CMD ["sh", "-c", "alembic upgrade head 2>/dev/null || true && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
+CMD ["sh", "-c", "python -m alembic upgrade head 2>/dev/null || true && exec python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
