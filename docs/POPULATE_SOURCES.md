@@ -51,6 +51,8 @@ No homepage or public_records sources are seeded (optional; add later if needed)
 3. **Ashby** — else if Ashby, we use the Ashby API and store all jobs.
 4. **Generic** — else we fetch the career page HTML and scrape job links (or headings as fallback for WizeHire).
 
+**Job listing date (posted_date):** We use the source’s date when available, not the date we pull. **Lever** provides `createdAt` (ms), **Greenhouse** provides `updated_at`/`created_at`, **Ashby** provides `publishedAt`—we store these as `posted_date` and use them for events and for “recent by capability” (e.g. hiring surge). For **generic** (Kula, WizeHire) we have no date from the API; we optionally scrape from the page when present (e.g. `<time datetime="...">`, `data-posted-date`, or “Posted X days ago” text) so listing date can be populated when the ATS exposes it.
+
 **Lark / WizeHire:** The source is harder to pull from because (1) the job list is often JS-rendered, so we use Playwright when `PLAYWRIGHT_ENABLED=true`; (2) the page may use `<a href="#">Job Title</a>` or headings instead of normal job URLs, so we accept fragment links with job-like text and, if that yields 0 jobs, we fall back to extracting titles from `<h2>`/`<h3>`/`<h4>`. Enable Playwright and re-run talent to populate Lark.
 
 If an API fails (e.g. wrong format), we fall back to generic HTML for that URL. Every run persists the **full current job list** for that source so the next run can diff and detect changes.

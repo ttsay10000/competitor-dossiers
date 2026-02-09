@@ -9,8 +9,8 @@
           <label>Competitor</label>
           <select name="competitor_id">
             <option value="">All</option>
-            {% for competitor in competitors %}
-            <option value="{{ competitor.id }}" {% if selected_competitor == competitor.id %}selected{% endif %}>{{ competitor.name }}</option>
+            {% for co in competitor_options %}
+            <option value="{{ co.id }}" {% if selected_competitor == co.id %}selected{% endif %}>{{ co.name }}</option>
             {% endfor %}
           </select>
         </div>
@@ -29,6 +29,7 @@
             <option value="">All</option>
             <option value="success" {% if selected_status == "success" %}selected{% endif %}>success</option>
             <option value="skipped" {% if selected_status == "skipped" %}selected{% endif %}>skipped</option>
+            <option value="error" {% if selected_status == "error" %}selected{% endif %}>error</option>
           </select>
         </div>
         <div>
@@ -47,6 +48,7 @@
           <th>Channel</th>
           <th>Status</th>
           <th>Message</th>
+          <th>Details</th>
         </tr>
       </thead>
       <tbody>
@@ -57,11 +59,12 @@
           <td>{{ log.channel }}</td>
           <td>{{ log.status }}</td>
           <td class="muted">{{ log.message or "" }}</td>
+          <td class="muted" style="font-size: 12px;">{{ log.extra_str }}</td>
         </tr>
         {% endfor %}
         {% if logs|length == 0 %}
         <tr>
-          <td colspan="5" class="muted">No runs yet.</td>
+          <td colspan="6" class="muted">No runs yet.</td>
         </tr>
         {% endif %}
       </tbody>

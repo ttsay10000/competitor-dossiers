@@ -1,5 +1,7 @@
 import argparse
+import sys
 
+from .db import check_db_connection
 from .runner import run
 from .digest import print_weekly_digest
 
@@ -18,6 +20,12 @@ def main() -> None:
         help="Print weekly digest (last 7 days)",
     )
     args = parser.parse_args()
+
+    try:
+        check_db_connection()
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
 
     if args.digest:
         print_weekly_digest()

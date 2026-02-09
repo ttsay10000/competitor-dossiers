@@ -1,0 +1,29 @@
+# Render Blueprint: web app + cron to run the asset (and other) collectors.
+# In the Render Dashboard, link your Postgres instance to the cron job so DATABASE_URL is set.
+# You can also run the cron command manually: Dashboard → Cron Job → "Trigger run".
+
+services:
+  # Web service (FastAPI). Skip or remove if you already have one.
+  - type: web
+    name: competitor-dossiers
+    runtime: python
+    buildCommand: pip install -r requirements-render.txt && alembic upgrade head
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+
+  # Cron: full refresh (talent, asset, press, homepage, public_records). Weekly so baseline/week-over-week stays meaningful.
+  # Schedule is UTC. Example: 0 2 * * 0 = Sundays at 02:00 UTC.
+  - type: cron
+    name: competitor-signals-collect
+    runtime: python
+    schedule: "0 2 * * 0"
+    buildCommand: pip install -r requirements-render.txt
+    startCommand: python -m app.cli --channel all
+
+  # Optional: asset-only cron (e.g. weekly) if you want to run asset separately. Uncomment to use.
+  # - type: cron
+  #   name: competitor-signals-asset
+  #   runtime: python
+  #   schedule: "0 3 * * 0"
+  #   buildCommand: pip install -r requirements-render.txt
+  #   startCommand: python -m app.cli --channel asset

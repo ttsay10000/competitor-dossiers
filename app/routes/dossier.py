@@ -5,6 +5,7 @@ from fastapi.responses import Response
 
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, Snapshot, Capability
+from ..diff.asset_diff import diff_properties, delta_by_city
 from ..rules.talent_rules import job_functional_area, FUNCTIONAL_AREA_DISPLAY_ORDER, PROPERTY_OPERATIONS_LABEL
 
 router = APIRouter()
@@ -189,6 +190,26 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         location_counts[loc] = location_counts.get(loc, 0) + 1
     properties_by_location = [{"location": loc, "count": n} for loc, n in sorted(location_counts.items(), key=lambda x: (-x[1], x[0]))]
 
+    # Baseline = oldest asset snapshot (first run). Week-over-week: compare latest to baseline.
+    asset_baseline_date = None
+    asset_added_since_baseline = 0
+    asset_removed_since_baseline = 0
+    asset_delta_by_city = []
+    if latest_asset:
+        baseline_asset = (
+            session.query(Snapshot)
+            .filter(Snapshot.competitor_id == competitor_id, Snapshot.channel == "asset")
+            .order_by(Snapshot.captured_at.asc())
+            .first()
+        )
+        if baseline_asset and baseline_asset.id != latest_asset.id:
+            baseline_props = (baseline_asset.structured_json or {}).get("properties", [])
+            diff = diff_properties(baseline_props, asset_props)
+            asset_added_since_baseline = len(diff["added"])
+            asset_removed_since_baseline = len(diff["removed"])
+            asset_baseline_date = baseline_asset.captured_at.strftime("%Y-%m-%d")
+            asset_delta_by_city = delta_by_city(diff["added"], diff["removed"])
+
     return {
         "competitor": {"id": competitor.id, "name": competitor.name},
         "markets": markets,
@@ -205,6 +226,10 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         "top_news": top_news,
         "summary_business_points": summary_business_points,
         "properties_by_location": properties_by_location,
+        "asset_baseline_date": asset_baseline_date,
+        "asset_added_since_baseline": asset_added_since_baseline,
+        "asset_removed_since_baseline": asset_removed_since_baseline,
+        "asset_delta_by_city": asset_delta_by_city,
     }
 
 

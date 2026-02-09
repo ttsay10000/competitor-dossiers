@@ -20,3 +20,25 @@ def diff_properties(previous: list[dict], current: list[dict]) -> dict[str, list
 
 def extract_markets(properties: list[dict]) -> set[str]:
     return {prop.get("market") for prop in properties if prop.get("market")}
+
+
+def location_key(prop: dict) -> str:
+    """City/market label for grouping (same logic as dossier properties_by_location)."""
+    loc = (prop.get("market") or prop.get("location") or "Unspecified").strip()
+    return loc or "Unspecified"
+
+
+def delta_by_city(added: list[dict], removed: list[dict]) -> list[dict]:
+    """Return per-city added/removed counts: list of {location, added, removed}."""
+    by_loc: dict[str, dict[str, int]] = {}
+    for prop in added:
+        loc = location_key(prop)
+        if loc not in by_loc:
+            by_loc[loc] = {"location": loc, "added": 0, "removed": 0}
+        by_loc[loc]["added"] += 1
+    for prop in removed:
+        loc = location_key(prop)
+        if loc not in by_loc:
+            by_loc[loc] = {"location": loc, "added": 0, "removed": 0}
+        by_loc[loc]["removed"] += 1
+    return sorted(by_loc.values(), key=lambda x: (-x["added"] - x["removed"], x["location"]))

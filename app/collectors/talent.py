@@ -1,5 +1,6 @@
 import json
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from bs4 import BeautifulSoup
@@ -112,6 +113,40 @@ def extract_lever_jobs(payload: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return jobs
 
 
+def _posted_date_from_element(element) -> Optional[str]:
+    """Try to extract job posted date from a job card element (e.g. <time datetime="">, data-posted-date). Returns ISO date string or None."""
+    if element is None:
+        return None
+    # Walk up to find a reasonable card container
+    node = element
+    for _ in range(15):
+        if node is None or node.name in ("body", "html"):
+            break
+        # <time datetime="2024-01-15T...">
+        time_tag = node.find("time", datetime=True)
+        if time_tag:
+            dt = time_tag.get("datetime")
+            if dt:
+                return dt
+        # data-posted-date, data-date, data-published (some ATSes use these)
+        for attr in ("data-posted-date", "data-date", "data-published", "data-created"):
+            val = node.get(attr)
+            if val:
+                return val
+        # Text like "Posted 3 days ago" (best-effort)
+        text = (node.get_text() or "").strip()
+        if text:
+            m = re.search(r"posted\s+(\d+)\s+day", text, re.I)
+            if m:
+                try:
+                    d = datetime.utcnow() - timedelta(days=int(m.group(1)))
+                    return d.strftime("%Y-%m-%d")
+                except (ValueError, TypeError):
+                    pass
+        node = node.parent
+    return None
+
+
 def _title_from_apply_link(link) -> Optional[str]:
     """For 'Apply' / 'Apply Now' links, get job title from parent card (e.g. Kula-style layout)."""
     parent = link.parent
@@ -165,13 +200,14 @@ def extract_jobs_from_html(html: str) -> list[dict[str, Any]]:
         if url_norm in seen:
             continue
         seen.add(url_norm)
+        posted_date = _posted_date_from_element(link)
         jobs.append(
             {
                 "job_id": None,
                 "title": title,
                 "location": None,
                 "dept": None,
-                "posted_date": None,
+                "posted_date": posted_date,
                 "url": href if href.startswith("http") else None,
             }
         )
@@ -197,8 +233,9 @@ def extract_jobs_from_headings(html: str) -> list[dict[str, Any]]:
         if key in seen:
             continue
         seen.add(key)
+        posted_date = _posted_date_from_element(tag)
         jobs.append(
-            {"job_id": None, "title": title, "location": None, "dept": None, "posted_date": None, "url": None}
+            {"job_id": None, "title": title, "location": None, "dept": None, "posted_date": posted_date, "url": None}
         )
     return jobs
 

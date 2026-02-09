@@ -1,5 +1,24 @@
 import hashlib
+import re
 from datetime import datetime, timedelta
+from typing import Any, Optional
+
+
+def _posted_to_datetime(posted: Any) -> Optional[datetime]:
+    """Convert posted_date from API (ms, ISO str) or stored value to datetime for comparison."""
+    if posted is None:
+        return None
+    if isinstance(posted, (int, float)):
+        return datetime.utcfromtimestamp(posted / 1000.0)
+    if isinstance(posted, datetime):
+        return posted
+    s = str(posted).strip()
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def job_identity(job: dict) -> str:
@@ -25,12 +44,8 @@ def count_recent_by_capability(jobs: list[dict], capability: str, days: int = 30
     for job in jobs:
         if job.get("capability_bucket") != capability:
             continue
-        posted = job.get("posted_date")
-        if posted is None:
-            continue
-        try:
-            posted_dt = datetime.fromisoformat(str(posted).replace("Z", "+00:00"))
-        except ValueError:
+        posted_dt = _posted_to_datetime(job.get("posted_date"))
+        if posted_dt is None:
             continue
         if posted_dt >= cutoff:
             count += 1
