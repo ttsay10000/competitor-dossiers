@@ -71,12 +71,22 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         .order_by(Snapshot.captured_at.desc())
         .first()
     )
-    latest_talent = (
+    # Prefer most recent talent snapshot that has jobs (Lark/AvantStay often get 0 jobs on cron without Playwright).
+    talent_candidates = (
         session.query(Snapshot)
         .filter(Snapshot.competitor_id == competitor_id, Snapshot.channel == "talent")
         .order_by(Snapshot.captured_at.desc())
-        .first()
+        .limit(20)
+        .all()
     )
+    latest_talent = None
+    for s in talent_candidates:
+        jobs_in = (s.structured_json or {}).get("jobs", [])
+        if jobs_in and any(isinstance(j, dict) for j in jobs_in):
+            latest_talent = s
+            break
+    if not latest_talent and talent_candidates:
+        latest_talent = talent_candidates[0]  # show latest even if empty
     latest_press = (
         session.query(Snapshot)
         .filter(Snapshot.competitor_id == competitor_id, Snapshot.channel == "press")
@@ -143,25 +153,6 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     events_this_week = [e for e in events if e.detected_at >= week_cutoff]
     events_this_week_dicts = [_event_dict(e) for e in events_this_week]
 
-    # Major events (past 7 days) in four buckets for the top of the dossier.
-    major_events_buckets = {
-        "Talent Radar": [],
-        "Asset Watch": [],
-        "Digital Footprint": [],
-        "Public Record": [],
-    }
-    for e in events_this_week_dicts:
-        t = e.get("type") or ""
-        cat = e.get("category") or ""
-        if t.startswith("talent."):
-            major_events_buckets["Talent Radar"].append(e)
-        elif t.startswith("asset."):
-            major_events_buckets["Asset Watch"].append(e)
-        elif t in ("narrative.homepage_updated", "asset.pipeline_signal"):
-            major_events_buckets["Digital Footprint"].append(e)
-        elif cat == "public_record" or t == "public_record.filing" or cat in ("partner", "capital") or t == "narrative.priority_shift":
-            major_events_buckets["Public Record"].append(e)
-
     # Top 5 news: exclude blog-like; prefer major business topics (fundraising, partnerships, markets).
     blog_like = ("blog", "post", "update:", "weekly", "monthly")
     relevance_hints = ("fundraise", "funding", "partnership", "acquisition", "expansion", "launch", "series", "market", "executive", "ceo", "strategic")
@@ -196,6 +187,7 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     properties_by_location = [{"location": loc, "count": n} for loc, n in sorted(location_counts.items(), key=lambda x: (-x[1], x[0]))]
 
     # Baseline = oldest asset snapshot (first run). Week-over-week: compare latest to baseline.
+    # Baseline = previous run (so "today's pull" is the reference for next week).
     asset_baseline_date = None
     asset_added_since_baseline = 0
     asset_removed_since_baseline = 0
@@ -204,10 +196,11 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         baseline_asset = (
             session.query(Snapshot)
             .filter(Snapshot.competitor_id == competitor_id, Snapshot.channel == "asset")
-            .order_by(Snapshot.captured_at.asc())
+            .order_by(Snapshot.captured_at.desc())
+            .offset(1)
             .first()
         )
-        if baseline_asset and baseline_asset.id != latest_asset.id:
+        if baseline_asset:
             raw_baseline = (baseline_asset.structured_json or {}).get("properties", [])
             baseline_props = [p for p in raw_baseline if isinstance(p, dict)]
             diff = diff_properties(baseline_props, asset_props)
@@ -235,7 +228,6 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         "press_items": press_items,
         "takeaways": takeaways,
         "recommendations": recommendations,
-        "major_events_buckets": major_events_buckets,
         "events_this_week": events_this_week_dicts,
         "top_news": top_news,
         "summary_business_points": summary_business_points,

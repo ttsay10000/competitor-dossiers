@@ -1,29 +1,24 @@
-# Render Blueprint: web app + cron to run the asset (and other) collectors.
-# In the Render Dashboard, link your Postgres instance to the cron job so DATABASE_URL is set.
-# You can also run the cron command manually: Dashboard → Cron Job → "Trigger run".
+# Render Blueprint: web app + cron. Uses Docker so Playwright + Chromium are available (Lark/AvantStay talent).
+# Set PLAYWRIGHT_ENABLED=true for both services in the Dashboard (or env group). Link Postgres so DATABASE_URL is set.
 
 services:
-  # Web service (FastAPI). Skip or remove if you already have one.
+  # Web service (FastAPI). Docker build installs Playwright + Chromium so JS-rendered pages can be fetched if needed.
   - type: web
     name: competitor-dossiers
-    runtime: python
-    buildCommand: pip install -r requirements-render.txt && alembic upgrade head
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    runtime: docker
+    dockerCommand: sh -c "alembic upgrade head 2>/dev/null || true && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
     healthCheckPath: /health
 
-  # Cron: full refresh (talent, asset, press, homepage, public_records). Weekly so baseline/week-over-week stays meaningful.
-  # Schedule is UTC. Example: 0 2 * * 0 = Sundays at 02:00 UTC.
+  # Cron: full refresh (talent, asset, press, homepage, public_records). Same image has Playwright for Lark/AvantStay talent.
   - type: cron
     name: competitor-signals-collect
-    runtime: python
+    runtime: docker
     schedule: "0 2 * * 0"
-    buildCommand: pip install -r requirements-render.txt
-    startCommand: python -m app.cli --channel all
+    dockerCommand: python -m app.cli --channel all
 
-  # Optional: asset-only cron (e.g. weekly) if you want to run asset separately. Uncomment to use.
+  # Optional: asset-only cron. Uncomment to use.
   # - type: cron
   #   name: competitor-signals-asset
-  #   runtime: python
+  #   runtime: docker
   #   schedule: "0 3 * * 0"
-  #   buildCommand: pip install -r requirements-render.txt
-  #   startCommand: python -m app.cli --channel asset
+  #   dockerCommand: python -m app.cli --channel asset

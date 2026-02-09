@@ -227,6 +227,32 @@ def run_talent() -> None:
                 previous_jobs = (latest.structured_json or {}).get("jobs", []) if latest else []
                 current_jobs = structured.get("jobs", [])
 
+                # Don't persist an empty talent snapshot if we already have any snapshot with jobs
+                # (e.g. JS-rendered page returned no jobs on cron without Playwright).
+                existing_job_count = 0
+                if not current_jobs:
+                    for s in (
+                        session.query(Snapshot)
+                        .filter(Snapshot.competitor_id == competitor.id, Snapshot.channel == "talent")
+                        .order_by(Snapshot.captured_at.desc())
+                        .limit(20)
+                        .all()
+                    ):
+                        jobs_in = (s.structured_json or {}).get("jobs", [])
+                        if jobs_in and any(isinstance(j, dict) for j in jobs_in):
+                            existing_job_count = len([j for j in jobs_in if isinstance(j, dict)])
+                            break
+                if not current_jobs and existing_job_count:
+                    log_run(
+                        session,
+                        competitor.id,
+                        "talent",
+                        "skipped",
+                        message="empty_snapshot_kept_previous",
+                        extra={"url": endpoint.url, "existing_job_count": existing_job_count},
+                    )
+                    continue
+
                 current_jobs = [assign_job_flags(job) for job in current_jobs]
                 previous_jobs = [assign_job_flags(job) for job in previous_jobs]
                 structured["jobs"] = current_jobs
@@ -239,6 +265,19 @@ def run_talent() -> None:
                     snapshot.get("raw_hash") or "",
                     structured,
                 )
+                # Log when we stored 0 jobs after falling back from Playwright (cron often has no browser).
+                if not current_jobs and snapshot.get("playwright_fallback"):
+                    log_run(
+                        session,
+                        competitor.id,
+                        "talent",
+                        "skipped",
+                        message="talent_js_fallback_zero_jobs",
+                        extra={
+                            "url": endpoint.url,
+                            "hint": "Cron needs playwright package + 'playwright install chromium' in build and PLAYWRIGHT_ENABLED=true",
+                        },
+                    )
 
                 diff = diff_jobs(previous_jobs, current_jobs)
                 added_jobs = diff["added"]

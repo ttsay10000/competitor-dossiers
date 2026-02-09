@@ -76,6 +76,16 @@ So:
 3. Run talent again later (e.g. next day or weekly). The second run diffs against the first; new senior/strategic roles, new capabilities, and hiring surges will create events in the Feed.
 4. If a run fails or returns 0 jobs for a URL, check that the URL is correct. For Lever/Greenhouse/Ashby we use their APIs; for other pages we need links whose href contains one of: job, career, position, opening, role, career-site. **AvantStay** talent source is `https://careers.kula.ai/avantstay`; we fetch it with JS (Playwright) when `PLAYWRIGHT_ENABLED=true` so the full job list is captured. If you see 0 jobs, enable Playwright or check Runs for errors.
 
+**Render: Lark / AvantStay talent (Docker)**
+
+The repo’s **Dockerfile** installs Playwright and Chromium (with system deps) so the app and cron can fetch JS-rendered career pages. Use it on Render by setting **runtime: docker** for the web service and cron job (see `render.yaml`).
+
+1. **Blueprint:** The included `render.yaml` uses `runtime: docker` for both the web service and the cron job. If you created the services with `runtime: python` originally, you may need to add new services from the Blueprint or recreate them so they use Docker.
+2. **Environment:** Set **`PLAYWRIGHT_ENABLED=true`** for both the web service and the cron job (Dashboard → Service → Environment, or an env group).
+3. After deploy, the cron run will use Playwright for Lark and AvantStay; talent data should appear in dossiers.
+
+If you cannot use Docker on Render (e.g. you must keep `runtime: python`), backfill Lark/AvantStay talent from your machine: set `PLAYWRIGHT_ENABLED=true`, run `python -m app.cli --channel talent` with `DATABASE_URL` pointing at your Render Postgres.
+
 ---
 
 ## 2. Asset (properties / footprint)

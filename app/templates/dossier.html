@@ -9,78 +9,18 @@
       <a href="/dossier/{{ competitor.id }}/pdf"><button>Export PDF</button></a>
     </div>
 
-    <!-- 0. AI-generated executive summary (top line) -->
+    <!-- 0. AI-generated executive summary (strategic takeaways in bullets) -->
     <div class="card" style="background: var(--card-bg, #f8f9fa); border-left: 4px solid var(--accent, #0d6efd);">
       <strong>At a glance</strong>
-      <p class="meta" style="margin: 2px 0 8px 0;">AI-generated reading of talent, assets, and news.</p>
+      <p class="meta" style="margin: 2px 0 8px 0;">AI-generated strategic takeaways from talent, assets, and news.</p>
       {% if executive_summary %}
-        <p style="margin: 0; font-size: 15px; line-height: 1.5;">{{ executive_summary }}</p>
+        <div style="margin: 0; font-size: 15px; line-height: 1.6; white-space: pre-line;">{{ executive_summary }}</div>
       {% else %}
-        <p class="meta" style="margin: 0;">Set <code>OPENAI_API_KEY</code> in your environment to enable an executive-level AI summary here. Until then, use the sections below.</p>
+        <p class="meta" style="margin: 0;">Set <code>OPENAI_API_KEY</code> in your environment to enable an executive-level summary here. Until then, use the sections below.</p>
       {% endif %}
     </div>
 
-    <!-- 1. Major events (past 7 days) in four buckets -->
-    <div class="card">
-      <strong>Major events (past 7 days)</strong>
-      <p class="meta">Talent, asset, digital footprint, and public record signals.</p>
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 12px;">
-        <div>
-          <strong style="font-size: 13px;">Talent Radar</strong>
-          <p class="meta" style="margin: 2px 0 4px 0;">New roles, senior hires, hiring surges.</p>
-          {% if major_events_buckets["Talent Radar"]|length %}
-            <ul style="margin: 0; padding-left: 16px; font-size: 14px;">
-              {% for e in major_events_buckets["Talent Radar"] %}
-              <li><span class="pill {{ e.severity }}">{{ e.severity }}</span> {{ e.title }}</li>
-              {% endfor %}
-            </ul>
-          {% else %}
-            <div class="meta">None this week.</div>
-          {% endif %}
-        </div>
-        <div>
-          <strong style="font-size: 13px;">Asset Watch</strong>
-          <p class="meta" style="margin: 2px 0 4px 0;">Properties added/removed, pipeline.</p>
-          {% if major_events_buckets["Asset Watch"]|length %}
-            <ul style="margin: 0; padding-left: 16px; font-size: 14px;">
-              {% for e in major_events_buckets["Asset Watch"] %}
-              <li><span class="pill {{ e.severity }}">{{ e.severity }}</span> {{ e.title }}</li>
-              {% endfor %}
-            </ul>
-          {% else %}
-            <div class="meta">None this week.</div>
-          {% endif %}
-        </div>
-        <div>
-          <strong style="font-size: 13px;">Digital Footprint</strong>
-          <p class="meta" style="margin: 2px 0 4px 0;">Homepage changes, Coming Soon.</p>
-          {% if major_events_buckets["Digital Footprint"]|length %}
-            <ul style="margin: 0; padding-left: 16px; font-size: 14px;">
-              {% for e in major_events_buckets["Digital Footprint"] %}
-              <li><span class="pill {{ e.severity }}">{{ e.severity }}</span> {{ e.title }}</li>
-              {% endfor %}
-            </ul>
-          {% else %}
-            <div class="meta">None this week.</div>
-          {% endif %}
-        </div>
-        <div>
-          <strong style="font-size: 13px;">Public Record</strong>
-          <p class="meta" style="margin: 2px 0 4px 0;">Filings, press, partnerships.</p>
-          {% if major_events_buckets["Public Record"]|length %}
-            <ul style="margin: 0; padding-left: 16px; font-size: 14px;">
-              {% for e in major_events_buckets["Public Record"] %}
-              <li><span class="pill {{ e.severity }}">{{ e.severity }}</span> {{ e.title }}</li>
-              {% endfor %}
-            </ul>
-          {% else %}
-            <div class="meta">None this week.</div>
-          {% endif %}
-        </div>
-      </div>
-    </div>
-
-    <!-- 2. Strategic takeaways (action items) -->
+    <!-- 1. Strategic takeaways (action items) -->
     <div class="card">
       <strong>Strategic takeaways</strong>
       <p class="meta">Action items based on recent events.</p>
@@ -127,33 +67,15 @@
     <!-- 5. Properties by location (state/city) + week-over-week vs baseline -->
     <div class="card">
       <strong>Properties by location</strong>
-      <p class="meta">From latest asset pull: summarized by state or city (inferred from URLs when available). Use this to track where numbers change each week vs baseline.</p>
+      <p class="meta">From latest asset pull: current counts by state or city. Any notable adds/removals are summarized in At a glance above.</p>
       {% if properties_by_location|length %}
-        {% if asset_baseline_date %}
-        <p style="margin: 0 0 10px 0;"><span class="meta">Since baseline ({{ asset_baseline_date }}):</span>
-          {% if asset_added_since_baseline or asset_removed_since_baseline %}
-            <strong>{{ asset_added_since_baseline }} added</strong>{% if asset_removed_since_baseline %}, <strong>{{ asset_removed_since_baseline }} removed</strong>{% endif %}
-          {% else %}
-            No change.
-          {% endif %}
-        </p>
-        {% if asset_delta_by_city|length %}
-        <p class="meta" style="margin: 0 0 8px 0;">By location (state/city):</p>
-        <ul style="margin: 0; padding-left: 20px; font-size: 14px;">
-          {% for row in asset_delta_by_city %}
-          <li><strong>{{ row.location }}</strong>: +{{ row.added }} / −{{ row.removed }}</li>
-          {% endfor %}
-        </ul>
-        {% endif %}
-        {% endif %}
-        <p class="meta" style="margin-top: 10px;">Current counts by location (state/city):</p>
         <ul style="margin: 0; padding-left: 20px;">
           {% for row in properties_by_location %}
           <li><strong>{{ row.location }}</strong>: {{ row.count }} propert{{ 'ies' if row.count != 1 else 'y' }}</li>
           {% endfor %}
         </ul>
       {% else %}
-        <div class="meta">No property data yet. Run the asset collector to populate (baseline will be set from today’s run).</div>
+        <div class="meta">No property data yet. Run the asset collector to populate.</div>
       {% endif %}
     </div>
 

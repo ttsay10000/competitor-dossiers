@@ -64,7 +64,7 @@ def _build_context_text(context: Dict[str, Any]) -> str:
 
 def generate_executive_summary(context: Dict[str, Any]) -> Optional[str]:
     """
-    Return 2–4 sentences of executive-level summary for the competitor dossier.
+    Return strategic takeaways as bullet points for the competitor dossier "At a glance" block.
     Returns None if OPENAI_API_KEY is unset or the API call fails.
     """
     from .config import settings
@@ -80,11 +80,14 @@ def generate_executive_summary(context: Dict[str, Any]) -> Optional[str]:
     context_text = _build_context_text(context)
     competitor_name = context.get("competitor", {}).get("name", "Competitor")
 
-    system = """You are an executive briefing analyst. Given factual data about a competitor, write 2–4 short sentences that summarize what is happening at a high level for a leadership reader. Focus on:
-- Talent: e.g. new or changed roles, which areas are growing (partnerships, engineering, etc.), or "no change on talent; job count stable."
-- Assets: e.g. where they added or removed properties (states/cities), and if one location stands out (e.g. "notable push in Texas based on number of additions").
-- Only mention news if there is notable press; otherwise omit.
-Write in a calm, executive tone. Be specific (numbers, locations) when the data provides them. If nothing notable changed, say so clearly. Output only the summary, no preamble or bullet points."""
+    system = """You are an executive briefing analyst. Given factual data about a competitor, write strategic takeaways for a leadership reader. Output only a short bullet list (3–6 bullets). Each bullet should be one clear, actionable takeaway based on the data.
+
+Include takeaways that draw from:
+- Talent: hiring focus (e.g. partnerships, engineering), senior roles, or stability ("No notable change on talent; job count stable").
+- Assets: where they added or removed properties, standout markets, or footprint changes.
+- News: only if there is notable press; otherwise omit.
+
+Be specific (numbers, locations) when the data provides them. Tone: calm and executive. Format: each line starting with a bullet (use "- "). No intro sentence, no subheadings."""
 
     user = f"Competitor: {competitor_name}\n\nData:\n{context_text}"
 
@@ -95,7 +98,7 @@ Write in a calm, executive tone. Be specific (numbers, locations) when the data 
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            max_tokens=300,
+            max_tokens=400,
             temperature=0.3,
         )
         choice = resp.choices[0] if resp.choices else None

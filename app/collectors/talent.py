@@ -321,23 +321,28 @@ def collect_talent_snapshot(source_url: str) -> dict[str, Any]:
 
     # 4. Generic: competitor career page (HTML scrape). Kula and WizeHire are JS-rendered.
     use_js = "kula.ai" in source_url.lower() or "wizehire.com" in source_url.lower()
+    playwright_fallback = False
     if use_js:
         try:
             fetched = fetch_url_js(source_url)
         except (RuntimeError, Exception):
             fetched = fetch_url(source_url)
+            playwright_fallback = True  # Playwright disabled or not installed; plain HTML usually gives 0 jobs
     else:
         fetched = fetch_url(source_url)
     jobs = extract_jobs_from_html(fetched.text)
     if not jobs and "wizehire.com" in source_url.lower():
         jobs = extract_jobs_from_headings(fetched.text)
-    return {
+    out = {
         "provider": "generic",
         "source_url": fetched.url,
         "raw_content": fetched.text,
         "raw_hash": fetched.raw_hash,
         "jobs": normalize_jobs(jobs),
     }
+    if playwright_fallback:
+        out["playwright_fallback"] = True
+    return out
 
 
 def build_structured_json(snapshot: dict[str, Any]) -> dict[str, Any]:
