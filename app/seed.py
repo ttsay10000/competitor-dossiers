@@ -49,6 +49,7 @@ SEED_COMPETITORS = [
                         "wait_after_click_ms": 1500,
                         "max_clicks": 50,
                     },
+                    "llm_extract": True,
                 },
             },
             {"channel": "press", "url": "https://www.larkhospitality.com/press/", "confidence": "high"},

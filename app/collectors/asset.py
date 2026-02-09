@@ -2,13 +2,16 @@ import json
 import re
 import gzip
 from datetime import datetime
-from urllib.parse import urlparse, urlencode, urlunparse, parse_qs
+from urllib.parse import urljoin, urlparse, urlencode, urlunparse, parse_qs
 from typing import Any, Dict, List, Optional
 
 import requests
 from bs4 import BeautifulSoup
 
 from .http import fetch_url, fetch_url_js, fetch_url_js_exhaust
+
+# Max characters of page text to send to LLM for property extraction (fit context, control cost).
+_LLM_EXTRACT_MAX_CHARS = 14_000
 
 
 def discover_sitemap(url: str) -> list[str]:
@@ -51,6 +54,7 @@ def is_property_like(url: str) -> bool:
     patterns = [
         r"/properties/",
         r"/property/",
+        r"/portfolio/",  # e.g. Lark: larkhospitality.com/portfolio/property-slug
         r"/locations/",
         r"/apartments/",
         r"/homes/",
@@ -84,6 +88,79 @@ def extract_properties_from_html(html: str) -> list[dict[str, Any]]:
             }
         )
     return properties
+
+
+def _html_to_text_for_llm(html: str, max_chars: int = _LLM_EXTRACT_MAX_CHARS) -> str:
+    """Reduce HTML to plain text for LLM (strip scripts, get body text, truncate)."""
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup.find_all(["script", "style", "noscript"]):
+        tag.decompose()
+    body = soup.find("body") or soup
+    text = body.get_text(separator="\n", strip=True)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n[... truncated]"
+    return text
+
+
+def _extract_properties_via_llm(html: str, page_url: str) -> List[dict[str, Any]]:
+    """
+    Use OpenAI to extract property names (and URLs when present) from portfolio-style page content.
+    Returns list of dicts with "name" and optionally "url" (absolute). Requires OPENAI_API_KEY.
+    """
+    try:
+        from ..config import settings
+        if not settings.openai_api_key:
+            return []
+    except Exception:
+        return []
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return []
+
+    text = _html_to_text_for_llm(html)
+    parsed = urlparse(page_url)
+    base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else page_url
+
+    system = (
+        "You are extracting a list of properties (hotels, apartments, vacation rentals, etc.) from web page text. "
+        "Return a JSON array of objects. Each object must have: \"name\" (string, the property/location name). "
+        "If the page provides a URL or path to that property, include \"url\" (string). "
+        "Use only the exact names and URLs from the content. Skip navigation, footers, and non-property items. "
+        "Output only the JSON array, no markdown or explanation."
+    )
+    user = f"Page base URL: {base_url}\n\nExtract all properties from this page text:\n\n{text}"
+
+    try:
+        client = OpenAI(api_key=settings.openai_api_key)
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            max_tokens=2000,
+            temperature=0.1,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        # Allow optional markdown code fence
+        if content.startswith("```"):
+            content = re.sub(r"^```\w*\n?", "", content).rstrip("`\n")
+        raw = json.loads(content)
+        if not isinstance(raw, list):
+            return []
+        out = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            name = (item.get("name") or "").strip()
+            if not name:
+                continue
+            url_val = (item.get("url") or "").strip()
+            if url_val and not url_val.startswith("http"):
+                url_val = urljoin(base_url, url_val)
+            out.append({"name": name, "url": url_val or None, "market": None, "status": None})
+        return out
+    except Exception:
+        return []
 
 
 def normalize_properties(properties: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -175,6 +252,18 @@ def fetch_from_api(api_config: Dict[str, Any], source_url: str) -> List[dict[str
     return all_items
 
 
+def _playwright_available() -> bool:
+    """True if Playwright is enabled and importable (e.g. not on lean Render build)."""
+    try:
+        from ..config import settings
+        if not settings.playwright_enabled:
+            return False
+        from playwright.sync_api import sync_playwright  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def collect_asset_snapshot(
     source_url: str,
     js_required: bool = False,
@@ -183,53 +272,16 @@ def collect_asset_snapshot(
 ) -> dict[str, Any]:
     opts = extra_options or {}
     strategy = opts.get("strategy")
-    # Infer strategy from legacy flags when not set
+    # Infer strategy: prefer sitemap_first when set so we can run without Playwright (e.g. on Render).
     if not strategy:
         if js_required and opts.get("load_more"):
             strategy = "js_exhaust"
-        elif js_required:
-            strategy = "js"
         elif use_sitemap_first:
             strategy = "sitemap_first"
+        elif js_required:
+            strategy = "js"
         else:
             strategy = "html"
-
-    # --- API strategy ---
-    if strategy == "api":
-        api_cfg = opts.get("api") or {}
-        properties = fetch_from_api(api_cfg, source_url)
-        return {
-            "source_url": api_cfg.get("url") or source_url,
-            "raw_content": None,
-            "raw_hash": None,
-            "properties": normalize_properties(properties),
-            "note": "api",
-        }
-
-    # --- JS exhaust (Load more / infinite scroll) ---
-    if strategy == "js_exhaust":
-        load_more = opts.get("load_more") or {}
-        fetched = fetch_url_js_exhaust(source_url, load_more)
-        properties = extract_properties_from_html(fetched.text)
-        return {
-            "source_url": fetched.url,
-            "raw_content": fetched.text,
-            "raw_hash": fetched.raw_hash,
-            "properties": normalize_properties(properties),
-            "note": "js_exhaust",
-        }
-
-    # --- Plain JS (single paint) ---
-    if strategy == "js":
-        fetched = fetch_url_js(source_url)
-        properties = extract_properties_from_html(fetched.text)
-        return {
-            "source_url": fetched.url,
-            "raw_content": fetched.text,
-            "raw_hash": fetched.raw_hash,
-            "properties": normalize_properties(properties),
-            "note": "js_rendered",
-        }
 
     def fetch_from_sitemap() -> Optional[Dict[str, Any]]:
         for sitemap_url in discover_sitemap(source_url):
@@ -259,6 +311,78 @@ def collect_asset_snapshot(
             "raw_hash": fetched.raw_hash,
             "properties": normalize_properties(properties),
         }
+
+    def _fetch_without_browser() -> dict[str, Any]:
+        """Sitemap first, then HTML; used when JS/Playwright is not available (e.g. Render cron).
+        If opts.llm_extract is True and OPENAI_API_KEY is set, HTML is parsed via LLM to extract
+        properties from card-style content (e.g. Lark portfolio)."""
+        sitemap_snapshot = fetch_from_sitemap()
+        if sitemap_snapshot and sitemap_snapshot.get("properties"):
+            return {**sitemap_snapshot, "note": "sitemap_first"}
+        fetched = fetch_url(source_url)
+        if fetched.status_code != 200:
+            raise RuntimeError(
+                f"Asset fetch failed: {fetched.url} returned HTTP {fetched.status_code}. "
+                "Refusing to parse or persist; check Runs for this error."
+            )
+        if opts.get("llm_extract"):
+            properties = _extract_properties_via_llm(fetched.text, source_url)
+            return {
+                "source_url": fetched.url,
+                "raw_content": fetched.text,
+                "raw_hash": fetched.raw_hash,
+                "properties": normalize_properties(properties),
+                "note": "llm",
+            }
+        properties = extract_properties_from_html(fetched.text)
+        return {
+            "source_url": fetched.url,
+            "raw_content": fetched.text,
+            "raw_hash": fetched.raw_hash,
+            "properties": normalize_properties(properties),
+            "note": "html",
+        }
+
+    # --- API strategy ---
+    if strategy == "api":
+        api_cfg = opts.get("api") or {}
+        properties = fetch_from_api(api_cfg, source_url)
+        return {
+            "source_url": api_cfg.get("url") or source_url,
+            "raw_content": None,
+            "raw_hash": None,
+            "properties": normalize_properties(properties),
+            "note": "api",
+        }
+
+    # --- JS exhaust (Load more): use browser when available, else sitemap+HTML ---
+    if strategy == "js_exhaust":
+        if _playwright_available():
+            load_more = opts.get("load_more") or {}
+            fetched = fetch_url_js_exhaust(source_url, load_more)
+            properties = extract_properties_from_html(fetched.text)
+            return {
+                "source_url": fetched.url,
+                "raw_content": fetched.text,
+                "raw_hash": fetched.raw_hash,
+                "properties": normalize_properties(properties),
+                "note": "js_exhaust",
+            }
+        return _fetch_without_browser()
+
+    # --- Plain JS (single paint): use browser when available, else sitemap+HTML ---
+    if strategy == "js":
+        if _playwright_available():
+            fetched = fetch_url_js(source_url)
+            properties = extract_properties_from_html(fetched.text)
+            return {
+                "source_url": fetched.url,
+                "raw_content": fetched.text,
+                "raw_hash": fetched.raw_hash,
+                "properties": normalize_properties(properties),
+                "note": "js_rendered",
+            }
+        return _fetch_without_browser()
 
     # --- Sitemap first then HTML fallback ---
     if strategy == "sitemap_first":
