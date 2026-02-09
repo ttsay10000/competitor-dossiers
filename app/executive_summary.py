@@ -1,7 +1,10 @@
 """
 Generate a short, executive-level AI summary of competitor activity for the top of the dossier.
 Uses OpenAI when OPENAI_API_KEY is set; otherwise returns None so the UI can show a fallback.
+Also provides LLM-cleaned location display (State - City) for properties by location.
 """
+import json
+import re
 from typing import Any, Dict, List, Optional
 
 
@@ -98,6 +101,62 @@ Write in a calm, executive tone. Be specific (numbers, locations) when the data 
         choice = resp.choices[0] if resp.choices else None
         if choice and choice.message and choice.message.content:
             return choice.message.content.strip()
+    except Exception:
+        pass
+    return None
+
+
+def clean_location_display_for_dossier(
+    competitor_name: str,
+    properties_by_location: List[Dict[str, Any]],
+    asset_delta_by_city: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """
+    Use the LLM to reorganize location labels into "State - City" (or "State") and group
+    non-geographic labels (e.g. Career Site, Unspecified) as "Other". Returns
+    {"properties_by_location": [...], "asset_delta_by_city": [...]} or None if no key or API fails.
+    """
+    from .config import settings
+    if not settings.openai_api_key:
+        return None
+
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return None
+
+    counts_text = "; ".join(f"{r['location']}: {r['count']}" for r in properties_by_location[:25])
+    deltas_text = "; ".join(f"{r['location']}: +{r['added']}/−{r['removed']}" for r in asset_delta_by_city[:25])
+    if not counts_text and not deltas_text:
+        return None
+
+    system = """You are organizing property location data for a real estate/hospitality competitor dashboard.
+Given raw location labels and counts (some labels are noise like "Career Site", "Unspecified", "Privacy Policy"),
+produce a cleaned list where:
+1. Only real US geographic locations are kept, formatted as "State - City" (e.g. "Texas - Austin") or just "State" (e.g. "Texas") when city is not known.
+2. Merge any non-location or unclear entries (Unspecified, Career Site, Cdn Cgi, Hotels, Privacy Policy, etc.) into a single row labeled "Other".
+3. Preserve the exact counts and added/removed numbers; only change the location labels and grouping.
+Return JSON only, no markdown: {"properties_by_location": [{"location": "...", "count": n}, ...], "asset_delta_by_city": [{"location": "...", "added": a, "removed": r}, ...]}.
+If there are no real locations, still return the structure with "Other" and the totals."""
+
+    user = f"Competitor: {competitor_name}\n\nCurrent counts by location (raw):\n{counts_text or 'none'}\n\nChanges by location (raw):\n{deltas_text or 'none'}"
+
+    try:
+        client = OpenAI(api_key=settings.openai_api_key)
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            max_tokens=800,
+            temperature=0.1,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        if content.startswith("```"):
+            content = re.sub(r"^```\w*\n?", "", content).rstrip("`\n")
+        data = json.loads(content)
+        counts = data.get("properties_by_location")
+        deltas = data.get("asset_delta_by_city")
+        if isinstance(counts, list) and isinstance(deltas, list):
+            return {"properties_by_location": counts, "asset_delta_by_city": deltas}
     except Exception:
         pass
     return None

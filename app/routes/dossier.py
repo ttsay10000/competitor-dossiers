@@ -6,7 +6,7 @@ from fastapi.responses import Response
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, Snapshot, Capability
 from ..diff.asset_diff import diff_properties, delta_by_city, infer_location_for_property
-from ..executive_summary import generate_executive_summary
+from ..executive_summary import generate_executive_summary, clean_location_display_for_dossier
 from ..rules.talent_rules import job_functional_area, FUNCTIONAL_AREA_DISPLAY_ORDER, PROPERTY_OPERATIONS_LABEL
 
 router = APIRouter()
@@ -215,6 +215,14 @@ def build_dossier_context(session, competitor_id: int) -> dict:
             asset_removed_since_baseline = len(diff["removed"])
             asset_baseline_date = baseline_asset.captured_at.strftime("%Y-%m-%d")
             asset_delta_by_city = delta_by_city(diff["added"], diff["removed"])
+
+    # Optional: LLM-cleaned location display (State - City, group noise as Other)
+    cleaned = clean_location_display_for_dossier(
+        competitor.name, properties_by_location, asset_delta_by_city
+    )
+    if cleaned:
+        properties_by_location = cleaned.get("properties_by_location") or properties_by_location
+        asset_delta_by_city = cleaned.get("asset_delta_by_city") or asset_delta_by_city
 
     context = {
         "competitor": {"id": competitor.id, "name": competitor.name},

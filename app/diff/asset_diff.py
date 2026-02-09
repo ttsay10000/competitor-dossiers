@@ -16,11 +16,19 @@ US_STATE_ABBREV = {
     "va": "Virginia", "wa": "Washington", "dc": "Washington DC", "wv": "West Virginia", "wi": "Wisconsin", "wy": "Wyoming",
 }
 
+# URL path segments that are not geographic locations (treat as Unspecified).
+NON_LOCATION_PATH_SEGMENTS = frozenset({
+    "search", "portfolio", "brands", "career-site", "careers", "jobs", "about", "contact",
+    "blog", "press", "news", "legal", "terms", "privacy-policy", "privacy", "login", "signup",
+    "cdn-cgi", "hotels", "api", "admin", "assets", "static", "www", "en", "us",
+})
+
 
 def infer_location_for_property(prop: dict) -> str:
     """
     Derive a location label (prefer state) for grouping so dossier can show counts by state/city.
     Uses market/location if set; else parses URL for city-state (e.g. austin-tx -> Texas) or path segment.
+    Non-location path segments (career-site, privacy-policy, etc.) return Unspecified.
     """
     loc = (prop.get("market") or prop.get("location") or "").strip()
     if loc:
@@ -49,12 +57,14 @@ def infer_location_for_property(prop: dict) -> str:
     parts = [p for p in path.split("/") if p]
     if len(parts) >= 2 and parts[0].lower() in ("locations", "properties", "homes", "destinations"):
         city_slug = parts[1]
-        if city_slug and city_slug != "search":
+        if city_slug and city_slug != "search" and city_slug.lower() not in NON_LOCATION_PATH_SEGMENTS:
             return city_slug.replace("-", " ").title()
-    if len(parts) >= 1 and parts[0] and parts[0].lower() not in ("search", "portfolio", "brands"):
-        slug = parts[0].replace("-", " ").title()
-        if len(slug) > 1:
-            return slug
+    if len(parts) >= 1 and parts[0]:
+        first = parts[0].lower()
+        if first not in NON_LOCATION_PATH_SEGMENTS:
+            slug = parts[0].replace("-", " ").title()
+            if len(slug) > 1:
+                return slug
 
     return "Unspecified"
 

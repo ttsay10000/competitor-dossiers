@@ -127,7 +127,8 @@ def _extract_properties_via_llm(html: str, page_url: str) -> List[dict[str, Any]
         "You are extracting a list of properties (hotels, apartments, vacation rentals, etc.) from web page text. "
         "Return a JSON array of objects. Each object must have: \"name\" (string, the property/location name). "
         "If the page provides a URL or path to that property, include \"url\" (string). "
-        "Use only the exact names and URLs from the content. Skip navigation, footers, and non-property items. "
+        "If the page shows a city, state, or market for a property (e.g. in the card, address, or subheading), include \"market\" (string, e.g. \"Austin, TX\", \"Texas\", or \"Denver, CO\"). "
+        "Use only the exact names, URLs, and locations from the content. Skip navigation, footers, and non-property items. "
         "Output only the JSON array, no markdown or explanation."
     )
     user = f"Page base URL: {base_url}\n\nExtract all properties from this page text:\n\n{text}"
@@ -157,7 +158,8 @@ def _extract_properties_via_llm(html: str, page_url: str) -> List[dict[str, Any]
             url_val = (item.get("url") or "").strip()
             if url_val and not url_val.startswith("http"):
                 url_val = urljoin(base_url, url_val)
-            out.append({"name": name, "url": url_val or None, "market": None, "status": None})
+            market_val = (item.get("market") or "").strip() or None
+            out.append({"name": name, "url": url_val or None, "market": market_val, "status": None})
         return out
     except Exception:
         return []
