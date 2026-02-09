@@ -289,6 +289,9 @@ def collect_asset_snapshot(
             if not urls:
                 continue
             property_urls = [url for url in urls if is_property_like(url)]
+            # Only return sitemap result when we found property-like URLs so caller can fall back to HTML.
+            if not property_urls:
+                continue
             return {
                 "source_url": sitemap_url,
                 "raw_content": None,
@@ -327,6 +330,15 @@ def collect_asset_snapshot(
             )
         if opts.get("llm_extract"):
             properties = _extract_properties_via_llm(fetched.text, source_url)
+            if not properties:
+                properties = extract_properties_from_html(fetched.text)
+                return {
+                    "source_url": fetched.url,
+                    "raw_content": fetched.text,
+                    "raw_hash": fetched.raw_hash,
+                    "properties": normalize_properties(properties),
+                    "note": "html",
+                }
             return {
                 "source_url": fetched.url,
                 "raw_content": fetched.text,
@@ -389,7 +401,35 @@ def collect_asset_snapshot(
         sitemap_snapshot = fetch_from_sitemap()
         if sitemap_snapshot:
             return sitemap_snapshot
-        return fetch_from_html()
+        fetched = fetch_url(source_url)
+        if fetched.status_code != 200:
+            raise RuntimeError(
+                f"Asset fetch failed: {fetched.url} returned HTTP {fetched.status_code}. "
+                "Refusing to parse or persist; check Runs for this error."
+            )
+        if opts.get("llm_extract"):
+            llm_props = _extract_properties_via_llm(fetched.text, source_url)
+            if llm_props:
+                properties = llm_props
+                note = "llm"
+            else:
+                properties = extract_properties_from_html(fetched.text)
+                note = "html"
+            return {
+                "source_url": fetched.url,
+                "raw_content": fetched.text,
+                "raw_hash": fetched.raw_hash,
+                "properties": normalize_properties(properties),
+                "note": note,
+            }
+        properties = extract_properties_from_html(fetched.text)
+        return {
+            "source_url": fetched.url,
+            "raw_content": fetched.text,
+            "raw_hash": fetched.raw_hash,
+            "properties": normalize_properties(properties),
+            "note": "html",
+        }
 
     # --- Default: HTML first, then sitemap fallback ---
     html_snapshot = fetch_from_html()

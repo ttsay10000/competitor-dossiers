@@ -27,6 +27,7 @@ SEED_COMPETITORS = [
                 "confidence": "low",
                 "js_required": True,
                 "use_sitemap_first": True,
+                "extra_options": {"llm_extract": True},
             },
             {"channel": "press", "url": "https://avantstay.com/blog/", "confidence": "high"},
         ],
