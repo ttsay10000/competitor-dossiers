@@ -45,10 +45,10 @@ SEED_COMPETITORS = [
                 "extra_options": {
                     "strategy": "js_exhaust",
                     "load_more": {
-                        "click_selector": "button:has-text('Load more'), a:has-text('Load more')",
+                        "click_selector": "button:has-text('Load more'), a:has-text('Load more'), button:has-text('View more'), a:has-text('View more')",
                         "stop_when_selector_gone": True,
                         "wait_after_click_ms": 1500,
-                        "max_clicks": 50,
+                        "max_clicks": 200,
                     },
                     "llm_extract": True,
                 },

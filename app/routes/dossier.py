@@ -117,12 +117,12 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     raw_talent_jobs = (latest_talent.structured_json or {}).get("jobs", []) if latest_talent else []
     talent_jobs = [j for j in raw_talent_jobs if isinstance(j, dict)]
 
-    # Summarize jobs by functional area; split into business vs property operations.
+    # Summarize jobs by functional area (LLM-set or rule-based fallback); split into business vs property operations.
     jobs_by_function = []
     jobs_by_function_property = []
     by_func: dict[str, list[dict]] = {}
     for job in talent_jobs:
-        func = job_functional_area(job)
+        func = job.get("functional_area") or job_functional_area(job)
         by_func.setdefault(func, []).append(job)
     order = {name: i for i, name in enumerate(FUNCTIONAL_AREA_DISPLAY_ORDER)}
     for func in sorted(by_func.keys(), key=lambda f: (order.get(f, 99), f)):
@@ -185,6 +185,25 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     for loc in _locations:
         location_counts[loc] = location_counts.get(loc, 0) + 1
     properties_by_location = [{"location": loc, "count": n} for loc, n in sorted(location_counts.items(), key=lambda x: (-x[1], x[0]))]
+    # Per-location list of {name, details} for display (e.g. "907 Main (67 keys, 2 F&B outlets)")
+    by_loc_list: dict[str, list[dict]] = {}
+    for p in asset_props:
+        loc = infer_location_for_property(p)
+        by_loc_list.setdefault(loc, []).append({
+            "name": (p.get("name") or "").strip() or "Unnamed",
+            "details": (p.get("details") or "").strip() or None,
+        })
+    # Sort by count desc, then name; put "Other" and "Unspecified" at the bottom
+    def _location_sort_key(item):
+        loc, plist = item
+        is_trailing = 1 if (loc or "").strip() in ("Other", "Unspecified") else 0
+        return (is_trailing, -len(plist), (loc or "").lower())
+
+    properties_by_location_with_list = [
+        {"location": loc, "count": len(plist), "properties": plist}
+        for loc, plist in sorted(by_loc_list.items(), key=_location_sort_key)
+    ]
+    total_properties = len(asset_props)
 
     # Baseline = oldest asset snapshot (first run). Week-over-week: compare latest to baseline.
     # Baseline = previous run (so "today's pull" is the reference for next week).
@@ -232,6 +251,8 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         "top_news": top_news,
         "summary_business_points": summary_business_points,
         "properties_by_location": properties_by_location,
+        "properties_by_location_with_list": properties_by_location_with_list,
+        "total_properties": total_properties,
         "asset_baseline_date": asset_baseline_date,
         "asset_added_since_baseline": asset_added_since_baseline,
         "asset_removed_since_baseline": asset_removed_since_baseline,

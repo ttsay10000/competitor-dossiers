@@ -27,9 +27,15 @@ NON_LOCATION_PATH_SEGMENTS = frozenset({
 def infer_location_for_property(prop: dict) -> str:
     """
     Derive a location label (prefer state) for grouping so dossier can show counts by state/city.
-    Uses market/location if set; else parses URL for city-state (e.g. austin-tx -> Texas) or path segment.
-    Non-location path segments (career-site, privacy-policy, etc.) return Unspecified.
+    Prefers LLM-set state/city; then market/location; else parses URL for city-state or path segment.
     """
+    state = (prop.get("state") or "").strip()
+    city = (prop.get("city") or "").strip()
+    if state:
+        if city:
+            return f"{state} - {city}"
+        return state
+
     loc = (prop.get("market") or prop.get("location") or "").strip()
     if loc:
         return loc
@@ -87,7 +93,8 @@ def diff_properties(previous: list[dict], current: list[dict]) -> dict[str, list
 
 
 def extract_markets(properties: list[dict]) -> set[str]:
-    return {prop.get("market") for prop in properties if prop.get("market")}
+    """Market/location labels for event detection (new market, market exit). Uses same label as dossier grouping."""
+    return {infer_location_for_property(prop) for prop in properties}
 
 
 def location_key(prop: dict) -> str:

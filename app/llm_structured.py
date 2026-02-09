@@ -40,8 +40,12 @@ def _parse_json_response(content: str) -> Any:
     return json.loads(content)
 
 
+# Data attributes that often contain property location on cards (so LLM can see them when enriching).
+_ENRICH_LOCATION_ATTRS = ("data-city", "data-state", "data-region", "data-market", "data-location", "data-address", "aria-label")
+
+
 def _html_to_text_for_enricher(html: str, max_chars: int = _ENRICH_RAW_MAX_CHARS) -> str:
-    """Reduce HTML to plain text for LLM (strip scripts, get body text, truncate). Mirrors asset collector logic."""
+    """Reduce HTML to plain text for LLM (strip scripts, body text, location data-*, truncate). Mirrors asset collector."""
     try:
         from bs4 import BeautifulSoup
     except ImportError:
@@ -50,7 +54,18 @@ def _html_to_text_for_enricher(html: str, max_chars: int = _ENRICH_RAW_MAX_CHARS
     for tag in soup.find_all(["script", "style", "noscript"]):
         tag.decompose()
     body = soup.find("body") or soup
+    location_lines = []
+    for el in (body.find_all(True) if body else []):
+        parts = []
+        for attr in _ENRICH_LOCATION_ATTRS:
+            val = el.get(attr)
+            if val and isinstance(val, str) and (val := val.strip()) and len(val) < 200:
+                parts.append(f"{attr}={val}")
+        if parts:
+            location_lines.append(" ".join(parts))
     text = body.get_text(separator="\n", strip=True)
+    if location_lines:
+        text = text + "\n\n[Location metadata from page]\n" + "\n".join(location_lines[:500])
     text = re.sub(r"\n{3,}", "\n\n", text)
     if len(text) > max_chars:
         text = text[:max_chars] + "\n[... truncated]"
@@ -116,9 +131,13 @@ Return only the JSON array, no markdown."""
         for i, p in enumerate(properties):
             out = dict(p)
             if i in by_index:
-                out["state"] = (by_index[i].get("state") or "Other").strip() or "Other"
-                if by_index[i].get("city"):
-                    out["city"] = str(by_index[i].get("city", "")).strip()
+                # Only fill state/city when missing (don't overwrite collector-set values with "Other")
+                enricher_state = (by_index[i].get("state") or "Other").strip() or "Other"
+                enricher_city = (by_index[i].get("city") or "").strip() or None
+                if not (out.get("state") or "").strip():
+                    out["state"] = enricher_state
+                if enricher_city and not (out.get("city") or "").strip():
+                    out["city"] = enricher_city
             result.append(out)
         return result
     except Exception:

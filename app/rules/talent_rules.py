@@ -118,7 +118,10 @@ def is_senior_role(title: Optional[str]) -> bool:
 def assign_job_flags(job: dict) -> dict:
     capability = detect_capability(job.get("title"), job.get("dept"))
     job["capability_bucket"] = capability
-    job["is_senior"] = is_senior_role(job.get("title"))
+    if "is_senior" not in job:
+        job["is_senior"] = is_senior_role(job.get("title"))
+    if "functional_area" not in job:
+        job["functional_area"] = job_functional_area(job)
     job["is_strategic"] = capability in {"ai_data", "strategy_finance", "partnerships", "real_estate"}
     return job
 

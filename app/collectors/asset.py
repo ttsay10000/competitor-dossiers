@@ -12,6 +12,8 @@ from .http import fetch_url, fetch_url_js, fetch_url_js_exhaust
 
 # Max characters of page text to send to LLM for property extraction (fit context, control cost).
 _LLM_EXTRACT_MAX_CHARS = 14_000
+# Max blocks per LLM call when extracting from Lark-style blocks (avoids truncation; we chunk and merge).
+_LARK_BLOCKS_BATCH_SIZE = 80
 
 
 def discover_sitemap(url: str) -> list[str]:
@@ -90,17 +92,248 @@ def extract_properties_from_html(html: str) -> list[dict[str, Any]]:
     return properties
 
 
+# Data attributes and aria labels that often contain property location on cards (so LLM can see them).
+_LOCATION_ATTRS = ("data-city", "data-state", "data-region", "data-market", "data-location", "data-address", "aria-label")
+
+# US state abbreviation -> full name (for parsing "City, ST" from Lark-style blocks).
+_US_STATE_ABBREV = {
+    "al": "Alabama", "ak": "Alaska", "az": "Arizona", "ar": "Arkansas", "ca": "California",
+    "co": "Colorado", "ct": "Connecticut", "de": "Delaware", "fl": "Florida", "ga": "Georgia",
+    "hi": "Hawaii", "id": "Idaho", "il": "Illinois", "in": "Indiana", "ia": "Iowa",
+    "ks": "Kansas", "ky": "Kentucky", "la": "Louisiana", "me": "Maine", "md": "Maryland",
+    "ma": "Massachusetts", "mi": "Michigan", "mn": "Minnesota", "ms": "Mississippi", "mo": "Missouri",
+    "mt": "Montana", "ne": "Nebraska", "nv": "Nevada", "nh": "New Hampshire", "nj": "New Jersey",
+    "nm": "New Mexico", "ny": "New York", "nc": "North Carolina", "nd": "North Dakota", "oh": "Ohio",
+    "ok": "Oklahoma", "or": "Oregon", "pa": "Pennsylvania", "ri": "Rhode Island", "sc": "South Carolina",
+    "sd": "South Dakota", "tn": "Tennessee", "tx": "Texas", "ut": "Utah", "vt": "Vermont",
+    "va": "Virginia", "wa": "Washington", "dc": "Washington DC", "wv": "West Virginia", "wi": "Wisconsin", "wy": "Wyoming",
+}
+
+# Pattern: "City, ST" or "City, State" at start of line (for location line in Lark blocks).
+_RE_CITY_ST = re.compile(r"^([^,]+),\s*([a-z]{2}|[A-Za-z\s]+)$", re.IGNORECASE)
+
+
+def _extract_lark_style_blocks(html: str, base_url: str) -> List[dict[str, Any]]:
+    """
+    Parse Lark-style portfolio HTML: each property is an <h2> (name) followed by a <ul> with
+    <li> items: first is often "City, ST", then "Keys: N", "F&B Outlets: N", "Brand: X", etc.
+    Returns list of {"name", "location_line", "details_list", "url"}.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    blocks = []
+    for h2 in soup.find_all("h2"):
+        name = (h2.get_text() or "").strip()
+        if not name or len(name) < 2:
+            continue
+        # Property URL: same-page link wrapping h2 or parent <a href=".../portfolio/...">
+        url_val = None
+        parent = h2.parent
+        if parent:
+            a = parent.find("a", href=True) if parent.name == "a" else h2.find_previous("a", href=True)
+            if not a and parent:
+                a = parent.find("a", href=True)
+            if a and a.get("href"):
+                href = (a.get("href") or "").strip()
+                if href and not href.startswith("#") and ("portfolio" in href or "property" in href or is_property_like(href)):
+                    url_val = urljoin(base_url, href) if not href.startswith("http") else href
+        # Next sibling <ul> (or first <ul> in next sibling container)
+        ul = h2.find_next_sibling("ul")
+        if not ul:
+            next_el = h2.find_next_sibling()
+            if next_el:
+                ul = next_el.find("ul") if next_el.name != "ul" else next_el
+        if not ul:
+            continue
+        li_texts = []
+        for li in ul.find_all("li", recursive=False):
+            t = (li.get_text() or "").strip()
+            if t and "Visit Website" not in t and "website" not in t.lower():
+                li_texts.append(t)
+        if not li_texts:
+            blocks.append({"name": name, "location_line": None, "details_list": [], "url": url_val})
+            continue
+        # First li that looks like "City, ST" or "City, State" = location; rest = details
+        location_line = None
+        details_list = []
+        for t in li_texts:
+            if _RE_CITY_ST.match(t) and len(t) < 50 and not t.lower().startswith("keys:") and not t.lower().startswith("brand:"):
+                if location_line is None:
+                    location_line = t
+                    continue
+            details_list.append(t)
+        blocks.append({
+            "name": name,
+            "location_line": location_line,
+            "details_list": details_list,
+            "url": url_val,
+        })
+    return blocks
+
+
+def _parse_city_st(location_line: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Parse 'Cambridge, MA' -> (city='Cambridge', state='Massachusetts'). Returns (city, state)."""
+    if not (location_line or "").strip():
+        return None, None
+    m = _RE_CITY_ST.match((location_line or "").strip())
+    if not m:
+        return None, None
+    city = (m.group(1) or "").strip()
+    state_part = (m.group(2) or "").strip()
+    if len(state_part) == 2:
+        state = _US_STATE_ABBREV.get(state_part.lower())
+    else:
+        state = state_part if state_part else None
+    return city or None, state or None
+
+
+def _lark_blocks_to_text(blocks: List[dict[str, Any]], max_chars: int = _LLM_EXTRACT_MAX_CHARS) -> str:
+    """Convert Lark-style blocks to clean text for the LLM (structure-preserving)."""
+    lines = []
+    for b in blocks:
+        lines.append(f"Property: {b.get('name') or ''}")
+        if b.get("location_line"):
+            lines.append(f"Location: {b['location_line']}")
+        if b.get("details_list"):
+            lines.append("Details: " + "; ".join(b["details_list"]))
+        if b.get("url"):
+            lines.append(f"URL: {b['url']}")
+        lines.append("---")
+    text = "\n".join(lines)
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n[... truncated]"
+    return text
+
+
 def _html_to_text_for_llm(html: str, max_chars: int = _LLM_EXTRACT_MAX_CHARS) -> str:
-    """Reduce HTML to plain text for LLM (strip scripts, get body text, truncate)."""
+    """Reduce HTML to plain text for LLM (strip scripts, get body text, include location data-*, truncate)."""
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup.find_all(["script", "style", "noscript"]):
         tag.decompose()
     body = soup.find("body") or soup
+    # Collect location metadata from data-* and aria-label so card locations are visible to the LLM
+    location_lines = []
+    for el in body.find_all(True) if body else []:
+        parts = []
+        for attr in _LOCATION_ATTRS:
+            val = el.get(attr)
+            if val and isinstance(val, str) and (val := val.strip()) and len(val) < 200:
+                parts.append(f"{attr}={val}")
+        if parts:
+            location_lines.append(" ".join(parts))
     text = body.get_text(separator="\n", strip=True)
+    if location_lines:
+        text = text + "\n\n[Location metadata from page]\n" + "\n".join(location_lines[:500])
     text = re.sub(r"\n{3,}", "\n\n", text)
     if len(text) > max_chars:
         text = text[:max_chars] + "\n[... truncated]"
     return text
+
+
+def _extract_properties_via_llm_from_blocks(
+    blocks: List[dict[str, Any]],
+    page_url: str,
+) -> List[dict[str, Any]]:
+    """
+    Given Lark-style blocks (name, location_line, details_list, url), use LLM to return
+    state, city, and a short details string for parentheses. Processes blocks in batches
+    to avoid input truncation (14k char limit) and output token limits; no cap on total properties.
+    Falls back to parsing location_line in code when LLM is unavailable.
+    """
+    try:
+        from ..config import settings
+        if not settings.openai_api_key:
+            return _lark_blocks_to_properties_without_llm(blocks)
+    except Exception:
+        return _lark_blocks_to_properties_without_llm(blocks)
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return _lark_blocks_to_properties_without_llm(blocks)
+
+    parsed = urlparse(page_url)
+    base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else page_url
+
+    system = (
+        "You are given property blocks from a hotel/portfolio page. Each block has Property name, Location (e.g. City, ST), and Details (Keys, F&B Outlets, Brand, etc.). "
+        "Return a JSON array with one object per block, in the same order. Each object must have: "
+        '"index" (integer, 0-based), "state" (full US state name, e.g. "Massachusetts"), "city" (e.g. "Cambridge"), '
+        '"details" (string for display in parentheses after the property, e.g. "67 keys, 2 F&B outlets, Brand: Lark Hotels"). '
+        "Use only information from the blocks. Use standard US state names. If location is missing use state \"Other\" and omit city. "
+        "Return only the JSON array, no markdown."
+    )
+
+    out: List[dict[str, Any]] = []
+    for start in range(0, len(blocks), _LARK_BLOCKS_BATCH_SIZE):
+        batch = blocks[start : start + _LARK_BLOCKS_BATCH_SIZE]
+        text = _lark_blocks_to_text(batch, max_chars=50_000)
+        user = f"Extract state, city, and details for each property (indices {start} to {start + len(batch) - 1}):\n\n{text}"
+
+        try:
+            client = OpenAI(api_key=settings.openai_api_key)
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                max_tokens=8000,
+                temperature=0.1,
+            )
+            content = (resp.choices[0].message.content or "").strip()
+            if content.startswith("```"):
+                content = re.sub(r"^```\w*\n?", "", content).rstrip("`\n")
+            raw = json.loads(content)
+            if not isinstance(raw, list):
+                out.extend(_lark_blocks_to_properties_without_llm(batch))
+                continue
+            by_index = {int(item["index"]): item for item in raw if isinstance(item, dict) and "index" in item}
+            for i, b in enumerate(batch):
+                name = (b.get("name") or "").strip()
+                if not name:
+                    continue
+                url_val = b.get("url")
+                if url_val and not str(url_val).startswith("http"):
+                    url_val = urljoin(base_url, url_val)
+                city, state = _parse_city_st(b.get("location_line"))
+                details_val = None
+                if i in by_index:
+                    state = (by_index[i].get("state") or "").strip() or state or "Other"
+                    if by_index[i].get("city"):
+                        city = (by_index[i].get("city") or "").strip() or city
+                    details_val = (by_index[i].get("details") or "").strip() or None
+                if not details_val and b.get("details_list"):
+                    details_val = "; ".join(b["details_list"])
+                out.append({
+                    "name": name,
+                    "url": url_val or None,
+                    "market": b.get("location_line"),
+                    "state": state or "Other",
+                    "city": city,
+                    "status": None,
+                    "details": details_val,
+                })
+        except Exception:
+            out.extend(_lark_blocks_to_properties_without_llm(batch))
+
+    return out if out else _lark_blocks_to_properties_without_llm(blocks)
+
+
+def _lark_blocks_to_properties_without_llm(blocks: List[dict[str, Any]]) -> List[dict[str, Any]]:
+    """Convert Lark blocks to property dicts using only code (parse City, ST; details = joined list)."""
+    out = []
+    for b in blocks:
+        name = (b.get("name") or "").strip()
+        if not name:
+            continue
+        city, state = _parse_city_st(b.get("location_line"))
+        details_val = "; ".join(b.get("details_list") or []) if b.get("details_list") else None
+        out.append({
+            "name": name,
+            "url": b.get("url"),
+            "market": b.get("location_line"),
+            "state": state or "Other",
+            "city": city,
+            "status": None,
+            "details": details_val or None,
+        })
+    return out
 
 
 def _extract_properties_via_llm(html: str, page_url: str) -> List[dict[str, Any]]:
@@ -186,6 +419,7 @@ def normalize_properties(properties: list[dict[str, Any]]) -> list[dict[str, Any
                 "state": (prop.get("state") or "").strip() or None,
                 "city": (prop.get("city") or "").strip() or None,
                 "status": (prop.get("status") or "").strip() or None,
+                "details": (prop.get("details") or "").strip() or None,
             }
         )
     return normalized
@@ -386,6 +620,36 @@ def collect_asset_snapshot(
         if _playwright_available():
             load_more = opts.get("load_more") or {}
             fetched = fetch_url_js_exhaust(source_url, load_more)
+            if opts.get("llm_extract"):
+                parsed = urlparse(source_url)
+                base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else source_url
+                lark_blocks = _extract_lark_style_blocks(fetched.text, base_url)
+                if lark_blocks:
+                    properties = _extract_properties_via_llm_from_blocks(lark_blocks, source_url)
+                    return {
+                        "source_url": fetched.url,
+                        "raw_content": fetched.text,
+                        "raw_hash": fetched.raw_hash,
+                        "properties": normalize_properties(properties),
+                        "note": "js_exhaust_lark_blocks",
+                    }
+                properties = _extract_properties_via_llm(fetched.text, source_url)
+                if not properties:
+                    properties = extract_properties_from_html(fetched.text)
+                    return {
+                        "source_url": fetched.url,
+                        "raw_content": fetched.text,
+                        "raw_hash": fetched.raw_hash,
+                        "properties": normalize_properties(properties),
+                        "note": "js_exhaust",
+                    }
+                return {
+                    "source_url": fetched.url,
+                    "raw_content": fetched.text,
+                    "raw_hash": fetched.raw_hash,
+                    "properties": normalize_properties(properties),
+                    "note": "js_exhaust_llm",
+                }
             properties = extract_properties_from_html(fetched.text)
             return {
                 "source_url": fetched.url,

@@ -68,7 +68,25 @@
     <div class="card">
       <strong>Properties by location</strong>
       <p class="meta">From latest asset pull: current counts by state or city. Any notable adds/removals are summarized in At a glance above.</p>
-      {% if properties_by_location|length %}
+      {% if total_properties and total_properties > 0 %}
+        <p style="margin: 0 0 8px 0;"><strong>Total: {{ total_properties }} propert{{ 'ies' if total_properties != 1 else 'y' }}</strong></p>
+      {% endif %}
+      {% if properties_by_location_with_list|length %}
+        <ul style="margin: 0; padding-left: 20px;">
+          {% for row in properties_by_location_with_list %}
+          <li>
+            <strong>{{ row.location }}</strong>: {{ row.count }} propert{{ 'ies' if row.count != 1 else 'y' }}
+            {% if row.properties|length %}
+              <ul style="margin: 4px 0 0 0; padding-left: 18px;">
+                {% for prop in row.properties %}
+                <li>{{ prop.name }}{% if prop.details %} <span class="meta">({{ prop.details }})</span>{% endif %}</li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      {% elif properties_by_location|length %}
         <ul style="margin: 0; padding-left: 20px;">
           {% for row in properties_by_location %}
           <li><strong>{{ row.location }}</strong>: {{ row.count }} propert{{ 'ies' if row.count != 1 else 'y' }}</li>

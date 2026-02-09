@@ -94,6 +94,13 @@ If you cannot use Docker on Render (e.g. you must keep `runtime: python`), backf
 
 - **Sitemap:** If the source has `use_sitemap_first`, we try `sitemap.xml` (and `.gz`) and take URLs that look like properties (e.g. contain `/locations/`, `/properties/`, `/search`).
 - **HTML:** We scrape `<a>` links whose `href` matches property-like paths (e.g. `/locations/`, `/portfolio/`, `/properties/`).
+- **JS / Load more (e.g. Lark):** For `strategy: "js_exhaust"` we use Playwright to load the page and click “Load more” until the list is exhausted, then we have full HTML. If `llm_extract: true`, we run an LLM over that HTML to extract property names, URLs, and **location (state/city)** from the page in one pass (card text, subheadings, addresses). So for Lark we no longer rely only on link text; the LLM reads the visible card content and any location metadata.
+- **Where the scraper is limited (if you see too few properties):**
+  - **Load more:** For JS exhaust (e.g. Lark), the number of "Load more" clicks is set in the source’s `extra_options.load_more.max_clicks` (default 50 in `exhaust_list_in_browser`; Lark seed uses 200). If the button disappears after the first batch, we stop (`stop_when_selector_gone`). Check that the button selector matches the site (e.g. "Load more", "View more").
+  - **Block text truncation:** Lark-style extraction used to send all blocks in one go and truncated at 14k characters, so only the first ~15–20 blocks reached the LLM. This is now fixed by processing blocks in batches of 80 with no truncation per batch.
+  - **Enricher:** Only the first 100 properties get LLM-enriched state/city when using the list-only path; for Lark we set state/city/details in the collector so this cap does not apply.
+
+- **Location metadata:** The text we send to the LLM includes both body text and common **data attributes** that often hold location on cards: `data-city`, `data-state`, `data-region`, `data-market`, `data-location`, `data-address`, `aria-label`. If the site stores “Denver, CO” in e.g. `data-market` on each card, we surface that so the LLM can assign state/city. If location is only in visible card text (e.g. a subtitle under the property name), the LLM uses that. If you still see “Other”, the location may be in a different attribute or in JS-rendered content that isn’t in the HTML we capture—inspect the card markup (e.g. DevTools → Elements) and we can add that attribute to the list.
 
 **What creates events:** Again, only when we have a *previous* snapshot to diff:
 
