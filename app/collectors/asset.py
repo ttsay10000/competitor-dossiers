@@ -127,7 +127,8 @@ def _extract_properties_via_llm(html: str, page_url: str) -> List[dict[str, Any]
         "You are extracting a list of properties (hotels, apartments, vacation rentals, etc.) from web page text. "
         "Return a JSON array of objects. Each object must have: \"name\" (string, the property/location name). "
         "If the page provides a URL or path to that property, include \"url\" (string). "
-        "If the page shows a city, state, or market for a property (e.g. in the card, address, or subheading), include \"market\" (string, e.g. \"Austin, TX\", \"Texas\", or \"Denver, CO\"). "
+        "If the page shows a city, state, or market for a property (e.g. in the card, address, or subheading), include \"market\" (string, e.g. \"Austin, TX\"), "
+        "\"state\" (full US state name, e.g. \"Texas\"), and \"city\" (e.g. \"Austin\") when evident from the content. "
         "Use only the exact names, URLs, and locations from the content. Skip navigation, footers, and non-property items. "
         "Output only the JSON array, no markdown or explanation."
     )
@@ -159,7 +160,16 @@ def _extract_properties_via_llm(html: str, page_url: str) -> List[dict[str, Any]
             if url_val and not url_val.startswith("http"):
                 url_val = urljoin(base_url, url_val)
             market_val = (item.get("market") or "").strip() or None
-            out.append({"name": name, "url": url_val or None, "market": market_val, "status": None})
+            state_val = (item.get("state") or "").strip() or None
+            city_val = (item.get("city") or "").strip() or None
+            out.append({
+                "name": name,
+                "url": url_val or None,
+                "market": market_val,
+                "state": state_val,
+                "city": city_val,
+                "status": None,
+            })
         return out
     except Exception:
         return []
@@ -173,6 +183,8 @@ def normalize_properties(properties: list[dict[str, Any]]) -> list[dict[str, Any
                 "url": prop.get("url"),
                 "name": (prop.get("name") or "").strip(),
                 "market": (prop.get("market") or "").strip() or None,
+                "state": (prop.get("state") or "").strip() or None,
+                "city": (prop.get("city") or "").strip() or None,
                 "status": (prop.get("status") or "").strip() or None,
             }
         )

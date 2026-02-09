@@ -10,6 +10,7 @@ from .collectors.public_records import collect_public_records_snapshot, build_st
 from .db import get_session
 from .diff.talent_diff import diff_jobs, count_recent_by_capability
 from .diff.asset_diff import diff_properties, extract_markets
+from .llm_structured import enrich_properties_with_llm, enrich_jobs_with_llm
 from .diff.press_diff import diff_items
 from .models import Competitor, SourceEndpoint, Snapshot, Event, Capability, RunLog
 from .rules.talent_rules import (
@@ -222,6 +223,7 @@ def run_talent() -> None:
                     )
                     continue
                 structured = build_talent_structured(snapshot)
+                structured["jobs"] = enrich_jobs_with_llm(structured.get("jobs") or [])
 
                 latest = load_latest_snapshot(session, competitor.id, "talent")
                 previous_jobs = (latest.structured_json or {}).get("jobs", []) if latest else []
@@ -394,6 +396,10 @@ def run_asset() -> None:
                     )
                     continue
                 structured = build_asset_structured(snapshot)
+                structured["properties"] = enrich_properties_with_llm(
+                    structured.get("properties") or [],
+                    raw_content=snapshot.get("raw_content"),
+                )
 
                 latest = load_latest_snapshot(session, competitor.id, "asset")
                 previous_props = (latest.structured_json or {}).get("properties", []) if latest else []
