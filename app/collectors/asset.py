@@ -332,10 +332,10 @@ def _extract_properties_via_llm_from_blocks(
 
     system = (
         "You are given property blocks from a hotel/portfolio page. Each block has Property name, Location (e.g. City, ST), and Details (Keys, F&B Outlets, Brand, etc.). "
-        "Return a JSON array with one object per block, in the same order. Each object must have: "
-        '"index" (integer, 0-based), "state" (full US state name, e.g. "Massachusetts"), "city" (e.g. "Cambridge"), '
-        '"details" (string for display in parentheses after the property, e.g. "67 keys, 2 F&B outlets, Brand: Lark Hotels"). '
-        "Use only information from the blocks. Use standard US state names. If location is missing use state \"Other\" and omit city. "
+        "Locations will be summarized by state only. Return a JSON array with one object per block, in the same order. Each object must have: "
+        '"index" (integer, 0-based), "state" (full US state name only, e.g. "Massachusetts"—no city in state), "city" (optional, e.g. "Cambridge", omit if unknown), '
+        '"details" (string for display, e.g. "67 keys, 2 F&B outlets, Brand: Lark Hotels"). '
+        "Use only information from the blocks. Use standard US state names. For anything that does not neatly fit in a specific US state (missing location, career site, non-property link, unclear) use state \"Other\" and omit city. "
         "Return only the JSON array, no markdown."
     )
 

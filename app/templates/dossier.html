@@ -74,7 +74,16 @@
       {% if properties_by_location|length %}
         <ul style="margin: 0; padding-left: 20px;">
           {% for row in properties_by_location %}
-          <li><strong>{{ row.location }}</strong> – {{ row.count }} propert{{ 'ies' if row.count != 1 else 'y' }}{% if row.get('keys') %} ({{ row.keys }} keys){% endif %}</li>
+          <li>
+            <strong>{{ row.location }}</strong> – {{ row.count }} propert{{ 'ies' if row.count != 1 else 'y' }}{% if row.get('keys') %} ({{ row.keys }} keys){% endif %}
+            {% if row.location == 'Other' and other_properties_display|length %}
+              <ul style="margin: 4px 0 0 0; padding-left: 20px;">
+                {% for op in other_properties_display %}
+                <li><span title="{{ op.url }}">{{ op.name }}</span> — {{ op.raw_location or op.market or op.url or '—' }}</li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+          </li>
           {% endfor %}
         </ul>
       {% else %}

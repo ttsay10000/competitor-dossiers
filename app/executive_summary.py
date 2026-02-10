@@ -136,8 +136,8 @@ def clean_location_display_for_dossier(
     asset_delta_by_city: List[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     """
-    Use the LLM to reorganize location labels into "State - City" (or "State") and group
-    non-geographic labels (e.g. Career Site, Unspecified) as "Other". Returns
+    Use the LLM to reorganize location labels into state-only format and group anything
+    not clearly in a specific state as "Other". Returns
     {"properties_by_location": [...], "asset_delta_by_city": [...]} or None if no key or API fails.
     """
     from .config import settings
@@ -162,14 +162,14 @@ def clean_location_display_for_dossier(
     if not counts_text and not deltas_text:
         return None
 
-    system = """You are organizing property location data for a real estate/hospitality competitor dashboard.
-Given raw location labels with counts and optional keys (e.g. "California: 5 (100 keys)" means 5 properties, 100 keys),
+    system = """You are organizing property location data for a real estate/hospitality competitor dashboard. Summarize by state only.
+Given raw location labels with counts and optional keys (e.g. "California: 5 (100 keys)" or "Texas - Austin: 3"),
 produce a cleaned list where:
-1. Only real US geographic locations are kept, formatted as "State - City" (e.g. "Texas - Austin") or just "State" (e.g. "Texas") when city is not known.
-2. Merge any non-location or unclear entries (Unspecified, Career Site, Cdn Cgi, Hotels, Privacy Policy, etc.) into a single row labeled "Other". When merging, sum the counts and keys.
-3. Preserve exact counts and keys; only change the location labels and grouping.
+1. Only real US states are kept. Use state name only (e.g. "Texas", "California")—no city. If the raw label is "State - City", collapse to the state only and merge counts/keys for that state.
+2. Anything that does not neatly fit in a specific US state (Unspecified, Career Site, Cdn Cgi, Hotels, Privacy Policy, unclear) goes into a single row labeled "Other". Sum the counts and keys when merging into Other.
+3. Preserve exact counts and keys; only change the location labels and grouping to state-only.
 Return JSON only, no markdown: {"properties_by_location": [{"location": "...", "count": n, "keys": k}, ...], "asset_delta_by_city": [{"location": "...", "added": a, "removed": r}, ...]}.
-Each properties_by_location entry must include "keys" (number, 0 if not provided). If there are no real locations, still return the structure with "Other" and the totals."""
+Each properties_by_location entry must include "keys" (number, 0 if not provided). If there are no real states, still return the structure with "Other" and the totals."""
 
     user = f"Competitor: {competitor_name}\n\nCurrent counts by location (raw):\n{counts_text or 'none'}\n\nChanges by location (raw):\n{deltas_text or 'none'}"
 

@@ -97,20 +97,19 @@ def enrich_properties_with_llm(
         lines.append(f"{i}: url={url!r} name={name!r} market={market!r}")
 
     if raw_content and raw_content.strip():
-        # LLM reads raw page and assigns state/city from page context
+        # LLM reads raw page and assigns state (and optional city) from page context
         page_text = _html_to_text_for_enricher(raw_content.strip())
-        system = """You are a data enricher for US real estate/hospitality property lists.
-Given the page text below and a list of properties (index, url, name, market), assign state and city to each property using only information from the page text (e.g. cards, addresses, subheadings).
-Output a JSON array with one object per property. Each object must have: "index" (integer), "state" (full US state name, e.g. "Texas", or "Other" if not US/unclear), "city" (optional, city name if evident from the page, else omit).
-Use only standard US state names. For non-location or unclear entries use state "Other". Return only the JSON array, no markdown."""
-        user = f"Page text:\n\n{page_text}\n\nProperties (assign state/city from page text above):\n" + "\n".join(lines)
+        system = """You are a data enricher for US real estate/hospitality property lists. Locations will be summarized by state only.
+Given the page text below and a list of properties (index, url, name, market), assign a state to each property using only information from the page text (e.g. cards, addresses, subheadings).
+Output a JSON array with one object per property. Each object must have: "index" (integer), "state" (full US state name only, e.g. "Texas" or "California"—no city in state field), "city" (optional, omit if unknown).
+Use only standard US state names. For anything that does not neatly fit in a specific US state—non-property pages (career site, privacy, legal), unclear location, or non-US—use state "Other". Return only the JSON array, no markdown."""
+        user = f"Page text:\n\n{page_text}\n\nProperties (assign state from page text above; use Other if not clearly in a US state):\n" + "\n".join(lines)
     else:
         # Infer from url/name/market only (no page context)
-        system = """You are a data enricher for US real estate/hospitality property lists.
+        system = """You are a data enricher for US real estate/hospitality property lists. Locations will be summarized by state only.
 Given a list of properties (index, url, name, market), output a JSON array with one object per property.
-Each object must have: "index" (integer), "state" (US state full name, e.g. "Texas", or "Other" if not US/unclear), "city" (optional, city name if evident from url/name/market, else omit).
-Use only standard US state names. For non-location or unclear entries use state "Other".
-Return only the JSON array, no markdown."""
+Each object must have: "index" (integer), "state" (US state full name only, e.g. "Texas"—no city), "city" (optional, omit if unknown).
+Use only standard US state names. For anything not clearly in a specific US state (unclear, career site, privacy, non-property URL, etc.) use state "Other". Return only the JSON array, no markdown."""
         user = "Properties:\n" + "\n".join(lines)
 
     try:

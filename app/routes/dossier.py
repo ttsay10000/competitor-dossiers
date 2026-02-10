@@ -5,7 +5,7 @@ from fastapi.responses import Response
 
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, Snapshot, Capability
-from ..diff.asset_diff import diff_properties, delta_by_city, infer_location_for_property, parse_keys_from_details
+from ..diff.asset_diff import diff_properties, delta_by_city, infer_location_for_property, is_location_treated_as_other, parse_keys_from_details
 from ..executive_summary import generate_executive_summary, clean_location_display_for_dossier
 from ..rules.talent_rules import job_functional_area, FUNCTIONAL_AREA_DISPLAY_ORDER, PROPERTY_OPERATIONS_LABEL
 
@@ -251,6 +251,20 @@ def build_dossier_context(session, competitor_id: int) -> dict:
             for r in properties_by_location
         ]
 
+    # Expand "Other" (non-state) into subbullets with location for quick check (no separate LLM).
+    other_properties_display = []
+    other_props = [p for p in asset_props if is_location_treated_as_other(infer_location_for_property(p))]
+    if other_props:
+        other_properties_display = [
+            {
+                "name": (p.get("name") or "").strip() or "Unnamed",
+                "url": (p.get("url") or "").strip() or "",
+                "market": (p.get("market") or "").strip() or "",
+                "raw_location": infer_location_for_property(p),
+            }
+            for p in other_props
+        ]
+
     context = {
         "competitor": {"id": competitor.id, "name": competitor.name},
         "markets": markets,
@@ -272,6 +286,7 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         "asset_added_since_baseline": asset_added_since_baseline,
         "asset_removed_since_baseline": asset_removed_since_baseline,
         "asset_delta_by_city": asset_delta_by_city,
+        "other_properties_display": other_properties_display,
     }
     context["executive_summary"] = generate_executive_summary(context)
     return context

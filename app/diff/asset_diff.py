@@ -24,6 +24,16 @@ NON_LOCATION_PATH_SEGMENTS = frozenset({
     "cdn-cgi", "hotels", "api", "admin", "assets", "static", "www", "en", "us",
 })
 
+# Raw location labels that are merged into "Other" and expanded as subbullets (include location for quick check).
+LOCATIONS_TREATED_AS_OTHER = frozenset({
+    "Unspecified", "Other", "Career Site", "Career site", "Cdn Cgi", "Hotels", "Privacy Policy",
+})
+
+
+def is_location_treated_as_other(loc: str) -> bool:
+    """True if this raw location is non-state and should be shown under 'Other' with subbullets."""
+    return (loc or "").strip() in LOCATIONS_TREATED_AS_OTHER
+
 
 def infer_location_for_property(prop: dict) -> str:
     """
