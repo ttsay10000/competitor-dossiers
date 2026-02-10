@@ -297,32 +297,18 @@ def collect_yahoo_finance_items(
     return results
 
 
-def collect_google_news_items(
-    company_name: str,
-    max_items: int = 40,
-    window_days: int = 120,
+def _fetch_google_news_rss(
+    quoted_phrase: str,
+    when_param: str,
+    max_items: int,
+    cutoff: datetime,
 ) -> List[dict]:
-    """
-    Fetch Google News articles that contain the company name as an exact phrase
-    (quoted search). Date on each item is publication date only (from RSS
-    published/published_parsed; never fetch time).
-
-    Uses Google News RSS: when:1m for <=31 days, when:6m for longer windows.
-    Company blog links are filtered out by the pipeline (company_domains).
-    """
-    company_name = (company_name or "").strip()
-    if not company_name:
-        return []
-
-    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
-    # Quoted phrase so we only get articles that contain the exact name (e.g. "Avantstay").
-    when_param = "when:6m" if window_days > 31 else "when:1m"
-    query = f'"{company_name}" {when_param}'
+    """Fetch and parse Google News RSS for a single quoted phrase. Returns list of items."""
+    query = f'"{quoted_phrase}" {when_param}'
     encoded = quote_plus(query)
     rss_url = (
         f"https://news.google.com/rss/search?q={encoded}&hl=en-US&gl=US&ceid=US:en"
     )
-
     try:
         fetched = fetch_url(rss_url, timeout=25, headers={"User-Agent": USER_AGENT_BROWSER})
     except Exception:
@@ -343,7 +329,6 @@ def collect_google_news_items(
             continue
         if link in seen_urls:
             continue
-        # Publication date only: RSS "published" / published_parsed (never updated or fetch time).
         dt: Optional[datetime] = None
         if entry.get("published_parsed"):
             try:
@@ -366,6 +351,54 @@ def collect_google_news_items(
                 "provider": "google_news",
             }
         )
+    return results
+
+
+def collect_google_news_items(
+    company_name: str,
+    max_items: int = 40,
+    window_days: int = 120,
+) -> List[dict]:
+    """
+    Fetch Google News articles that contain the company name as an exact phrase
+    (quoted search). Date on each item is publication date only (from RSS
+    published/published_parsed; never fetch time).
+
+    Uses Google News RSS: when:1m for <=31 days, when:6m for longer windows.
+    If the company name has multiple words (e.g. "Lark Hotels") and the quoted
+    phrase returns 0 results, we retry with only the first word in quotes
+    (e.g. "Lark") so articles that refer to the brand without the full name
+    (e.g. "Lark Expands with Four New Hotels") are still picked up. Downstream
+    LLM classification filters irrelevant matches. Company blog links are
+    filtered out by the pipeline (company_domains).
+    """
+    company_name = (company_name or "").strip()
+    if not company_name:
+        return []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    when_param = "when:6m" if window_days > 31 else "when:1m"
+
+    results = _fetch_google_news_rss(company_name, when_param, max_items, cutoff)
+
+    # Fallback: multi-word names often appear as just the first word in headlines
+    # (e.g. "Lark Expands...", "Lark Appoints..."). If the full quoted phrase
+    # returns nothing, try the first word so we don't miss relevant articles.
+    if not results and " " in company_name:
+        first_word = company_name.split()[0].strip()
+        if first_word:
+            results = _fetch_google_news_rss(first_word, when_param, max_items, cutoff)
+
+    # Supplementary: partnership/deal stories often appear under "X partnership" or
+    # "X partners with Y" and can be ranked differently. Fetch with quoted "Company partnership"
+    # and merge so we don't miss stories like "Hilton partners with Placemakr".
+    seen_urls = {item["url"] for item in results}
+    partnership_phrase = f"{company_name} partnership"
+    extra = _fetch_google_news_rss(partnership_phrase, when_param, max_items, cutoff)
+    for item in extra:
+        if item["url"] not in seen_urls and len(results) < max_items:
+            seen_urls.add(item["url"])
+            results.append(item)
 
     return results
 

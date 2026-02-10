@@ -722,8 +722,13 @@ def run_press() -> None:
                     raw_items.extend(gn_items)
                     if gn_items:
                         source_meta.append({"type": "google_news"})
-                except Exception:
-                    pass
+                    elif competitor.name:
+                        print(
+                            f"[press] Google News returned 0 items for {competitor.name!r} "
+                            "(RSS may omit articles that don't use the exact quoted phrase; fallback by first word is used when possible)"
+                        )
+                except Exception as e:
+                    print(f"[press] Google News failed for {competitor.name!r}: {e}")
 
             if not raw_items:
                 log_run(

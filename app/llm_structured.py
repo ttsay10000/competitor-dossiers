@@ -447,6 +447,7 @@ def _classify_press_headlines_with_llm(
         "- Review or awards fluff: 'Guest Review Roundup', 'Best Vacation Homes 2024', 'Awards We Won'.\n"
         "- Generic thought-leadership or tips: '5 Tips for Property Owners', 'Why We Love Group Travel', 'What Makes a Great Stay' (no discrete business event).\n"
         "- Third-party articles where the company is not the subject: 'Sonder Files for Bankruptcy' (only briefly mentions another company), earnings roundups that list many tickers.\n"
+        "PARTNERSHIP RULE: When the headline describes a partnership, deal, or launch that NAMES the target company (e.g. 'Hilton partners with Placemakr', 'X and Placemakr are redefining', 'Hilton teams up with Placemakr'), the article IS about the target company's business. Set is_about_company=true and topic=new_partnership. The other party being named first does NOT make it 'not about' the target company.\n"
         "If the headline does not clearly indicate the article is *about* the target company's own business (funding, launch, partnership, exit, exec change, strategy), treat as not about company.\n\n"
         "Output a JSON array with one object per line. Each object must have:\n"
         "- \"index\" (int, the index from the line),\n"
@@ -539,6 +540,58 @@ def _classify_press_headlines_fallback(competitor_name: str, items: List[dict]) 
         out["is_promo"] = is_promo
         result.append(out)
     return result
+
+
+def _assign_press_story_keys(competitor_name: str, items: List[dict]) -> List[str]:
+    """
+    Assign a short story key to each item so that items about the SAME news event
+    get the SAME key. Used to dedupe multiple articles (different headlines/outlets)
+    covering the same story (e.g. Hilton–Placemakr partnership).
+    Returns list of strings, one per item. On failure or missing API, returns empty list.
+    """
+    if not items or len(items) > 150:
+        return []
+    client = _openai_client()
+    if not client:
+        return []
+
+    lines = []
+    for i, it in enumerate(items):
+        title = (it.get("title") or "").strip()
+        outlet = _press_outlet_from_item(it)
+        lines.append(f"{i}: {title!r} ({outlet})")
+
+    system = (
+        "You are grouping news headlines about a single company so that headlines about the SAME news event get the SAME key.\n"
+        "Assign a short story key (2–6 words, lowercase, no punctuation) for each line. "
+        "Same event = same key. E.g. all articles about 'Hilton and Placemakr partnership for Apartment Collection' get key 'hilton placemakr apartment partnership'.\n"
+        "Return a JSON array of strings, one per line, in order (index 0 = first headline, etc.). "
+        "Each string must be the story key for that headline. Use only a-z and spaces."
+    )
+    user = f"Target company: {competitor_name}.\n\nHeadlines:\n" + "\n".join(lines)
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            max_tokens=4000,
+            temperature=0.1,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        if not content:
+            return []
+        data = _parse_json_response(content)
+        if not isinstance(data, list) or len(data) != len(items):
+            return []
+        keys = []
+        for i, raw in enumerate(data):
+            k = (raw if isinstance(raw, str) else str(raw)).strip().lower()
+            k = re.sub(r"[^a-z0-9\s]+", "", k)
+            k = re.sub(r"\s+", " ", k).strip()
+            keys.append(k or f"_item_{i}")
+        return keys
+    except Exception:
+        return []
 
 
 # Phrases that often indicate a JS/consent/ad wall instead of article content.
@@ -739,9 +792,10 @@ def enrich_press_items_with_llm(
     - PR Newswire and external sources are preferred; company blog/press links are excluded.
     - Company-sourced (press_endpoint) items are reviewed carefully—may be promo, so
       we require is_about_company and drop promo/irrelevant.
-    - Heuristically deduplicate by normalized title; when the same article appears
-      from multiple sources, choose primary by priority: prnewswire > tier-1 outlets
-      (Bloomberg, Reuters, etc.) > tier-2 (CNBC, etc.) > press_endpoint > rest.
+    - Deduplicate by same story (LLM-assigned story key) so multiple articles about the same
+      event (e.g. Hilton–Placemakr partnership) become one canonical item with secondary_urls.
+      When the same headline appears from multiple sources, normalized title merges them.
+      Primary chosen by source priority: prnewswire > tier-1 (Bloomberg, Reuters, etc.) > tier-2 > press_endpoint.
     - For up to `max_articles_to_summarize` canonical articles, fetch HTML and ask
       LLM for a 1-line summary and (optionally refined) topic.
 
@@ -870,7 +924,9 @@ def enrich_press_items_with_llm(
     if not filtered:
         return []
 
-    # Heuristic dedupe by normalized title
+    # Dedupe: same story from multiple outlets → one canonical item (primary + secondary_urls).
+    # First try LLM-assigned story keys so "Hilton partners with Placemakr" and "How Hilton and
+    # Placemakr are redefining..." merge; fall back to normalized title (same headline, different sources).
     import re
 
     def _norm_title(title: str) -> str:
@@ -878,9 +934,14 @@ def enrich_press_items_with_llm(
         t = re.sub(r"[^a-z0-9]+", " ", t)
         return t.strip()
 
+    story_keys = _assign_press_story_keys(competitor_name, filtered)
     clusters: dict[str, List[dict]] = {}
-    for it in filtered:
-        key = _norm_title(it.get("title") or "")
+    for i, it in enumerate(filtered):
+        key = None
+        if i < len(story_keys) and story_keys[i]:
+            key = story_keys[i]
+        if not key:
+            key = _norm_title(it.get("title") or "")
         if not key:
             key = (it.get("url") or it.get("link") or "").lower()
         clusters.setdefault(key, []).append(it)
