@@ -241,11 +241,31 @@ def _endpoints_ordered(endpoints: list[SourceEndpoint]) -> list[SourceEndpoint]:
     return sorted(endpoints, key=lambda e: e.id)
 
 
+def _filter_competitors_by_name(competitors: list, competitor_name: Optional[str]) -> list:
+    """Filter competitors by name: exact match (case-insensitive) or first-word match so 'Lark' matches 'Lark Hotels'."""
+    if not competitor_name or not competitors:
+        return list(competitors)
+    want = competitor_name.strip().lower()
+    if not want:
+        return list(competitors)
+    out = []
+    for c in competitors:
+        n = (c.name or "").strip().lower()
+        if n == want:
+            out.append(c)
+            continue
+        # First word of stored name matches filter (e.g. --competitor Lark matches "Lark Hotels")
+        first = n.split()[0] if n else ""
+        if first == want:
+            out.append(c)
+    return out
+
+
 def run_talent(competitor_name: Optional[str] = None) -> None:
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         if competitor_name:
-            competitors = [c for c in competitors if c.name.strip().lower() == competitor_name.strip().lower()]
+            competitors = _filter_competitors_by_name(competitors, competitor_name)
             if not competitors:
                 log_event("competitor_not_found", competitor_filter=competitor_name)
                 return
@@ -445,7 +465,7 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         if competitor_name:
-            competitors = [c for c in competitors if c.name.strip().lower() == competitor_name.strip().lower()]
+            competitors = _filter_competitors_by_name(competitors, competitor_name)
             if not competitors:
                 log_event("competitor_not_found", competitor_filter=competitor_name)
                 return
@@ -615,7 +635,7 @@ def run_press(competitor_name: Optional[str] = None) -> None:
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         if competitor_name:
-            competitors = [c for c in competitors if c.name.strip().lower() == competitor_name.strip().lower()]
+            competitors = _filter_competitors_by_name(competitors, competitor_name)
             if not competitors:
                 log_event("competitor_not_found", competitor_filter=competitor_name)
                 return
@@ -634,11 +654,20 @@ def run_press(competitor_name: Optional[str] = None) -> None:
             # Optional press search name for external sources (Google News, PR Newswire, etc.).
             # Use when display name is ambiguous (e.g. "Lark") but press uses a fuller name ("Lark Hotels").
             press_search_name = competitor.name
+            from_endpoint = False
             for ep in endpoints:
                 opts = getattr(ep, "extra_options", None) if ep else None
                 if isinstance(opts, dict) and opts.get("press_search_name"):
                     press_search_name = (opts.get("press_search_name") or "").strip() or press_search_name
+                    from_endpoint = True
                     break
+            # Fallback when no endpoint has press_search_name (e.g. Lark added via UI): use canonical search name
+            # so "Lark" and "Lark Hotels" both get external search with "Lark Hotels" (Google News also fetches "Lark").
+            if not from_endpoint and press_search_name:
+                _press_search_fallback = {"lark": "Lark Hotels"}
+                key = press_search_name.strip().lower()
+                if key in _press_search_fallback:
+                    press_search_name = _press_search_fallback[key]
 
             # 1) Primary: user-provided company news links (saved in DB on Add company / Add Source).
             #    These run first and are highest priority for dedup (e.g. Lark company news page).
@@ -902,7 +931,7 @@ def run_homepage(competitor_name: Optional[str] = None) -> None:
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         if competitor_name:
-            competitors = [c for c in competitors if c.name.strip().lower() == competitor_name.strip().lower()]
+            competitors = _filter_competitors_by_name(competitors, competitor_name)
             if not competitors:
                 log_event("competitor_not_found", competitor_filter=competitor_name)
                 return
@@ -986,7 +1015,7 @@ def run_public_records(competitor_name: Optional[str] = None) -> None:
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         if competitor_name:
-            competitors = [c for c in competitors if c.name.strip().lower() == competitor_name.strip().lower()]
+            competitors = _filter_competitors_by_name(competitors, competitor_name)
             if not competitors:
                 log_event("competitor_not_found", competitor_filter=competitor_name)
                 return

@@ -81,16 +81,19 @@ def is_property_like(url: str) -> bool:
         path = parsed.path or ""
     else:
         path = u
-    path_lower = path.lower()
+    path_lower = path.lower().rstrip("/") or "/"
+    # Exclude portfolio index (e.g. /portfolio or /portfolio/) — only /portfolio/slug is a property.
+    if path_lower in ("/portfolio", "/properties", "/locations", "/property"):
+        return False
     if re.search(
         r"/(extended-stays?|corporate-group|corporate-stays?|business|residents|about|contact-us?|cookie-notice|faqs?|help|support)(?:/|\?|$)",
         path_lower,
     ):
         return False
     patterns = [
-        r"/properties/",
-        r"/property/",
-        r"/portfolio/",  # e.g. Lark: larkhospitality.com/portfolio/property-slug
+        r"/properties/",   # /properties/slug not /properties
+        r"/property/",     # /property/slug not /property
+        r"/portfolio/.+",  # e.g. Lark: .../portfolio/property-slug (excludes /portfolio and /portfolio/)
         r"/locations/",
         r"/apartments/",
         r"/homes/",
@@ -926,29 +929,29 @@ def collect_asset_snapshot(
                     if lark_blocks:
                         properties = _extract_properties_via_llm_from_blocks(lark_blocks, source_url)
                         properties = _merge_link_properties_into(properties, fetched.text)
+                        normalized = normalize_properties(properties)
+                        # If normalization dropped everything (e.g. name/key mismatch), keep block-based list
+                        if not normalized and properties:
+                            normalized = normalize_properties(_lark_blocks_to_properties_without_llm(lark_blocks))
                         return {
                             "source_url": fetched.url,
                             "raw_content": fetched.text,
                             "raw_hash": fetched.raw_hash,
-                            "properties": normalize_properties(properties),
+                            "properties": normalized,
                             "note": "js_exhaust_lark_blocks",
                         }
+                    # No Lark-style h2/ul blocks (e.g. DOM changed or partial HTML): still use full HTML
+                    # and merge link-based properties so we don't undercount (e.g. ~69 from links).
                     properties = _extract_properties_via_llm(fetched.text, source_url)
                     if not properties:
                         properties = extract_properties_from_html(fetched.text)
-                        return {
-                            "source_url": fetched.url,
-                            "raw_content": fetched.text,
-                            "raw_hash": fetched.raw_hash,
-                            "properties": normalize_properties(properties),
-                            "note": "js_exhaust",
-                        }
+                    properties = _merge_link_properties_into(properties or [], fetched.text, threshold=999)
                     return {
                         "source_url": fetched.url,
                         "raw_content": fetched.text,
                         "raw_hash": fetched.raw_hash,
                         "properties": normalize_properties(properties),
-                        "note": "js_exhaust_llm",
+                        "note": "js_exhaust" if not lark_blocks else "js_exhaust_lark_blocks",
                     }
                 properties = extract_properties_from_html(fetched.text)
                 return {
@@ -1017,7 +1020,11 @@ def collect_asset_snapshot(
     # --- Strategy chain: try strategies in order until one returns >= min_properties ---
     # Use explicit chain, or default chain for unknown sources (no strategy_chain and no explicit strategy).
     # That way new competitors (name + URL only) get sitemap → js_exhaust → html and never "succeed" with 0–4 from HTML.
+    # When a source has an explicit single strategy (e.g. Lark "js_exhaust" + load_more + llm_extract), use that only—
+    # do not use strategy_chain so we get full block extraction and ~69 properties, not chain fallback with fewer.
     chain = opts.get("strategy_chain")
+    if opts.get("strategy") is not None:
+        chain = None  # Single strategy takes precedence (Lark, etc.)
     if opts.get("strategy") is None:
         if chain is None or (isinstance(chain, list) and len(chain) == 0):
             chain = _DEFAULT_ASSET_STRATEGY_CHAIN
