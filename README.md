@@ -21,8 +21,8 @@ Dashboard features:
 1. Create a Postgres database named `competitor_signals`.
 2. Install dependencies:
    - `pip install -r requirements.txt`
-3. Run migrations:
-   - `alembic upgrade head`
+3. Run migrations (run locally before pushing to avoid deploy failures):
+   - `./scripts/migrate.sh` or `alembic upgrade head`
 4. Start the app:
    - `uvicorn app.main:app --reload`
 
@@ -72,7 +72,7 @@ Optionally add `python -m app.cli --channel homepage` to the daily run to detect
 
 ## Deploy/Readiness Checklist
 - Configure `DATABASE_URL`
-- Run migrations: `alembic upgrade head`
+- Run migrations locally first: `./scripts/migrate.sh` (then deploy; Render runs `alembic upgrade head` at startup)
 - Seed competitors: `python -m app.seed`
 - Enable Playwright if needed: `PLAYWRIGHT_ENABLED=true`
 - Install Playwright browsers: `python -m playwright install`
