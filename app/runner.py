@@ -707,9 +707,29 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                     )
                 source_meta.append({"type": "press_endpoint", "url": endpoint.url})
 
-            # 2) Second: PR Newswire (company name search, max 100). Always run; user may also add a PRN URL as press endpoint.
             max_per_source = settings.press_max_items_per_source
             window_days = 120
+
+            # 2) Google News: 120-day window, quoted competitor name (and first-word + partnership fallbacks). Run 2nd so items survive the raw cap.
+            if getattr(settings, "press_enable_google_news", True) and press_search_name:
+                try:
+                    gn_items = collect_google_news_items(
+                        press_search_name,
+                        max_items=min(50, max_per_source * 2),  # request enough to fill a fair share before cap
+                        window_days=window_days,
+                    )
+                    raw_items.extend(gn_items)
+                    if gn_items:
+                        source_meta.append({"type": "google_news"})
+                    elif press_search_name:
+                        print(
+                            f"[press] Google News returned 0 items for {press_search_name!r} "
+                            "(RSS may omit articles that don't use the exact quoted phrase; first-word and partnership fallbacks are used)"
+                        )
+                except Exception as e:
+                    print(f"[press] Google News failed for {press_search_name!r}: {e}")
+
+            # 3) PR Newswire (company name search, max 100). User may also add a PRN URL as press endpoint.
             try:
                 prn_items = collect_prnewswire_items(
                     press_search_name,
@@ -722,7 +742,7 @@ def run_press(competitor_name: Optional[str] = None) -> None:
             except Exception:
                 pass
 
-            # 3) Secondary backups: Business Insider, Yahoo Finance, CNBC, Google News (still relevant for newsworthy clips).
+            # 4) Secondary backups: Business Insider, Yahoo Finance, CNBC.
             if settings.press_enable_business_insider:
                 try:
                     bi_items = collect_business_insider_items(
@@ -762,26 +782,6 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                     source_meta.append({"type": "cnbc"})
                 except Exception:
                     pass
-
-            # Google News: past 120 days (when:6m), quoted company name. Company blog links
-            # are filtered out later by company_domains so we keep external coverage.
-            if getattr(settings, "press_enable_google_news", True):
-                try:
-                    gn_items = collect_google_news_items(
-                        press_search_name,
-                        max_items=max_per_source,
-                        window_days=window_days,
-                    )
-                    raw_items.extend(gn_items)
-                    if gn_items:
-                        source_meta.append({"type": "google_news"})
-                    elif press_search_name:
-                        print(
-                            f"[press] Google News returned 0 items for {press_search_name!r} "
-                            "(RSS may omit articles that don't use the exact quoted phrase; fallback by first word is used when possible)"
-                        )
-                except Exception as e:
-                    print(f"[press] Google News failed for {press_search_name!r}: {e}")
 
             if not raw_items:
                 log_run(

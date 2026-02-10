@@ -1,10 +1,64 @@
+import re
 from datetime import datetime, timezone
-from typing import Any, Tuple
+from email.utils import parsedate_to_datetime
+from typing import Any, Optional, Tuple
 
 import feedparser
 from bs4 import BeautifulSoup
 
 from .http import fetch_url, FetchResult
+
+
+def _parse_publication_date_from_text(text: str) -> Optional[str]:
+    """Parse common publication date formats from page text. Returns ISO date string or None."""
+    if not text or not isinstance(text, str):
+        return None
+    text = text.strip()
+    if not text:
+        return None
+    # ISO date (YYYY-MM-DD or with time)
+    m = re.search(r"\b(20\d{2}-\d{2}-\d{2})(?:T[\d:.]+Z?)?\b", text)
+    if m:
+        try:
+            dt = datetime.fromisoformat(m.group(1).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    # "Jan 1, 2025" / "Jan 01, 2025"
+    m = re.search(
+        r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s*20\d{2}\b",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        try:
+            # Normalize "Jan 1, 2025" for strptime
+            s = m.group(0).replace(",", "")
+            parts = s.split()
+            if len(parts) >= 3:
+                month_abbr = parts[0][:3].title()
+                day = parts[1].zfill(2)
+                year = parts[2]
+                dt = datetime.strptime(f"{month_abbr} {day} {year}", "%b %d %Y")
+                dt = dt.replace(tzinfo=timezone.utc)
+                return dt.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    # RFC 2822 style (e.g. "Mon, 10 Feb 2025 12:00:00 GMT")
+    m = re.search(
+        r"\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun),?\s+\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+20\d{2}\s+[\d:]+\s*(?:GMT|UTC)?",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        try:
+            dt = parsedate_to_datetime(m.group(0).strip())
+            return dt.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    return None
 
 
 def parse_rss(url: str) -> Tuple[list[dict[str, Any]], FetchResult]:
@@ -26,8 +80,38 @@ def parse_rss(url: str) -> Tuple[list[dict[str, Any]], FetchResult]:
     return items, fetched
 
 
+def _find_date_for_link(link) -> Optional[str]:
+    """Look for publication date in the link's container: <time datetime>, then date-like text."""
+    node = link
+    for _ in range(6):
+        if node is None:
+            break
+        time_tag = node.find("time", datetime=True)
+        if time_tag:
+            dt_val = time_tag.get("datetime", "").strip()
+            if dt_val:
+                parsed = _parse_publication_date_from_text(dt_val)
+                if parsed:
+                    return parsed
+                try:
+                    dt = datetime.fromisoformat(dt_val.replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return dt.strftime("%Y-%m-%d")
+                except Exception:
+                    pass
+        # Date-like text in container (e.g. "Feb 10, 2025", "2025-02-10")
+        text = node.get_text(" ", strip=True) if hasattr(node, "get_text") else ""
+        if text:
+            parsed = _parse_publication_date_from_text(text)
+            if parsed:
+                return parsed
+        node = node.parent
+    return None
+
+
 def extract_press_from_html(html: str) -> list[dict[str, Any]]:
-    """Extract press links from HTML. Date is left None unless we can parse publication date from the page (never use fetch/pull time)."""
+    """Extract press links from HTML. Tries to parse publication date from container (e.g. <time>, or date text); never uses fetch/pull time."""
     soup = BeautifulSoup(html, "html.parser")
     items = []
     for link in soup.find_all("a"):
@@ -39,8 +123,8 @@ def extract_press_from_html(html: str) -> list[dict[str, Any]]:
             continue
         if "press" not in href and "blog" not in href and "news" not in href:
             continue
-        # Only use publication date when we can parse it; never set date to fetch time.
-        items.append({"title": title, "url": href, "date": None, "source": None})
+        date_val = _find_date_for_link(link)
+        items.append({"title": title, "url": href, "date": date_val, "source": None})
     return items
 
 

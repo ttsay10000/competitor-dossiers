@@ -203,11 +203,13 @@ def clean_location_display_for_dossier(
     competitor_name: str,
     properties_by_location: List[Dict[str, Any]],
     asset_delta_by_city: List[Dict[str, Any]],
+    *,
+    other_sub_bullets_text: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    Use the LLM to reorganize location labels into state-only format and group anything
-    not clearly in a specific state as "Other". Returns
-    {"properties_by_location": [...], "asset_delta_by_city": [...]} or None if no key or API fails.
+    Use the LLM to bucket the existing list (location - count) by state. Input is only the
+    list text and optional Other sub-bullets (URLs with path hints like temecula, central-oregon);
+    no per-property data. Returns state-only properties_by_location and asset_delta_by_city.
     """
     from .config import settings
     if not settings.openai_api_key:
@@ -226,24 +228,33 @@ def clean_location_display_for_dossier(
             return f"{loc}: {count} ({keys} keys)"
         return f"{loc}: {count}"
 
-    # Send enough rows so we don't truncate state diversity (was 25; 80 covers 50 states + Other + buffer).
+    # Send enough rows so we don't truncate state diversity (80 covers 50 states + Other + buffer).
     max_location_rows = 80
     raw_total = sum(r.get("count", 0) for r in properties_by_location)
     counts_text = "; ".join(_loc_count_keys(r) for r in properties_by_location[:max_location_rows])
     deltas_text = "; ".join(f"{r['location']}: +{r['added']}/−{r['removed']}" for r in asset_delta_by_city[:25])
-    if not counts_text and not deltas_text:
+    if not counts_text and not deltas_text and not other_sub_bullets_text:
         return None
 
-    system = """You are organizing property location data for a real estate/hospitality competitor dashboard. Summarize by state only.
-Given raw location labels with counts and optional keys (e.g. "California: 5 (100 keys)" or "Texas - Austin: 3"),
-produce a cleaned list where:
-1. Only real US states are kept. Use state name only (e.g. "Texas", "California")—no city. If the raw label is "State - City", collapse to the state only and merge counts/keys for that state.
-2. Anything that does not neatly fit in a specific US state (Unspecified, Career Site, Cdn Cgi, Hotels, Privacy Policy, unclear) goes into a single row labeled "Other". Sum the counts and keys when merging into Other.
-3. Preserve exact counts and keys; only change the location labels and grouping to state-only.
+    system = """You are organizing property location data for a real estate/hospitality competitor dashboard. Output must be BY STATE ONLY: one row per US state, plus at most one "Other" row for truly unclear locations.
+
+Input you receive:
+1. "Current counts by location (raw)" — a list that often contains BOTH state names (e.g. California, Texas) AND city/region names (e.g. Temecula, Newport Beach, Paso Robles, Central Oregon). These come from vacation-rental or property sites where each row may be a state or a city/region.
+2. Optionally "Other sub-bullets": lines like "https://example.com/123/temecula/property — Other". Use the URL path segment (temecula, central-oregon, paso-robles, etc.) to infer US state and add those counts to that state.
+
+Rules:
+- Map every US city or region to its state. Examples: Temecula, Paso Robles, Lake Arrowhead, Newport Beach, Coachella Valley, Palm Springs → California. Central Oregon, Bend, Sunriver → Oregon. Hudson Valley, Hamptons, Catskills → New York. Austin, Hill Country, South Padre Island → Texas. Use full US state names only (e.g. "California", "Texas").
+- Do NOT put US cities or regions into "Other". Only use "Other" for: Unspecified, career site, privacy, non-property URLs, or genuinely non-US/unclear.
+- If the input already has a state name (e.g. "California: 10") and also city names in that state (e.g. "Temecula: 5", "Newport Beach: 3"), merge them into one row: "California": count 18, keys summed.
+- Preserve exact counts and keys; only change labels and grouping. Every state that appears in the input (either as a state row or as a city/region in that state) must appear as exactly one row in the output.
+- For asset_delta_by_city: apply the same state mapping so each delta row has "location" = state name (or "Other"); merge added/removed counts by state.
+
 Return JSON only, no markdown: {"properties_by_location": [{"location": "...", "count": n, "keys": k}, ...], "asset_delta_by_city": [{"location": "...", "added": a, "removed": r}, ...]}.
-Each properties_by_location entry must include "keys" (number, 0 if not provided). If there are no real states, still return the structure with "Other" and the totals. Include every state that appears in the raw list; do not drop or merge state rows into Other."""
+Each properties_by_location entry must include "keys" (number, 0 if not provided). List states first (e.g. California, Colorado, Florida, ...), then "Other" last if needed."""
 
     user = f"Competitor: {competitor_name}\n\nCurrent counts by location (raw):\n{counts_text or 'none'}\n\nChanges by location (raw):\n{deltas_text or 'none'}"
+    if other_sub_bullets_text and other_sub_bullets_text.strip():
+        user += f"\n\nOther sub-bullets (use URL path to assign state when possible, then merge counts):\n{other_sub_bullets_text.strip()}"
 
     try:
         client = OpenAI(api_key=settings.openai_api_key)
@@ -282,6 +293,15 @@ Each properties_by_location entry must include "keys" (number, 0 if not provided
             only_other = len(counts) == 1 and (counts[0].get("location") or "").strip() == "Other"
             if only_other or (raw_total > 0 and cleaned_total < 0.5 * raw_total):
                 return None
+            # If raw input had at least one state name, output must have at least one state row (not only Other).
+            raw_has_state = any(
+                (r.get("location") or "").strip() in _US_STATES
+                for r in properties_by_location[:max_location_rows]
+            )
+            if raw_has_state:
+                out_has_state = any((c.get("location") or "").strip() in _US_STATES for c in counts)
+                if not out_has_state:
+                    return None
             return {"properties_by_location": counts, "asset_delta_by_city": deltas}
     except Exception:
         pass

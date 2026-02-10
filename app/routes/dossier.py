@@ -10,7 +10,7 @@ from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, Snapshot, Capability
 from ..diff.asset_diff import diff_properties, delta_by_city, infer_location_for_property, is_location_treated_as_other, parse_keys_from_details
 from ..executive_summary import generate_executive_summary, clean_location_display_for_dossier
-from ..llm_structured import assign_states_to_properties_for_dossier, research_and_assign_states_for_other_properties
+from ..llm_structured import _assign_state_from_url
 from ..rules.talent_rules import job_functional_area, FUNCTIONAL_AREA_DISPLAY_ORDER, PROPERTY_OPERATIONS_LABEL
 
 router = APIRouter()
@@ -21,8 +21,6 @@ _EXEC_SUMMARY_CACHE: dict[tuple, str] = {}
 _EXEC_SUMMARY_CACHE_MAX = 50
 _LOCATION_CLEAN_CACHE: dict[tuple, dict] = {}
 _LOCATION_CLEAN_CACHE_MAX = 100
-_PROPERTY_STATES_CACHE: dict[tuple, list] = {}
-_PROPERTY_STATES_CACHE_MAX = 50
 
 
 def _exec_summary_cache_key(competitor_id: int, context: dict) -> tuple:
@@ -35,10 +33,18 @@ def _exec_summary_cache_key(competitor_id: int, context: dict) -> tuple:
     return (competitor_id, base, n_events, n_news, added, removed)
 
 
-def _location_clean_cache_key(name: str, props: list, deltas: list) -> tuple:
+def _location_clean_cache_key(name: str, props: list, deltas: list, other_bullets: Optional[str] = None) -> tuple:
     props_sig = tuple((r.get("location"), r.get("count"), r.get("keys", 0)) for r in (props or [])[:100])
     deltas_sig = tuple((r.get("location"), r.get("added"), r.get("removed")) for r in (deltas or [])[:50])
-    return (name, props_sig, deltas_sig)
+    other_sig = (other_bullets or "")[:500]
+    return (name, props_sig, deltas_sig, other_sig)
+
+
+def clear_dossier_caches_for_competitor(competitor_id: int) -> None:
+    """Clear in-memory LLM caches so dossier and lazy endpoints show fresh data after a refresh."""
+    global _EXEC_SUMMARY_CACHE, _LOCATION_CLEAN_CACHE
+    _EXEC_SUMMARY_CACHE = {k: v for k, v in _EXEC_SUMMARY_CACHE.items() if k[0] != competitor_id}
+    _LOCATION_CLEAN_CACHE.clear()  # keys are (competitor_name, ...); clear all to avoid stale location data
 
 # Suggested next actions based on event types (rules-based).
 RECOMMENDATIONS_MAP = {
@@ -205,25 +211,11 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
 
     raw_asset_props = (latest_asset.structured_json or {}).get("properties", []) if latest_asset else []
     asset_props = [p for p in raw_asset_props if isinstance(p, dict)]
-    # Run all properties through LLM to assign state per property (cached by competitor + snapshot).
-    # Skip when skip_property_llm=True so dossier opens fast; refined data can be lazy-loaded.
-    if not skip_property_llm and latest_asset and asset_props:
-        state_cache_key = (competitor_id, latest_asset.id)
-        if state_cache_key in _PROPERTY_STATES_CACHE:
-            asset_props = _PROPERTY_STATES_CACHE[state_cache_key]
-        else:
-            enriched_props = assign_states_to_properties_for_dossier(competitor.name, asset_props)
-            if enriched_props is not None:
-                asset_props = enriched_props
-            # For Placemakr: deep research on "Other" properties to infer location from names (e.g. Dupont Circle -> DC)
-            if competitor.name.strip().lower() == "placemakr":
-                researched = research_and_assign_states_for_other_properties(competitor.name, asset_props)
-                if researched is not None:
-                    asset_props = researched
-            if len(_PROPERTY_STATES_CACHE) >= _PROPERTY_STATES_CACHE_MAX:
-                _PROPERTY_STATES_CACHE.clear()
-            _PROPERTY_STATES_CACHE[state_cache_key] = asset_props
-    # Inferred locations (LLM-set state or URL-derived) for summary and counts
+    # Use URL-derived state only (e.g. Avantstay path -> state). No per-property LLM; the list
+    # (location - count) is sent once to the LLM in clean_location_display_for_dossier to bucket by state.
+    if latest_asset and asset_props:
+        asset_props = [_assign_state_from_url(p) for p in asset_props]
+    # Inferred locations (URL-derived state or path slug) for summary and counts
     _locations = [infer_location_for_property(p) for p in asset_props]
     markets = sorted({loc for loc in _locations if loc != "Unspecified"})
 
@@ -423,15 +415,39 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
             asset_baseline_date = baseline_asset.captured_at.strftime("%Y-%m-%d")
             asset_delta_by_city = delta_by_city(diff["added"], diff["removed"])
 
-    # Optional: LLM-cleaned location display (State - City, group noise as Other); cached. Skip when skip_property_llm.
+    # Expand "Other" (non-state) into subbullets for display and for LLM (URL path hints: temecula, central-oregon, etc.).
+    other_properties_display = []
+    other_props = [p for p in asset_props if is_location_treated_as_other(infer_location_for_property(p))]
+    if other_props:
+        other_properties_display = [
+            {
+                "name": (p.get("name") or "").strip() or "Unnamed",
+                "url": (p.get("url") or "").strip() or "",
+                "market": (p.get("market") or "").strip() or "",
+                "raw_location": infer_location_for_property(p),
+            }
+            for p in other_props
+        ]
+
+    # One LLM step: send only the list (location - count) and Other sub-bullets; LLM buckets by state. No per-property data.
+    other_sub_bullets_text = None
+    if other_properties_display:
+        other_sub_bullets_text = "\n".join(
+            f"{d.get('url', '')} — {d.get('raw_location', 'Other')}" for d in other_properties_display
+        )
     cleaned = None
     if not skip_property_llm:
-        loc_key = _location_clean_cache_key(competitor.name, properties_by_location, asset_delta_by_city)
+        loc_key = _location_clean_cache_key(
+            competitor.name, properties_by_location, asset_delta_by_city, other_sub_bullets_text
+        )
         if loc_key in _LOCATION_CLEAN_CACHE:
             cleaned = _LOCATION_CLEAN_CACHE[loc_key]
         else:
             cleaned = clean_location_display_for_dossier(
-                competitor.name, properties_by_location, asset_delta_by_city
+                competitor.name,
+                properties_by_location,
+                asset_delta_by_city,
+                other_sub_bullets_text=other_sub_bullets_text,
             )
             if cleaned and len(_LOCATION_CLEAN_CACHE) >= _LOCATION_CLEAN_CACHE_MAX:
                 _LOCATION_CLEAN_CACHE.clear()
@@ -444,20 +460,6 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         properties_by_location_with_list = [
             {"location": r["location"], "count": r["count"], "keys": r.get("keys", 0)}
             for r in properties_by_location
-        ]
-
-    # Expand "Other" (non-state) into subbullets with location for quick check (no separate LLM).
-    other_properties_display = []
-    other_props = [p for p in asset_props if is_location_treated_as_other(infer_location_for_property(p))]
-    if other_props:
-        other_properties_display = [
-            {
-                "name": (p.get("name") or "").strip() or "Unnamed",
-                "url": (p.get("url") or "").strip() or "",
-                "market": (p.get("market") or "").strip() or "",
-                "raw_location": infer_location_for_property(p),
-            }
-            for p in other_props
         ]
 
     context = {
@@ -582,16 +584,15 @@ def dossier_executive_summary(competitor_id: int):
 @router.post("/dossier/set-baseline-all-and-refresh", status_code=303)
 def set_baseline_all_and_refresh(request: Request):
     """
-    Run all collectors for all competitors, then set every competitor's comparison baseline
-    to the end of that run. Use once to establish a baseline (first view will show little;
-    next refresh will compare to this run). Every subsequent refresh (this button or cron)
-    also advances the baseline so the summary always reflects changes since the last run.
+    Set every competitor's comparison baseline to now, then run all collectors. Use to
+    establish a baseline so the next view (or next refresh) shows only changes after
+    this point. The run's new snapshots/events will appear as changes since baseline.
     """
     from ..runner import run as run_all_channels, advance_baseline_after_full_refresh
 
-    run_all_channels()
     advance_baseline_after_full_refresh()
-    return RedirectResponse(url="/competitors", status_code=303)
+    run_all_channels()
+    return RedirectResponse(url="/competitors?refreshed=1", status_code=303)
 
 
 @router.get("/dossier/{competitor_id}")
@@ -617,15 +618,19 @@ def dossier(request: Request, competitor_id: int):
                 "last_refreshed": None,
                 "nav_competitors": [],
             },
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
         )
+    _NO_STORE_HEADERS = {"Cache-Control": "no-store, no-cache, must-revalidate"}
     if "error" in context:
         return request.app.state.templates.TemplateResponse(
             "dossier.html",
             {"request": request, "error": context["error"], "last_refreshed": context.get("last_refreshed"), "nav_competitors": context.get("nav_competitors", [])},
+            headers=_NO_STORE_HEADERS,
         )
     return request.app.state.templates.TemplateResponse(
         "dossier.html",
         {"request": request, **context},
+        headers=_NO_STORE_HEADERS,
     )
 
 
@@ -645,15 +650,18 @@ def dossier_refresh(request: Request, competitor_id: int):
             return RedirectResponse(url="/", status_code=303)
     run_all_channels()
     advance_baseline_after_full_refresh()
-    return RedirectResponse(url=f"/dossier/{competitor_id}", status_code=303)
+    clear_dossier_caches_for_competitor(competitor_id)
+    # Cache-busting query param so the browser doesn't serve a cached dossier page
+    ts = int(datetime.now(timezone.utc).timestamp())
+    return RedirectResponse(url=f"/dossier/{competitor_id}?r={ts}&refreshed=1", status_code=303)
 
 
 @router.post("/dossier/{competitor_id}/seed", status_code=303)
 def dossier_seed(request: Request, competitor_id: int):
     """
-    Run a full refresh (all channels, all competitors), then set every competitor's
-    comparison baseline to the end of that run. Same effect as Refresh; use to reset
-    the timeline so the next view shows only changes after this run.
+    Set every competitor's comparison baseline to now, then run a full refresh (all
+    channels). Use to reset the timeline: the baseline is "before this run", so the
+    page after redirect shows the new data as changes since that baseline.
     """
     from ..runner import run as run_all_channels, advance_baseline_after_full_refresh
 
@@ -668,7 +676,10 @@ def dossier_seed(request: Request, competitor_id: int):
                 {"request": request, "error": "Competitor not found.", "last_refreshed": last_refreshed, "nav_competitors": nav_competitors},
             )
 
-    run_all_channels()
+    # Set baseline first so the run's new snapshots/events count as "since baseline"
     advance_baseline_after_full_refresh()
-    return RedirectResponse(url=f"/dossier/{competitor_id}", status_code=303)
+    run_all_channels()
+    clear_dossier_caches_for_competitor(competitor_id)
+    ts = int(datetime.now(timezone.utc).timestamp())
+    return RedirectResponse(url=f"/dossier/{competitor_id}?r={ts}&refreshed=1", status_code=303)
 

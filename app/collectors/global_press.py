@@ -299,12 +299,15 @@ def collect_yahoo_finance_items(
 
 def _fetch_google_news_rss(
     quoted_phrase: str,
-    when_param: str,
+    when_days: int,
     max_items: int,
     cutoff: datetime,
 ) -> List[dict]:
-    """Fetch and parse Google News RSS for a single quoted phrase. Returns list of items."""
-    query = f'"{quoted_phrase}" {when_param}'
+    """Fetch and parse Google News RSS for a single quoted phrase. Returns list of items.
+    Google News RSS accepts when:Nd (days) but returns empty feed for when:Nm (months).
+    We use when:{when_days}d in the query and also filter by cutoff in code.
+    """
+    query = f'"{quoted_phrase}" when:{when_days}d'
     encoded = quote_plus(query)
     rss_url = (
         f"https://news.google.com/rss/search?q={encoded}&hl=en-US&gl=US&ceid=US:en"
@@ -364,7 +367,8 @@ def collect_google_news_items(
     (quoted search). Date on each item is publication date only (from RSS
     published/published_parsed; never fetch time).
 
-    Uses Google News RSS: when:1m for <=31 days, when:6m for longer windows.
+    Uses when:Nd (days) in the query; Google News RSS accepts days but returns empty for when:Nm (months).
+    We also enforce the window in code by dropping entries older than cutoff.
     For multi-word names (e.g. "Lark Hotels") we fetch both the full phrase and
     the first word ("Lark") and merge so we get headlines that use either
     (e.g. "Lark appoints...", "Lark Hotels to open..."). Downstream LLM
@@ -376,9 +380,8 @@ def collect_google_news_items(
         return []
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
-    when_param = "when:6m" if window_days > 31 else "when:1m"
 
-    results = _fetch_google_news_rss(company_name, when_param, max_items, cutoff)
+    results = _fetch_google_news_rss(company_name, window_days, max_items, cutoff)
     seen_urls = {item["url"] for item in results}
 
     # Multi-word names: also fetch with first word and merge. Many headlines use
@@ -387,7 +390,7 @@ def collect_google_news_items(
     if " " in company_name:
         first_word = company_name.split()[0].strip()
         if first_word and first_word.lower() != company_name.lower():
-            extra = _fetch_google_news_rss(first_word, when_param, max_items, cutoff)
+            extra = _fetch_google_news_rss(first_word, window_days, max_items, cutoff)
             for item in extra:
                 if item["url"] not in seen_urls and len(results) < max_items:
                     seen_urls.add(item["url"])
@@ -398,7 +401,7 @@ def collect_google_news_items(
     # and merge so we don't miss stories like "Hilton partners with Placemakr".
     seen_urls = {item["url"] for item in results}
     partnership_phrase = f"{company_name} partnership"
-    extra = _fetch_google_news_rss(partnership_phrase, when_param, max_items, cutoff)
+    extra = _fetch_google_news_rss(partnership_phrase, window_days, max_items, cutoff)
     for item in extra:
         if item["url"] not in seen_urls and len(results) < max_items:
             seen_urls.add(item["url"])

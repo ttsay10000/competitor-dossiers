@@ -5,14 +5,36 @@
   {% else %}
     <h1>{{ competitor.name }} Dossier</h1>
     <div style="margin-bottom: 12px;">
-      <form method="post" action="/dossier/{{ competitor.id }}/refresh" style="display: inline-block; margin-right: 8px;">
+      <form method="post" action="/dossier/{{ competitor.id }}/refresh" class="refresh-form" style="display: inline-block; margin-right: 8px;">
         <button type="submit">Refresh data</button>
       </form>
-      <form method="post" action="/dossier/{{ competitor.id }}/seed" style="display: inline-block;">
+      <form method="post" action="/dossier/{{ competitor.id }}/seed" class="refresh-form" style="display: inline-block;">
         <button type="submit">Reset baseline & refresh</button>
       </form>
+      <span id="refresh-status" class="meta" style="margin-left: 8px; font-weight: 500;"></span>
       <p class="meta" style="margin: 4px 0 0 0;">Refresh data runs all collectors (asset, talent, press) and updates events vs current baseline. Reset baseline sets comparison to now, then runs collectors.</p>
     </div>
+    <script>
+      (function() {
+        var statusEl = document.getElementById('refresh-status');
+        document.querySelectorAll('.refresh-form').forEach(function(form) {
+          form.addEventListener('submit', function() {
+            var btn = form.querySelector('button[type=submit]');
+            if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+            if (statusEl) statusEl.textContent = 'Refreshing… (this may take a few minutes)';
+          });
+        });
+        if (new URLSearchParams(window.location.search).get('refreshed') && statusEl) {
+          statusEl.textContent = 'Refresh complete.';
+          statusEl.style.color = 'var(--accent)';
+          setTimeout(function() { statusEl.textContent = ''; statusEl.style.color = ''; }, 5000);
+          if (window.history && window.history.replaceState) {
+            var q = window.location.search.replace(/[?&]refreshed=1/, '').replace(/^\?&/, '?').replace(/&$/, '');
+            window.history.replaceState({}, '', window.location.pathname + (q || ''));
+          }
+        }
+      })();
+    </script>
 
     <!-- 0. AI-generated executive summary (recent changes in bullets); loaded async so page opens fast -->
     <div class="card" style="background: var(--card-bg, #f8f9fa); border-left: 4px solid var(--accent, #0d6efd);">

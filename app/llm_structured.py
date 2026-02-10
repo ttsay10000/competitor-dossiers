@@ -211,19 +211,21 @@ Use only standard US state names. For anything not clearly in a specific US stat
         return working
 
 
-# Batch size for dossier-time state assignment (all properties run through LLM for state buckets).
+# Max properties to send in one LLM call for bucket-by-state (single call is fast; above this fall back to batches).
+_DOSSIER_STATE_SINGLE_CALL_MAX = 2000
+# Batch size for dossier-time state assignment when we fall back to batched (e.g. > single-call max).
 _DOSSIER_STATE_BATCH_SIZE = 80
 
 
-def assign_states_to_properties_for_dossier(
+def _bucket_properties_by_state_single_call(
     competitor_name: str,
     properties: List[dict],
+    valid_states: set,
 ) -> Optional[List[dict]]:
     """
-    Run all properties through the LLM to assign state (and optionally city) per property,
-    using URL-derived location as a hint. Returns a new list of property dicts (copies)
-    with state/city set so dossier can bucket by state for the location bullets.
-    Returns None if no API key or empty input; caller keeps using URL-derived locations.
+    One LLM call: send full list of property bullets (index, name, url, market, url_derived, details),
+    get back state per index. Bucket and assign so dossier can summarize by state quickly.
+    Returns list of property dicts with state/city set, or None on failure.
     """
     if not properties:
         return None
@@ -231,11 +233,92 @@ def assign_states_to_properties_for_dossier(
     if not client:
         return None
 
-    # US state names (full) for validation
+    lines = []
+    for i, p in enumerate(properties):
+        url = (p.get("url") or "").strip()[:200]
+        name = (p.get("name") or "").strip()[:150]
+        market = (p.get("market") or "").strip()[:100]
+        url_derived = infer_location_for_property(p)
+        details = (p.get("details") or "").strip()[:80]
+        lines.append(
+            f"{i}: name={name!r} url={url!r} market={market!r} url_derived_location={url_derived!r} details={details!r}"
+        )
+
+    system = """You are a data enricher for US real estate/hospitality property lists. Your job is to bucket properties by state.
+Given the full list of properties below (each line: index, name, url, market, url_derived_location, details), assign a US state to each.
+- Use full US state names only (e.g. "California", "Texas", "Florida"). No city in the state field.
+- url_derived_location may be a state name, a destination/city name (e.g. "Newport Beach", "Coachella Valley"), or "Unspecified"—use it to infer the correct state when possible.
+- For non-US, career site, privacy, or unclear, use state "Other".
+Return a JSON array with one object per property in the same order: {"index": 0, "state": "California"} (city optional). Return only the JSON array, no markdown."""
+
+    user = f"Competitor: {competitor_name}\n\nProperties (assign state from name, url, market, url_derived_location; bucket by state):\n" + "\n".join(lines)
+
+    try:
+        # One call for full list; allow enough tokens for state per property (e.g. 25 chars * N).
+        max_tokens = min(16000, 30 * len(properties) + 500)
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            max_tokens=max_tokens,
+            temperature=0.1,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        if not content:
+            return None
+        data = _parse_json_response(content)
+        if not isinstance(data, list):
+            return None
+        by_index = {int(item["index"]): item for item in data if isinstance(item, dict) and "index" in item}
+        result = []
+        for i, p in enumerate(properties):
+            out = dict(p)
+            if i in by_index:
+                # Don't overwrite URL-derived state (e.g. Avantstay) with "Other"
+                existing_state = (out.get("state") or "").strip()
+                state = (by_index[i].get("state") or "").strip() or "Other"
+                state = state if state in valid_states else "Other"
+                if not existing_state or existing_state == "Other":
+                    out["state"] = state
+                city = (by_index[i].get("city") or "").strip()
+                if city and not (out.get("city") or "").strip():
+                    out["city"] = city
+            result.append(out)
+        return result
+    except Exception:
+        return None
+
+
+def assign_states_to_properties_for_dossier(
+    competitor_name: str,
+    properties: List[dict],
+) -> Optional[List[dict]]:
+    """
+    Assign state (and optionally city) to each property so dossier can bucket by state for location bullets.
+    Uses a single LLM call with the full list of property bullets when possible (fast); falls back to
+    batched calls only if the list exceeds _DOSSIER_STATE_SINGLE_CALL_MAX.
+    Returns a new list of property dicts (copies) with state/city set, or None if no API key / empty input.
+    """
+    if not properties:
+        return None
+    client = _openai_client()
+    if not client:
+        return None
+
     from .diff.asset_diff import US_STATE_ABBREV
     valid_states = set(US_STATE_ABBREV.values()) | {"Washington DC", "Other"}
 
-    result: List[dict] = []
+    # Pre-fill state from URL where possible (Avantstay-style /{id}/{destination}/{slug} -> state).
+    properties = [_assign_state_from_url(p) for p in properties]
+
+    # Prefer one fast call with full list (bucket and summarize by state in one go).
+    if len(properties) <= _DOSSIER_STATE_SINGLE_CALL_MAX:
+        result = _bucket_properties_by_state_single_call(competitor_name, properties, valid_states)
+        if result is not None:
+            return result
+        # Fall through to batched if single call failed (e.g. token limit, API error)
+
+    # Fallback: batched per-property assignment (e.g. list too large or single call failed).
+    result = []
     for start in range(0, len(properties), _DOSSIER_STATE_BATCH_SIZE):
         batch = properties[start : start + _DOSSIER_STATE_BATCH_SIZE]
         lines = []
@@ -280,13 +363,13 @@ Return only the JSON array, no markdown."""
             for i, p in enumerate(batch):
                 out = dict(p)
                 if i in by_index:
+                    existing_state = (out.get("state") or "").strip()
                     state = (by_index[i].get("state") or "").strip() or "Other"
-                    if state in valid_states:
+                    state = state if state in valid_states else "Other"
+                    if not existing_state or existing_state == "Other":
                         out["state"] = state
-                    else:
-                        out["state"] = state if state == "Other" else "Other"
                     city = (by_index[i].get("city") or "").strip()
-                    if city:
+                    if city and not (out.get("city") or "").strip():
                         out["city"] = city
                 result.append(out)
         except Exception:

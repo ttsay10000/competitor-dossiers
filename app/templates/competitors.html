@@ -7,13 +7,35 @@
       <h3 style="margin: 0;">Competitors</h3>
       <p class="meta" style="margin-top: 4px;">Manage the list of competitors and open their dossiers.</p>
     </div>
-    <div style="display: flex; gap: 8px; align-items: center;">
-      <form method="post" action="/dossier/set-baseline-all-and-refresh" style="display: inline-block;">
+    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+      <form method="post" action="/dossier/set-baseline-all-and-refresh" class="refresh-form" style="display: inline-block;">
         <button type="submit">Set baseline for all &amp; refresh</button>
       </form>
+      <span id="refresh-status" class="meta" style="margin-left: 4px; font-weight: 500;"></span>
       <a href="/competitors/new"><button>Add competitor</button></a>
     </div>
   </div>
+  <script>
+    (function() {
+      var statusEl = document.getElementById('refresh-status');
+      document.querySelectorAll('.refresh-form').forEach(function(form) {
+        form.addEventListener('submit', function() {
+          var btn = form.querySelector('button[type=submit]');
+          if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+          if (statusEl) statusEl.textContent = 'Refreshing… (this may take a few minutes)';
+        });
+      });
+      if (new URLSearchParams(window.location.search).get('refreshed') && statusEl) {
+        statusEl.textContent = 'Refresh complete.';
+        statusEl.style.color = 'var(--accent)';
+        setTimeout(function() { statusEl.textContent = ''; statusEl.style.color = ''; }, 5000);
+        if (window.history && window.history.replaceState) {
+        var q = window.location.search.replace(/[?&]refreshed=1/, '').replace(/^\?&/, '?').replace(/&$/, '');
+        window.history.replaceState({}, '', window.location.pathname + (q || ''));
+      }
+      }
+    })();
+  </script>
   <p class="meta" style="margin: -8px 0 12px 0;">Set baseline for all &amp; refresh: sets each competitor’s comparison date to now, then runs collectors. Use once so executive summaries only summarize changes after this point (lighter LLM load).</p>
 
   <div class="card">
