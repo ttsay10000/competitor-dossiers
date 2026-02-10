@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 CAPABILITY_KEYWORDS = {
@@ -149,7 +149,7 @@ def build_capability_event(capability: str) -> dict:
         "summary": f"First observed job postings in {capability} capability area.",
         "why_it_matters": "Indicates a new functional investment that can shift competitive capabilities.",
         "evidence": {"capability": capability},
-        "occurred_at": datetime.utcnow().isoformat(),
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -162,7 +162,7 @@ def build_hiring_surge_event(capability: str, count: int) -> dict:
         "summary": f"{count} roles posted in {capability} within 30 days.",
         "why_it_matters": "Sustained hiring indicates strategic emphasis in this capability.",
         "evidence": {"capability": capability, "count": count},
-        "occurred_at": datetime.utcnow().isoformat(),
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -186,7 +186,7 @@ def recent_threshold_crossed(previous_count: int, current_count: int, threshold:
 
 
 def should_dedupe(existing_events: list[dict], event: dict, window_days: int = 30) -> bool:
-    cutoff = datetime.utcnow() - timedelta(days=window_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
     for existing in existing_events:
         if existing.get("type") != event.get("type"):
             continue

@@ -1,6 +1,6 @@
 """Rules for homepage / digital footprint change events."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def build_homepage_updated_event(source_url: str) -> dict:
@@ -12,5 +12,5 @@ def build_homepage_updated_event(source_url: str) -> dict:
         "summary": "Meaningful change detected on a tracked page (content hash changed).",
         "why_it_matters": "Signals possible messaging, product, or positioning update.",
         "evidence": {"source_url": source_url},
-        "occurred_at": datetime.utcnow().isoformat(),
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
     }

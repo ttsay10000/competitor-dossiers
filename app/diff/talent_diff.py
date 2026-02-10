@@ -1,6 +1,6 @@
 import hashlib
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 
@@ -9,7 +9,7 @@ def _posted_to_datetime(posted: Any) -> Optional[datetime]:
     if posted is None:
         return None
     if isinstance(posted, (int, float)):
-        return datetime.utcfromtimestamp(posted / 1000.0)
+        return datetime.fromtimestamp(posted / 1000.0, tz=timezone.utc)
     if isinstance(posted, datetime):
         return posted
     s = str(posted).strip()
@@ -39,7 +39,7 @@ def diff_jobs(previous: list[dict], current: list[dict]) -> dict[str, list[dict]
 
 
 def count_recent_by_capability(jobs: list[dict], capability: str, days: int = 30) -> int:
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     count = 0
     for job in jobs:
         if job.get("capability_bucket") != capability:

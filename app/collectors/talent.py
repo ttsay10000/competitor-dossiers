@@ -1,6 +1,6 @@
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from bs4 import BeautifulSoup
@@ -139,7 +139,7 @@ def _posted_date_from_element(element) -> Optional[str]:
             m = re.search(r"posted\s+(\d+)\s+day", text, re.I)
             if m:
                 try:
-                    d = datetime.utcnow() - timedelta(days=int(m.group(1)))
+                    d = datetime.now(timezone.utc) - timedelta(days=int(m.group(1)))
                     return d.strftime("%Y-%m-%d")
                 except (ValueError, TypeError):
                     pass
@@ -349,6 +349,6 @@ def build_structured_json(snapshot: dict[str, Any]) -> dict[str, Any]:
     return {
         "provider": snapshot.get("provider"),
         "source_url": snapshot.get("source_url"),
-        "fetched_at": datetime.utcnow().isoformat(),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
         "jobs": snapshot.get("jobs", []),
     }

@@ -1,7 +1,7 @@
 import json
 import re
 import gzip
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse, urlencode, urlunparse, parse_qs
 from typing import Any, Dict, List, Optional
 
@@ -1009,7 +1009,7 @@ def collect_asset_snapshot(
 def build_structured_json(snapshot: dict[str, Any]) -> dict[str, Any]:
     return {
         "source_url": snapshot.get("source_url"),
-        "fetched_at": datetime.utcnow().isoformat(),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
         "properties": snapshot.get("properties", []),
         "note": snapshot.get("note"),
     }

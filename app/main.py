@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -12,7 +12,7 @@ app = FastAPI(title="Competitor Signals")
 # Paths relative to this file so they work on Render regardless of cwd
 _app_dir = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(_app_dir / "templates"))
-templates.env.globals["utcnow"] = datetime.utcnow
+templates.env.globals["utcnow"] = lambda: datetime.now(timezone.utc)
 app.state.templates = templates
 
 app.include_router(competitors.router)

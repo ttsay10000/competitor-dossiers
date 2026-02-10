@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from typing import Any, Optional
@@ -39,6 +39,10 @@ from .rules.asset_rules import (
 from .rules.press_rules import classify_press, build_press_event, is_executive_relevant
 from .rules.homepage_rules import build_homepage_updated_event
 from .rules.public_records_rules import build_filing_event
+
+# All channels that support per-competitor seed baseline (SEED_MODE): first snapshot
+# per competitor/channel persists as baseline; no diff or events until the next run.
+RUNNER_CHANNELS = ("talent", "asset", "press", "homepage", "public_records")
 
 
 def load_latest_snapshot(session, competitor_id: int, channel: str) -> Optional[Snapshot]:
@@ -83,7 +87,7 @@ def _normalize_occurred_at(value: Any) -> Optional[datetime]:
         return value
     if isinstance(value, (int, float)):
         # Lever etc. use milliseconds since epoch
-        return datetime.utcfromtimestamp(value / 1000.0)
+        return datetime.fromtimestamp(value / 1000.0, tz=timezone.utc)
     if isinstance(value, str):
         try:
             return datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -100,7 +104,7 @@ def create_event(session, competitor_id: int, event: dict) -> None:
             type=event["type"],
             severity=event["severity"],
             title=event["title"],
-            summary=event["summary"],
+            summary=event.get("summary", ""),
             why_it_matters=event.get("why_it_matters"),
             evidence_json=event.get("evidence"),
             occurred_at=_normalize_occurred_at(event.get("occurred_at")),
@@ -109,7 +113,7 @@ def create_event(session, competitor_id: int, event: dict) -> None:
 
 
 def log_event(message: str, **fields: dict) -> None:
-    payload = {"message": message, "ts": datetime.utcnow().isoformat(), **fields}
+    payload = {"message": message, "ts": datetime.now(timezone.utc).isoformat(), **fields}
     print(json.dumps(payload))
 
 
@@ -149,7 +153,7 @@ def _parse_press_date(value: Any) -> Optional[datetime]:
         return value
     if isinstance(value, (int, float)):
         try:
-            return datetime.utcfromtimestamp(value / 1000.0)
+            return datetime.fromtimestamp(value / 1000.0, tz=timezone.utc)
         except Exception:
             return None
     if isinstance(value, str):
@@ -189,7 +193,7 @@ def event_recently_created(
     title: str,
     window_days: int = 30,
 ) -> bool:
-    cutoff = datetime.utcnow() - timedelta(days=window_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
     return (
         session.query(Event)
         .filter(
@@ -253,7 +257,7 @@ def run_talent() -> None:
 
             for endpoint in endpoints_ordered:
                 print(
-                    f"[{datetime.utcnow().isoformat()}] talent run: "
+                    f"[{datetime.now(timezone.utc).isoformat()}] talent run: "
                     f"{competitor.name} {endpoint.url} ({endpoint.confidence})"
                 )
                 try:
@@ -448,7 +452,7 @@ def run_asset() -> None:
 
             for endpoint in endpoints_ordered:
                 print(
-                    f"[{datetime.utcnow().isoformat()}] asset run: "
+                    f"[{datetime.now(timezone.utc).isoformat()}] asset run: "
                     f"{competitor.name} {endpoint.url} ({endpoint.confidence})"
                 )
                 try:
@@ -607,7 +611,7 @@ def run_press() -> None:
             ]
 
             print(
-                f"[{datetime.utcnow().isoformat()}] press run: {competitor.name} "
+                f"[{datetime.now(timezone.utc).isoformat()}] press run: {competitor.name} "
                 f"({len(endpoints)} endpoint(s))"
             )
 
@@ -732,7 +736,7 @@ def run_press() -> None:
                 continue
 
             # 3) Apply 90-day window and global cap before any LLM work.
-            cutoff = datetime.utcnow() - timedelta(days=90)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=90)
             filtered_items: list[dict] = []
             for item in raw_items:
                 dt = _parse_press_date(item.get("date"))
@@ -854,7 +858,7 @@ def run_homepage() -> None:
             ]
             for endpoint in endpoints:
                 print(
-                    f"[{datetime.utcnow().isoformat()}] homepage run: "
+                    f"[{datetime.now(timezone.utc).isoformat()}] homepage run: "
                     f"{competitor.name} {endpoint.url}"
                 )
                 try:
@@ -883,6 +887,8 @@ def run_homepage() -> None:
                     )
                     continue
                 structured = build_homepage_structured(snapshot)
+                latest = load_latest_snapshot(session, competitor.id, "homepage")
+                is_first_snapshot = latest is None
                 persist_snapshot(
                     session,
                     competitor.id,
@@ -891,6 +897,17 @@ def run_homepage() -> None:
                     snapshot.get("raw_hash") or "",
                     structured,
                 )
+                seed_mode = getattr(settings, "seed_mode", False)
+                if seed_mode and is_first_snapshot:
+                    log_run(
+                        session,
+                        competitor.id,
+                        "homepage",
+                        "success",
+                        message="homepage_seed_baseline",
+                        extra={"source_url": snapshot.get("source_url")},
+                    )
+                    continue
                 event = build_homepage_updated_event(snapshot.get("source_url") or endpoint.url)
                 if not event_recently_created(
                     session,
@@ -920,7 +937,7 @@ def run_public_records() -> None:
             ]
             for endpoint in endpoints:
                 print(
-                    f"[{datetime.utcnow().isoformat()}] public_records run: "
+                    f"[{datetime.now(timezone.utc).isoformat()}] public_records run: "
                     f"{competitor.name} {endpoint.url}"
                 )
                 try:
@@ -983,18 +1000,19 @@ def run_public_records() -> None:
 
 
 def run(channel: Optional[str] = None) -> None:
-    if channel in (None, "talent"):
-        run_talent()
-    if channel in (None, "asset"):
-        run_asset()
-    if channel in (None, "press"):
-        run_press()
-    if channel in (None, "homepage"):
-        run_homepage()
-    if channel in (None, "public_records"):
-        run_public_records()
-    if channel is not None and channel not in ("talent", "asset", "press", "homepage", "public_records"):
-        print(f"[{datetime.utcnow().isoformat()}] unknown channel: {channel}")
+    if channel in (None, *RUNNER_CHANNELS):
+        if channel in (None, "talent"):
+            run_talent()
+        if channel in (None, "asset"):
+            run_asset()
+        if channel in (None, "press"):
+            run_press()
+        if channel in (None, "homepage"):
+            run_homepage()
+        if channel in (None, "public_records"):
+            run_public_records()
+    if channel is not None and channel not in RUNNER_CHANNELS:
+        print(f"[{datetime.now(timezone.utc).isoformat()}] unknown channel: {channel}")
 
 
 if __name__ == "__main__":

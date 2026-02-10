@@ -5,8 +5,7 @@
   {% else %}
     <h1>{{ competitor.name }} Dossier</h1>
     <div style="margin-bottom: 12px;">
-      <a href="/dossier/{{ competitor.id }}/pdf"><button>Export PDF</button></a>
-      <form method="post" action="/dossier/{{ competitor.id }}/seed" style="display: inline-block; margin-left: 8px;">
+      <form method="post" action="/dossier/{{ competitor.id }}/seed" style="display: inline-block;">
         <button type="submit">Reset baseline & refresh</button>
       </form>
     </div>

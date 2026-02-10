@@ -76,7 +76,7 @@ def upsert_competitor(session, name: str, primary_domain: Optional[str]) -> Comp
     if competitor:
         competitor.primary_domain = primary_domain
         return competitor
-    competitor = Competitor(name=name, primary_domain=primary_domain, created_at=datetime.utcnow())
+    competitor = Competitor(name=name, primary_domain=primary_domain)
     session.add(competitor)
     session.flush()
     return competitor

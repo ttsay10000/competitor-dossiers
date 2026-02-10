@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from .db import get_session
 from .models import Competitor, Event
@@ -8,12 +8,12 @@ SEVERITY_ORDER = {"high": 0, "med": 1, "low": 2}
 
 
 def build_weekly_digest(days: int = 7, per_competitor: int = 3) -> str:
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         lines: list[str] = []
-        lines.append(f"Weekly Digest (last {days} days) — generated {datetime.utcnow().strftime('%Y-%m-%d')}")
+        lines.append(f"Weekly Digest (last {days} days) — generated {datetime.now(timezone.utc).strftime('%Y-%m-%d')}")
         lines.append("")
 
         for competitor in competitors:

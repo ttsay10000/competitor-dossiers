@@ -4,7 +4,7 @@ Global press collectors (BI, CNBC, Yahoo, Google News, PR Newswire).
 All items use "date" = publication date only. We never set date to fetch/pull/upload time.
 When we cannot determine publication date, we leave date as None.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import re
 from typing import Any, List, Optional
@@ -55,7 +55,7 @@ def collect_business_insider_items(
     if not company_name:
         return []
 
-    cutoff = datetime.utcnow() - timedelta(days=window_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
     query = quote_plus(company_name)
     # json=1 often returns a small JSON envelope with 'rendered' HTML, but plain HTML
     # also works — we handle both paths.
@@ -151,7 +151,7 @@ def collect_cnbc_items(
     if not company_name:
         return []
 
-    cutoff = datetime.utcnow() - timedelta(days=window_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
     query = quote_plus(company_name)
     search_url = f"https://www.cnbc.com/search/?query={query}&tab=news&sort=recent"
 
@@ -231,7 +231,7 @@ def collect_yahoo_finance_items(
     if not ticker or len(ticker) > 6 or not ticker.isalnum():
         return []
 
-    cutoff = datetime.utcnow() - timedelta(days=window_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
     url = f"https://finance.yahoo.com/quote/{ticker}/news/"
 
     try:
@@ -314,7 +314,7 @@ def collect_google_news_items(
     if not company_name:
         return []
 
-    cutoff = datetime.utcnow() - timedelta(days=window_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
     # Quoted phrase so we only get articles that contain the exact name (e.g. "Avantstay").
     query = f'"{company_name}" when:1m'
     encoded = quote_plus(query)
@@ -348,7 +348,7 @@ def collect_google_news_items(
             try:
                 import calendar
                 ts = calendar.timegm(entry.published_parsed)
-                dt = datetime.utcfromtimestamp(ts)
+                dt = datetime.fromtimestamp(ts, tz=timezone.utc)
             except Exception:
                 pass
         if dt is None and entry.get("published"):
@@ -383,7 +383,7 @@ def collect_prnewswire_items(
     if not company_name:
         return []
 
-    cutoff = datetime.utcnow() - timedelta(days=window_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
     query = quote_plus(company_name)
     # Try max 100 results per page; PR Newswire may cap server-side.
     search_url = (

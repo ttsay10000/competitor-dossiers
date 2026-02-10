@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Tuple
 
 import feedparser
@@ -67,6 +67,6 @@ def collect_press_snapshot(source_url: str) -> dict[str, Any]:
 def build_structured_json(snapshot: dict[str, Any]) -> dict[str, Any]:
     return {
         "source_url": snapshot.get("source_url"),
-        "fetched_at": datetime.utcnow().isoformat(),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
         "items": snapshot.get("items", []),
     }

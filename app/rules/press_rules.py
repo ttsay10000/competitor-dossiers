@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 PARTNER_KEYWORDS = ["partnership", "alliance", "distribution", "channel", "platform"]
@@ -45,5 +45,5 @@ def build_press_event(category: str, item: dict) -> dict:
         "summary": "Press item classified as strategic signal.",
         "why_it_matters": "Indicates a strategic shift based on public narrative.",
         "evidence": {"item": item},
-        "occurred_at": item.get("date") or datetime.utcnow().isoformat(),
+        "occurred_at": item.get("date") or datetime.now(timezone.utc).isoformat(),
     }

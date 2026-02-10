@@ -1,5 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 from sqlalchemy import (
     String,
@@ -19,7 +23,7 @@ class Competitor(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     primary_domain: Mapped[Optional[str]] = mapped_column(String(255))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now, nullable=False)
     # Optional manual baseline for reporting (seed run). When set, dossier
     # summaries and timelines treat this as the comparison start date so that
     # only events/press after this point are considered "new".
@@ -42,7 +46,7 @@ class SourceEndpoint(Base):
     js_required: Mapped[bool] = mapped_column(default=False)
     use_sitemap_first: Mapped[bool] = mapped_column(default=False)
     extra_options: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now, nullable=False)
 
     competitor: Mapped[Competitor] = relationship(back_populates="source_endpoints")
 
@@ -56,7 +60,7 @@ class Snapshot(Base):
     raw_content: Mapped[Optional[str]] = mapped_column(Text)
     raw_hash: Mapped[Optional[str]] = mapped_column(String(128))
     structured_json: Mapped[Optional[dict]] = mapped_column(JSON)
-    captured_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now, nullable=False)
 
 
 class Event(Base):
@@ -72,7 +76,7 @@ class Event(Base):
     why_it_matters: Mapped[Optional[str]] = mapped_column(Text)
     evidence_json: Mapped[Optional[dict]] = mapped_column(JSON)
     occurred_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    detected_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    detected_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now, nullable=False)
 
 
 class Capability(Base):
@@ -81,7 +85,7 @@ class Capability(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     competitor_id: Mapped[int] = mapped_column(ForeignKey("competitors.id"), nullable=False)
     capability: Mapped[str] = mapped_column(String(64), nullable=False)
-    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now, nullable=False)
 
 
 class RunLog(Base):
@@ -93,4 +97,4 @@ class RunLog(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     message: Mapped[Optional[str]] = mapped_column(Text)
     extra_json: Mapped[Optional[dict]] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now, nullable=False)

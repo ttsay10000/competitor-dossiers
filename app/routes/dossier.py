@@ -1,8 +1,8 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 from fastapi import APIRouter, Request
-from fastapi.responses import Response, RedirectResponse
+from fastapi.responses import RedirectResponse
 
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, Snapshot, Capability
@@ -37,7 +37,7 @@ def _parse_press_date(value) -> datetime | None:
         return value
     if isinstance(value, (int, float)):
         try:
-            return datetime.utcfromtimestamp(value / 1000.0)
+            return datetime.fromtimestamp(value / 1000.0, tz=timezone.utc)
         except Exception:
             return None
     if isinstance(value, str):
@@ -90,7 +90,7 @@ def build_recommendations(events: list) -> list[dict]:
 
 
 def build_dossier_context(session, competitor_id: int) -> dict:
-    cutoff = datetime.utcnow() - timedelta(days=90)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
     competitor = session.get(Competitor, competitor_id)
     if competitor is None:
         return {"error": "Competitor not found."}
@@ -204,13 +204,13 @@ def build_dossier_context(session, competitor_id: int) -> dict:
 
     recommendations = build_recommendations(events)
 
-    week_cutoff = datetime.utcnow() - timedelta(days=7)
+    week_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
     events_this_week = [e for e in events if e.detected_at >= week_cutoff]
     events_this_week_dicts = [_event_dict(e) for e in events_this_week]
 
     # Canonical press list for last 90 days, with display-ready date strings, sorted by date published (newest first).
     press_90d = []
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     press_cutoff = now - timedelta(days=90)
     for item in canonical_press:
         dt = _parse_press_date(item.get("date"))
@@ -382,7 +382,7 @@ def build_dossier_context(session, competitor_id: int) -> dict:
 
 def build_summary_context(session, competitor_id: int, days: int = 7) -> dict:
     """Weekly executive summary: high-signal events from last N days, grouped by category."""
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     competitor = session.get(Competitor, competitor_id)
     if competitor is None:
         return {"error": "Competitor not found."}
@@ -467,12 +467,15 @@ def dossier_seed(request: Request, competitor_id: int):
     with get_session() as session:
         competitor = session.get(Competitor, competitor_id)
         if competitor is None:
+            last_refreshed = get_last_refreshed(session)
+            all_competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+            nav_competitors = [{"id": c.id, "name": c.name} for c in all_competitors]
             return request.app.state.templates.TemplateResponse(
                 "dossier.html",
-                {"request": request, "error": "Competitor not found."},
+                {"request": request, "error": "Competitor not found.", "last_refreshed": last_refreshed, "nav_competitors": nav_competitors},
             )
         # Set baseline to "now" so subsequent views only surface post-baseline changes.
-        competitor.reporting_baseline_at = datetime.utcnow()
+        competitor.reporting_baseline_at = datetime.now(timezone.utc)
         session.add(competitor)
         session.commit()
 
@@ -482,23 +485,3 @@ def dossier_seed(request: Request, competitor_id: int):
 
     return RedirectResponse(url=f"/dossier/{competitor_id}", status_code=303)
 
-@router.get("/dossier/{competitor_id}/pdf")
-def dossier_pdf(request: Request, competitor_id: int):
-    from weasyprint import HTML
-
-    with get_session() as session:
-        context = build_dossier_context(session, competitor_id)
-        context["last_refreshed"] = get_last_refreshed(session)
-    if "error" in context:
-        return request.app.state.templates.TemplateResponse(
-            "dossier.html",
-            {"request": request, "error": context["error"]},
-        )
-
-    html_content = request.app.state.templates.TemplateResponse(
-        "dossier.html",
-        {"request": request, **context},
-    ).body.decode("utf-8")
-    pdf = HTML(string=html_content, base_url=str(request.base_url)).write_pdf()
-    filename = f"dossier_{competitor_id}.pdf"
-    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename={filename}"})

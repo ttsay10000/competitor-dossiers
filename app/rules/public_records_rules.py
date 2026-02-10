@@ -1,6 +1,6 @@
 """Rules for public records (trademark, regulatory filings) events."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def build_filing_event(item: dict) -> dict:
@@ -12,5 +12,5 @@ def build_filing_event(item: dict) -> dict:
         "summary": "Public record (trademark, regulatory, or similar) detected.",
         "why_it_matters": "May signal new branding, entity structure, or regulatory activity.",
         "evidence": {"item": item},
-        "occurred_at": item.get("date") or datetime.utcnow().isoformat(),
+        "occurred_at": item.get("date") or datetime.now(timezone.utc).isoformat(),
     }
