@@ -84,6 +84,11 @@ def _is_junk_property_link(link_text: str, href: str) -> bool:
         return True
     if re.match(r"^(see all|view all)\s", text) and ("blog" in text or "location" in text):
         return True
+    # Generic "All properties/locations" navigation links (e.g. Placemakr city-level pages) — not individual assets.
+    if text in ("all properties", "all locations"):
+        return True
+    if text.startswith("all ") and ("properties" in text or "locations" in text):
+        return True
     return False
 
 
@@ -534,16 +539,45 @@ def _is_detail_line_or_junk_name(name: str) -> bool:
 
 
 def normalize_properties(properties: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    normalized = []
+    """
+    Normalize property dicts and deduplicate by URL (and by name/market when URL is missing).
+
+    This keeps counts aligned with the real number of distinct properties on a page
+    (e.g. Placemakr's locations, which have multiple links like "All Properties", CTAs, etc.).
+    """
+    normalized: list[dict[str, Any]] = []
+    seen_url_keys: set[str] = set()
+    seen_name_market: set[tuple[str, str]] = set()
+
+    def _url_key(url: Optional[str]) -> str:
+        if not url:
+            return ""
+        u = (url or "").strip().rstrip("/").lower()
+        return u.split("?")[0]
+
     for prop in properties:
         name = (prop.get("name") or "").strip()
         if _is_detail_line_or_junk_name(name):
             continue
+
+        raw_url = prop.get("url")
+        market_val = (prop.get("market") or "").strip() or None
+        key = _url_key(raw_url)
+        if key:
+            if key in seen_url_keys:
+                continue
+            seen_url_keys.add(key)
+        else:
+            nm = (name, market_val or "")
+            if nm in seen_name_market:
+                continue
+            seen_name_market.add(nm)
+
         normalized.append(
             {
-                "url": prop.get("url"),
+                "url": raw_url,
                 "name": name,
-                "market": (prop.get("market") or "").strip() or None,
+                "market": market_val,
                 "state": (prop.get("state") or "").strip() or None,
                 "city": (prop.get("city") or "").strip() or None,
                 "status": (prop.get("status") or "").strip() or None,

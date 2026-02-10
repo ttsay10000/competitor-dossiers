@@ -54,17 +54,7 @@
       {% endif %}
     </div>
 
-    <!-- 4. Summary of business points -->
-    <div class="card">
-      <strong>Summary of business points</strong>
-      <ul style="margin: 0; padding-left: 20px;">
-        {% for point in summary_business_points %}
-        <li>{{ point }}</li>
-        {% endfor %}
-      </ul>
-    </div>
-
-    <!-- 5. Properties by location (state/city) + week-over-week vs baseline -->
+    <!-- 4. Properties by location (state/city) + week-over-week vs baseline -->
     <div class="card">
       <strong>Properties by location</strong>
       <p class="meta">From latest asset pull: current counts by state or city. Any notable adds/removals are summarized in At a glance above.</p>
@@ -75,7 +65,7 @@
         <ul style="margin: 0; padding-left: 20px;">
           {% for row in properties_by_location %}
           <li>
-            <strong>{{ row.location }}</strong> – {{ row.count }} propert{{ 'ies' if row.count != 1 else 'y' }}{% if row.get('keys') %} ({{ row.keys }} keys){% endif %}
+            <strong>{{ row.location }}</strong> – {{ row.count }} propert{{ 'ies' if row.count != 1 else 'y' }}{% if row.get('keys') %} ({{ row["keys"] }} keys){% endif %}
             {% if row.location == 'Other' and other_properties_display|length %}
               <ul style="margin: 4px 0 0 0; padding-left: 20px;">
                 {% for op in other_properties_display %}

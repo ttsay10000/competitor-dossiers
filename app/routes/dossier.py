@@ -167,19 +167,6 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     candidates.sort(key=lambda x: -x[0])
     top_news = [item for _, item in candidates[:5]]
 
-    # Summary of business points (bullets for at-a-glance).
-    summary_business_points = []
-    if markets:
-        summary_business_points.append("Markets: " + ", ".join(markets))
-    if capabilities:
-        summary_business_points.append("Capabilities: " + ", ".join(c.capability for c in capabilities))
-    if any(e.get("type") == "asset.new_market" for e in events_this_week_dicts):
-        summary_business_points.append("New market(s) added this week.")
-    if any(e.get("type", "").startswith("talent.") for e in events_this_week_dicts):
-        summary_business_points.append("Talent activity this week.")
-    if not summary_business_points:
-        summary_business_points.append("No major business updates in the last 90 days.")
-
     # Properties by location (state/city) for high-level week-over-week tracking.
     # Aggregate count and total keys per location (keys parsed from property details).
     location_counts = {}
@@ -278,7 +265,6 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         "recommendations": recommendations,
         "events_this_week": events_this_week_dicts,
         "top_news": top_news,
-        "summary_business_points": summary_business_points,
         "properties_by_location": properties_by_location,
         "properties_by_location_with_list": properties_by_location_with_list,
         "total_properties": total_properties,
