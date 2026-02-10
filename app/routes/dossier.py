@@ -59,14 +59,16 @@ def _parse_press_date(value) -> datetime | None:
 
 def _event_dict(e) -> dict:
     """Serializable event for templates (avoids DetachedInstanceError)."""
+    detected = e.detected_at.strftime("%Y-%m-%d") if getattr(e, "detected_at", None) else None
+    occurred = e.occurred_at.strftime("%Y-%m-%d") if getattr(e, "occurred_at", None) else None
     return {
         "title": e.title,
         "summary": e.summary,
         "severity": e.severity,
         "category": e.category,
         "type": e.type,
-        "detected_at_str": e.detected_at.strftime("%Y-%m-%d"),
-        "occurred_at_str": e.occurred_at.strftime("%Y-%m-%d") if e.occurred_at else None,
+        "detected_at_str": detected,
+        "occurred_at_str": occurred,
         "why_it_matters": e.why_it_matters,
         "evidence_json": e.evidence_json,
     }
@@ -256,13 +258,14 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         dt = _parse_press_date(item.get("date"))
         recency_score = 5 if (dt and dt >= week_cutoff_pub) else 0  # last 7 days boost
         score = source_score + topic_score + recency_score
-        sort_dt = dt or datetime.min.replace(tzinfo=dt.tzinfo if dt else None)
-        return (score, sort_dt)
+        # Use timestamp for sort to avoid mixing naive/aware datetimes (TypeError on some pages)
+        ts = dt.timestamp() if dt else 0.0
+        return (score, ts)
 
     pool_scored = []
     for item in pool:
-        score, sort_dt = _newsworthiness_score(item)
-        pool_scored.append((score, sort_dt, item))
+        score, ts = _newsworthiness_score(item)
+        pool_scored.append((score, ts, item))
     # Highest newsworthiness first; within same score, newest date first
     pool_scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
     top_news = [item for _, _, item in pool_scored[:5]]

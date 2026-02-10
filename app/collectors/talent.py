@@ -3,6 +3,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+import requests
 from bs4 import BeautifulSoup
 
 from .http import fetch_url, fetch_url_js
@@ -266,7 +267,10 @@ def collect_talent_snapshot(source_url: str) -> dict[str, Any]:
         api_url = lever_jobs_api(source_url)
         if api_url:
             try:
-                fetched = fetch_url(api_url)
+                try:
+                    fetched = fetch_url(api_url, timeout=45)
+                except requests.exceptions.Timeout:
+                    fetched = fetch_url(api_url, timeout=60)
                 payload = json.loads(fetched.text)
                 jobs = extract_lever_jobs(payload)
                 return {
@@ -285,7 +289,7 @@ def collect_talent_snapshot(source_url: str) -> dict[str, Any]:
         api_url = greenhouse_jobs_api(source_url)
         if api_url:
             try:
-                fetched = fetch_url(api_url)
+                fetched = fetch_url(api_url, timeout=45)
                 payload = json.loads(fetched.text)
                 jobs = extract_greenhouse_jobs(payload.get("jobs", payload))
                 return {
@@ -304,7 +308,7 @@ def collect_talent_snapshot(source_url: str) -> dict[str, Any]:
         api_url = ashby_jobs_api(source_url)
         if api_url:
             try:
-                fetched = fetch_url(api_url)
+                fetched = fetch_url(api_url, timeout=45)
                 data = json.loads(fetched.text)
                 raw_jobs = data.get("jobs", [])
                 jobs = extract_ashby_jobs(raw_jobs)
