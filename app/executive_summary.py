@@ -7,6 +7,53 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
+# Hard caps so exec summary stays one fast LLM call; can relax after baseline redo.
+MAX_LOCATION_ROWS_FOR_SUMMARY = 25
+MAX_EVENTS_FOR_SUMMARY = 8
+MAX_NEWS_FOR_SUMMARY = 5
+MAX_DELTA_BY_CITY_ROWS = 10
+
+# US state full names for state-level aggregation (no LLM).
+_US_STATES = frozenset({
+    "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut",
+    "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa",
+    "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan",
+    "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire",
+    "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio",
+    "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota",
+    "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington", "Washington DC",
+    "West Virginia", "Wisconsin", "Wyoming",
+})
+
+
+def _location_label_to_state(loc: str) -> str:
+    """Map a location label (e.g. 'California - Palm Springs' or 'Texas') to state for aggregation."""
+    s = (loc or "").strip()
+    if not s:
+        return "Other"
+    if s in _US_STATES or s == "Other":
+        return s
+    if " - " in s:
+        part = s.split(" - ", 1)[0].strip()
+        if part in _US_STATES:
+            return part
+    return "Other"
+
+
+def _aggregate_properties_by_state(properties_by_location: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Aggregate location rows to state-level (location = state name, count/keys summed). One row per state."""
+    by_state: Dict[str, Dict[str, Any]] = {}
+    for r in properties_by_location:
+        loc = r.get("location", "")
+        state = _location_label_to_state(loc)
+        count = int(r.get("count") or 0)
+        keys = int(r.get("keys") or 0)
+        if state not in by_state:
+            by_state[state] = {"location": state, "count": 0, "keys": 0}
+        by_state[state]["count"] += count
+        by_state[state]["keys"] += keys
+    return sorted(by_state.values(), key=lambda x: (-x["count"], x["location"]))
+
 
 def _build_context_text(context: Dict[str, Any]) -> str:
     """Turn dossier context into a concise text block for the LLM."""
@@ -39,15 +86,15 @@ def _build_context_text(context: Dict[str, Any]) -> str:
     else:
         parts.append("Talent: no job data in current snapshot.")
 
-    # Events this week (titles only)
+    # Events this week (titles only) — capped for exec summary speed
     events_week = context.get("events_this_week") or []
     if events_week:
-        event_titles = [e.get("title", "") for e in events_week if e.get("title")]
-        parts.append("Events detected this week: " + "; ".join(event_titles[:15]))
+        event_titles = [e.get("title", "") for e in events_week[:MAX_EVENTS_FOR_SUMMARY] if e.get("title")]
+        parts.append("Events detected this week: " + "; ".join(event_titles))
     else:
         parts.append("Events this week: none.")
 
-    # Assets: baseline delta and by location
+    # Assets: baseline delta and by location — state-level topline only, hard caps
     added = context.get("asset_added_since_baseline") or 0
     removed = context.get("asset_removed_since_baseline") or 0
     baseline_date = context.get("asset_baseline_date")
@@ -59,23 +106,25 @@ def _build_context_text(context: Dict[str, Any]) -> str:
             f"Properties vs baseline ({baseline_date}): {added} added, {removed} removed."
         )
     if delta_by_city:
-        loc_changes = [f"{r['location']}: +{r['added']}/−{r['removed']}" for r in delta_by_city[:15]]
+        loc_changes = [f"{r['location']}: +{r['added']}/−{r['removed']}" for r in delta_by_city[:MAX_DELTA_BY_CITY_ROWS]]
         parts.append("By location (adds/removals): " + "; ".join(loc_changes))
     if props_by_loc:
+        # State-level aggregation so LLM gets topline (location = state, counts) in one call
+        state_rows = _aggregate_properties_by_state(props_by_loc)
         loc_lines = []
-        for r in props_by_loc[:15]:
+        for r in state_rows[:MAX_LOCATION_ROWS_FOR_SUMMARY]:
             loc, count, keys = r.get("location", ""), r.get("count", 0), r.get("keys", 0)
             if keys and keys > 0:
                 loc_lines.append(f"{loc}: {count} properties ({keys} keys)")
             else:
                 loc_lines.append(f"{loc}: {count} properties")
-        parts.append("Current properties by location (use this format in output): " + "; ".join(loc_lines))
+        parts.append("Current properties by location (state-level topline; use this format in output): " + "; ".join(loc_lines))
 
-    # Top news headlines (with date when available)
+    # Top news headlines — capped
     top_news = context.get("top_news") or []
     if top_news:
         lines = []
-        for n in top_news:
+        for n in top_news[:MAX_NEWS_FOR_SUMMARY]:
             title = (n.get("title") or "Untitled")[:80]
             date_str = n.get("date")
             lines.append(f"({date_str}) {title}" if date_str else title)

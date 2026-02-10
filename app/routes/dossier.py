@@ -559,12 +559,13 @@ def dossier_properties_by_location(competitor_id: int):
 
 @router.get("/dossier/{competitor_id}/executive-summary")
 def dossier_executive_summary(competitor_id: int):
-    """Lazy-loaded executive summary (JSON). Cached by context so repeat requests are fast."""
+    """Lazy-loaded executive summary (JSON). One LLM call only; uses URL-derived locations and state-level topline."""
     from ..config import settings
     if not settings.openai_api_key:
         return {"summary": None, "error": "OPENAI_API_KEY not set"}
     with get_session() as session:
-        context = build_dossier_context(session, competitor_id)
+        # Skip property/location LLM so we do exactly one call (summary). State-level aggregation in executive_summary.
+        context = build_dossier_context(session, competitor_id, skip_property_llm=True)
     if "error" in context:
         return {"summary": None, "error": context["error"]}
     cache_key = _exec_summary_cache_key(competitor_id, context)

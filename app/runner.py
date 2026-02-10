@@ -241,9 +241,14 @@ def _endpoints_ordered(endpoints: list[SourceEndpoint]) -> list[SourceEndpoint]:
     return sorted(endpoints, key=lambda e: e.id)
 
 
-def run_talent() -> None:
+def run_talent(competitor_name: Optional[str] = None) -> None:
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        if competitor_name:
+            competitors = [c for c in competitors if c.name.strip().lower() == competitor_name.strip().lower()]
+            if not competitors:
+                log_event("competitor_not_found", competitor_filter=competitor_name)
+                return
         for competitor in competitors:
             endpoints_ordered = _endpoints_ordered([
                 e for e in competitor.source_endpoints if e.channel == "talent"
@@ -436,9 +441,14 @@ def run_talent() -> None:
             )
 
 
-def run_asset() -> None:
+def run_asset(competitor_name: Optional[str] = None) -> None:
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        if competitor_name:
+            competitors = [c for c in competitors if c.name.strip().lower() == competitor_name.strip().lower()]
+            if not competitors:
+                log_event("competitor_not_found", competitor_filter=competitor_name)
+                return
         for competitor in competitors:
             endpoints_ordered = _endpoints_ordered([
                 e for e in competitor.source_endpoints if e.channel == "asset"
@@ -601,9 +611,14 @@ def run_asset() -> None:
             )
 
 
-def run_press() -> None:
+def run_press(competitor_name: Optional[str] = None) -> None:
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        if competitor_name:
+            competitors = [c for c in competitors if c.name.strip().lower() == competitor_name.strip().lower()]
+            if not competitors:
+                log_event("competitor_not_found", competitor_filter=competitor_name)
+                return
         for competitor in competitors:
             endpoints = [
                 endpoint
@@ -615,6 +630,15 @@ def run_press() -> None:
                 f"[{datetime.now(timezone.utc).isoformat()}] press run: {competitor.name} "
                 f"({len(endpoints)} endpoint(s))"
             )
+
+            # Optional press search name for external sources (Google News, PR Newswire, etc.).
+            # Use when display name is ambiguous (e.g. "Lark") but press uses a fuller name ("Lark Hotels").
+            press_search_name = competitor.name
+            for ep in endpoints:
+                opts = getattr(ep, "extra_options", None) if ep else None
+                if isinstance(opts, dict) and opts.get("press_search_name"):
+                    press_search_name = (opts.get("press_search_name") or "").strip() or press_search_name
+                    break
 
             # 1) Primary: user-provided company news links (saved in DB on Add company / Add Source).
             #    These run first and are highest priority for dedup (e.g. Lark company news page).
@@ -659,7 +683,7 @@ def run_press() -> None:
             window_days = 120
             try:
                 prn_items = collect_prnewswire_items(
-                    competitor.name,
+                    press_search_name,
                     max_items=100,
                     window_days=window_days,
                 )
@@ -673,7 +697,7 @@ def run_press() -> None:
             if settings.press_enable_business_insider:
                 try:
                     bi_items = collect_business_insider_items(
-                        competitor.name,
+                        press_search_name,
                         max_items=max_per_source,
                         window_days=window_days,
                     )
@@ -701,7 +725,7 @@ def run_press() -> None:
             if settings.press_enable_cnbc:
                 try:
                     cnbc_items = collect_cnbc_items(
-                        competitor.name,
+                        press_search_name,
                         max_items=max_per_source,
                         window_days=window_days,
                     )
@@ -715,20 +739,20 @@ def run_press() -> None:
             if getattr(settings, "press_enable_google_news", True):
                 try:
                     gn_items = collect_google_news_items(
-                        competitor.name,
+                        press_search_name,
                         max_items=max_per_source,
                         window_days=window_days,
                     )
                     raw_items.extend(gn_items)
                     if gn_items:
                         source_meta.append({"type": "google_news"})
-                    elif competitor.name:
+                    elif press_search_name:
                         print(
-                            f"[press] Google News returned 0 items for {competitor.name!r} "
+                            f"[press] Google News returned 0 items for {press_search_name!r} "
                             "(RSS may omit articles that don't use the exact quoted phrase; fallback by first word is used when possible)"
                         )
                 except Exception as e:
-                    print(f"[press] Google News failed for {competitor.name!r}: {e}")
+                    print(f"[press] Google News failed for {press_search_name!r}: {e}")
 
             if not raw_items:
                 log_run(
@@ -874,9 +898,14 @@ def run_press() -> None:
             )
 
 
-def run_homepage() -> None:
+def run_homepage(competitor_name: Optional[str] = None) -> None:
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        if competitor_name:
+            competitors = [c for c in competitors if c.name.strip().lower() == competitor_name.strip().lower()]
+            if not competitors:
+                log_event("competitor_not_found", competitor_filter=competitor_name)
+                return
         for competitor in competitors:
             endpoints = [
                 ep
@@ -953,9 +982,14 @@ def run_homepage() -> None:
                 )
 
 
-def run_public_records() -> None:
+def run_public_records(competitor_name: Optional[str] = None) -> None:
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        if competitor_name:
+            competitors = [c for c in competitors if c.name.strip().lower() == competitor_name.strip().lower()]
+            if not competitors:
+                log_event("competitor_not_found", competitor_filter=competitor_name)
+                return
         for competitor in competitors:
             endpoints = [
                 ep
@@ -1039,18 +1073,18 @@ def advance_baseline_after_full_refresh() -> None:
             c.reporting_baseline_at = now
 
 
-def run(channel: Optional[str] = None) -> None:
+def run(channel: Optional[str] = None, competitor_name: Optional[str] = None) -> None:
     if channel in (None, *RUNNER_CHANNELS):
         if channel in (None, "talent"):
-            run_talent()
+            run_talent(competitor_name=competitor_name)
         if channel in (None, "asset"):
-            run_asset()
+            run_asset(competitor_name=competitor_name)
         if channel in (None, "press"):
-            run_press()
+            run_press(competitor_name=competitor_name)
         if channel in (None, "homepage"):
-            run_homepage()
+            run_homepage(competitor_name=competitor_name)
         if channel in (None, "public_records"):
-            run_public_records()
+            run_public_records(competitor_name=competitor_name)
     if channel is not None and channel not in RUNNER_CHANNELS:
         print(f"[{datetime.now(timezone.utc).isoformat()}] unknown channel: {channel}")
 

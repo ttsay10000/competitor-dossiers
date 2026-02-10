@@ -365,12 +365,11 @@ def collect_google_news_items(
     published/published_parsed; never fetch time).
 
     Uses Google News RSS: when:1m for <=31 days, when:6m for longer windows.
-    If the company name has multiple words (e.g. "Lark Hotels") and the quoted
-    phrase returns 0 results, we retry with only the first word in quotes
-    (e.g. "Lark") so articles that refer to the brand without the full name
-    (e.g. "Lark Expands with Four New Hotels") are still picked up. Downstream
-    LLM classification filters irrelevant matches. Company blog links are
-    filtered out by the pipeline (company_domains).
+    For multi-word names (e.g. "Lark Hotels") we fetch both the full phrase and
+    the first word ("Lark") and merge so we get headlines that use either
+    (e.g. "Lark appoints...", "Lark Hotels to open..."). Downstream LLM
+    classification filters irrelevant matches. Company blog links are filtered
+    out by the pipeline (company_domains).
     """
     company_name = (company_name or "").strip()
     if not company_name:
@@ -380,14 +379,19 @@ def collect_google_news_items(
     when_param = "when:6m" if window_days > 31 else "when:1m"
 
     results = _fetch_google_news_rss(company_name, when_param, max_items, cutoff)
+    seen_urls = {item["url"] for item in results}
 
-    # Fallback: multi-word names often appear as just the first word in headlines
-    # (e.g. "Lark Expands...", "Lark Appoints..."). If the full quoted phrase
-    # returns nothing, try the first word so we don't miss relevant articles.
-    if not results and " " in company_name:
+    # Multi-word names: also fetch with first word and merge. Many headlines use
+    # only the brand (e.g. "Lark appoints...", "Lark Expands...") while others use
+    # the full name ("Lark Hotels renews..."). We want both, not only one.
+    if " " in company_name:
         first_word = company_name.split()[0].strip()
-        if first_word:
-            results = _fetch_google_news_rss(first_word, when_param, max_items, cutoff)
+        if first_word and first_word.lower() != company_name.lower():
+            extra = _fetch_google_news_rss(first_word, when_param, max_items, cutoff)
+            for item in extra:
+                if item["url"] not in seen_urls and len(results) < max_items:
+                    seen_urls.add(item["url"])
+                    results.append(item)
 
     # Supplementary: partnership/deal stories often appear under "X partnership" or
     # "X partners with Y" and can be ranked differently. Fetch with quoted "Company partnership"

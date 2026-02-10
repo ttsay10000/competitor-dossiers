@@ -7,6 +7,8 @@
 #   ./scripts/run.sh talent             # run talent only
 #   ./scripts/run.sh press              # run press only
 #   ./scripts/run.sh asset              # run asset only
+#   ./scripts/run.sh asset Lark         # run asset only for Lark (separate process; use if Lark overlaps AvantStay)
+#   ./scripts/run.sh asset AvantStay    # run asset only for AvantStay
 #   ./scripts/run.sh seed               # run seed (competitors + sources)
 #   ./scripts/run.sh serve               # start web server (uvicorn)
 #   ./scripts/run.sh migrate             # run alembic upgrade head
@@ -54,10 +56,14 @@ case "$CMD" in
     exec "$PYTHON" -m app.seed
     ;;
   talent|asset|press|homepage|public_records|all)
-    exec "$PYTHON" -m app.cli --channel "$CMD"
+    if [ -n "${2:-}" ]; then
+      exec "$PYTHON" -m app.cli --channel "$CMD" --competitor "$2"
+    else
+      exec "$PYTHON" -m app.cli --channel "$CMD"
+    fi
     ;;
   *)
-    echo "Usage: $0 [talent|asset|press|homepage|public_records|all|seed|serve|migrate]"
+    echo "Usage: $0 [talent|asset|press|homepage|public_records|all|seed|serve|migrate] [competitor_name]"
     echo "  default: all (run all channels)"
     exit 1
     ;;

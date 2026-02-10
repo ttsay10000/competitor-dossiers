@@ -107,7 +107,7 @@ The asset collector supports a **generic flow** so each source can try several s
 |-------------|-------------------------------|--------------------------|------------------------------|
 | **Placemakr** | placemakr.com/locations     | `["html"]`, min 1       | One strategy: fetch HTML, scrape property-like links. Fast, no discovery. |
 | **AvantStay**  | avantstay.com/search        | Chain: `["sitemap_first", "html"]`, min 5 | Try sitemap first; if ≥ 5, accept. Else HTML (search page + optional LLM). Works without Playwright. |
-| **Lark**      | larkhospitality.com/portfolio/ | Chain: `["js_exhaust", "sitemap_first", "html"]`, min 5 | Try **js_exhaust** first (Playwright + “Load more” + Lark blocks). If ≥ 5, accept. Else sitemap, then html. |
+| **Lark**      | larkhospitality.com/portfolio/ | `strategy: "js_exhaust"` | Single strategy: Playwright + Load more + Lark blocks (~69 properties). No chain fallback. |
 | **Any new competitor** | (your URL)              | Default chain: `["sitemap_first", "js_exhaust", "html"]`, min 5 | No config needed: we try sitemap → js_exhaust → html and accept the first result with ≥ 5 properties. |
 
 **Why a single global order (e.g. html → js → sitemap) is not used:** For AvantStay, HTML of the search page can return a handful of links; we’d wrongly “succeed” and never try sitemap. So the **order is per source** when you set a chain; for **unknown** sources the default chain tries sitemap first, then JS, then HTML.
@@ -138,7 +138,8 @@ So:
 1. Run asset only: `python -m app.cli --channel asset`.
 2. In **Runs**, confirm success and that we’re not erroring on a given URL.
 3. AvantStay uses sitemap-first (no Playwright required); Lark uses js_exhaust and needs Playwright for full “Load more” + block extraction. If Lark returns 0 properties, ensure `PLAYWRIGHT_ENABLED=true` and re-run asset.
-4. Run asset at least twice (e.g. once now, once after a day) so diffs can produce events.
+4. **Lark and AvantStay in the same process:** Running asset for all competitors in one go can sometimes cause Lark to fail or return 0 properties (e.g. Playwright/memory when AvantStay's run precedes Lark). Lark is configured with a **single** strategy (`strategy: "js_exhaust"`) only—no `strategy_chain`—so it never falls back to sitemap/html. If Lark is flaky when run with others, run asset in **separate processes** per competitor: `./scripts/run.sh asset Placemakr`, `./scripts/run.sh asset AvantStay`, `./scripts/run.sh asset Lark`.
+5. Run asset at least twice (e.g. once now, once after a day) so diffs can produce events.
 
 ---
 

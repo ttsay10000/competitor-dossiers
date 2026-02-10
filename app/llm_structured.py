@@ -151,8 +151,12 @@ def enrich_properties_with_llm(
     if not client:
         return working
 
-    # Batch up to 100 to stay within context
-    batch = working[:100]
+    # Keep batch small for speed; skip page text when property count is large to avoid huge context.
+    _ENRICH_BATCH_SIZE = 50
+    _ENRICH_SKIP_RAW_CONTENT_ABOVE = 250
+    use_raw = bool(raw_content and raw_content.strip() and len(working) <= _ENRICH_SKIP_RAW_CONTENT_ABOVE)
+
+    batch = working[:_ENRICH_BATCH_SIZE]
     lines = []
     for i, p in enumerate(batch):
         url = (p.get("url") or "").strip()
@@ -160,7 +164,7 @@ def enrich_properties_with_llm(
         market = (p.get("market") or "").strip()
         lines.append(f"{i}: url={url!r} name={name!r} market={market!r}")
 
-    if raw_content and raw_content.strip():
+    if use_raw:
         # LLM reads raw page and assigns state (and optional city) from page context
         page_text = _html_to_text_for_enricher(raw_content.strip())
         system = """You are a data enricher for US real estate/hospitality property lists. Locations will be summarized by state only.

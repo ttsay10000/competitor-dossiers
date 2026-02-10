@@ -19,6 +19,18 @@ def main() -> None:
         action="store_true",
         help="Print weekly digest (last 7 days)",
     )
+    parser.add_argument(
+        "--competitor",
+        type=str,
+        default=None,
+        metavar="NAME",
+        help="Run only for this competitor (e.g. Lark, AvantStay, Placemakr). Use with --channel to avoid overlap issues.",
+    )
+    parser.add_argument(
+        "--seed",
+        action="store_true",
+        help="Run seed (update competitors/sources from seed.py) before channels. Use after changing seed.py.",
+    )
     args = parser.parse_args()
 
     try:
@@ -31,10 +43,14 @@ def main() -> None:
         print_weekly_digest()
         return
 
+    if args.seed:
+        from .seed import run_seed
+        run_seed()
+
     channel = None if args.channel == "all" else args.channel
-    run(channel=channel)
-    # After a full refresh, advance comparison baseline so next summary = "since last run".
-    if channel is None:
+    run(channel=channel, competitor_name=args.competitor)
+    # After a full refresh (all channels, all competitors), advance comparison baseline.
+    if channel is None and args.competitor is None:
         advance_baseline_after_full_refresh()
 
 

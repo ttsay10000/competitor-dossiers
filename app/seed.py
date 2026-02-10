@@ -41,6 +41,9 @@ SEED_COMPETITORS = [
             {"channel": "press", "url": "https://avantstay.com/blog/", "confidence": "high"},
         ],
     },
+    # Lark: single strategy "js_exhaust" only (no strategy_chain). Running Lark in the same
+    # process as Avantstay can cause flakiness (e.g. Playwright/memory); run asset separately
+    # per competitor when needed (e.g. --competitor Lark).
     {
         "name": "Lark",
         "primary_domain": "larkhospitality.com",
@@ -52,8 +55,7 @@ SEED_COMPETITORS = [
                 "confidence": "high",
                 "js_required": True,
                 "extra_options": {
-                    "strategy_chain": ["js_exhaust", "sitemap_first", "html"],
-                    "min_properties_accept": 5,
+                    "strategy": "js_exhaust",
                     "load_more": {
                         "click_selector": [
                             "button:has-text('Load more')",
@@ -75,7 +77,12 @@ SEED_COMPETITORS = [
                     "llm_extract": True,
                 },
             },
-            {"channel": "press", "url": "https://www.larkhospitality.com/press/", "confidence": "high"},
+            {
+                "channel": "press",
+                "url": "https://www.larkhospitality.com/press/",
+                "confidence": "high",
+                "extra_options": {"press_search_name": "Lark Hotels"},
+            },
         ],
     },
 ]
