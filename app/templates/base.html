@@ -12,12 +12,12 @@
   <title>Competitor Signals</title>
   <style>
     :root {
-      --bg: #f5eee4;
+      --bg: #071232;
       --card: #ffffff;
-      --text: #1d1c1a;
-      --muted: #6b6863;
+      --text: #e8e6e3;
+      --muted: #9a9792;
       --accent: #1f5b4f;
-      --border: #e0d7ce;
+      --border: #2a3560;
     }
     * { box-sizing: border-box; }
     body {
@@ -25,7 +25,7 @@
       font-family: "Minion Pro", "Minion", "EB Garamond", "Georgia", "Times New Roman", serif;
       font-size: 15px;
       line-height: 1.6;
-      background: radial-gradient(circle at top left, var(--bg), #e6ded3);
+      background: #071232;
       color: var(--text);
     }
 
@@ -62,16 +62,31 @@
       letter-spacing: 0.04em;
       text-transform: uppercase;
     }
+    .card-section-title {
+      display: block;
+      font-size: 14px;
+      font-weight: 600;
+      margin: 4px 0 2px 0;
+      letter-spacing: 0.03em;
+    }
     header {
       display: flex;
       align-items: center;
       justify-content: space-between;
       padding: 20px 32px;
       border-bottom: 1px solid var(--border);
-      background: rgba(255, 255, 255, 0.8);
+      background: rgba(7, 18, 50, 0.95);
       backdrop-filter: blur(6px);
       position: sticky;
       top: 0;
+    }
+    .header-left {
+      display: flex;
+      flex-direction: column;
+    }
+    .header-center-logo img {
+      display: block;
+      height: 26px;
     }
     nav a {
       margin-right: 16px;
@@ -156,17 +171,20 @@
       color: var(--text);
     }
     @media (max-width: 700px) {
-      header { flex-direction: column; align-items: flex-start; gap: 8px; }
+      header { flex-direction: column; align-items: center; gap: 8px; }
     }
   </style>
 </head>
 <body>
   <header>
-    <div>
+    <div class="header-left">
       <strong>Competitor Signals</strong>
       <span class="meta" style="display: block; margin-top: 4px;">
         Data last refreshed: {% if last_refreshed %}{{ last_refreshed.strftime('%Y-%m-%d %H:%M') }} UTC{% else %}—{% endif %}
       </span>
+    </div>
+    <div class="header-center-logo">
+      <img src="/static/kasa-logo.png" alt="Kasa logo">
     </div>
     <nav style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
       <a href="/competitors">Dossiers</a>

@@ -6,6 +6,9 @@
     <h1>{{ competitor.name }} Dossier</h1>
     <div style="margin-bottom: 12px;">
       <a href="/dossier/{{ competitor.id }}/pdf"><button>Export PDF</button></a>
+      <form method="post" action="/dossier/{{ competitor.id }}/seed" style="display: inline-block; margin-left: 8px;">
+        <button type="submit">Reset baseline & refresh</button>
+      </form>
     </div>
 
     <!-- 0. AI-generated executive summary (recent changes in bullets) -->
@@ -19,19 +22,29 @@
       {% endif %}
     </div>
 
-    <!-- 3. Top news (5 most relevant articles) -->
+    <!-- 3. Top news (up to 5 by date: last week first, else last 5 strong business in 90d) -->
     <div class="card">
       <strong>Top news</strong>
-      <p class="meta">Up to 5 most relevant business stories (fundraising, partnerships, openings) with links and 1-line summaries, deduped across sources.</p>
+      <p class="meta">Up to 5 most relevant business stories by date published (last 7 days if any; otherwise most recent in 90 days).</p>
       {% if top_news|length %}
         <ul style="margin: 0; padding-left: 20px;">
           {% for item in top_news %}
           <li>
+            {% if item.get('date') %}<span class="meta" style="font-weight: 500;">{{ item.date }}</span> — {% endif %}
             <a href="{{ item.get('url') or item.get('link') }}" target="_blank" rel="noopener">{{ item.get('title') or 'Article' }}</a>
-            {% if item.get('date') %}<span class="meta"> · {{ item.date }}</span>{% endif %}
-            {% if item.get('summary') %}
-              <div class="meta">{{ item.summary }}</div>
-            {% endif %}
+            <div class="meta">
+              {% if item.get('topic') %}
+                <strong style="font-size: 11px; text-transform: uppercase;">{{ item.topic.replace('_', ' ') }}</strong>
+              {% endif %}
+              {% if item.get('outlet') %}
+                {% if item.get('topic') %} · {% endif %}
+                {{ item.outlet }}
+              {% endif %}
+              {% if item.get('summary') %}
+                {% if item.get('topic') or item.get('outlet') %} · {% endif %}
+                {{ item.summary }}
+              {% endif %}
+            </div>
           </li>
           {% endfor %}
         </ul>
@@ -74,7 +87,7 @@
       {% if talent_jobs|length %}
         <div class="meta" style="margin-bottom: 10px;">{{ talent_jobs|length }} total role{{ 's' if talent_jobs|length != 1 else '' }}.</div>
         <div style="margin-bottom: 12px;">
-          <strong style="font-size: 13px;">Business & strategy</strong>
+          <strong class="card-section-title">Business & strategy</strong>
           <p class="meta" style="margin: 2px 0 6px 0;">Market managers, strategy, growth, product, engineering, etc.</p>
           {% if jobs_by_function|length %}
             <ul style="margin: 0; padding-left: 20px;">
@@ -87,7 +100,7 @@
           {% endif %}
         </div>
         <div>
-          <strong style="font-size: 13px;">Property operations</strong>
+          <strong class="card-section-title">Property operations</strong>
           <p class="meta" style="margin: 2px 0 6px 0;">Front desk, housekeeping, F&B, maintenance—on-property roles.</p>
           {% if jobs_by_function_property|length %}
             <ul style="margin: 0; padding-left: 20px;">
@@ -107,21 +120,26 @@
     <!-- 7. Press (past 90 days) -->
     <div class="card">
       <strong>Press (past 90 days)</strong>
-      <p class="meta">Business-focused news only; deduped, with links and 1-line summaries.</p>
+      <p class="meta">Business-focused news only; deduped, with links, sources, and 1-line summaries.</p>
       {% if press_90d|length %}
         <ul style="margin: 0; padding-left: 20px;">
           {% for item in press_90d %}
           <li>
+            {% if item.get('date') %}<span class="meta" style="font-weight: 500;">{{ item.date }}</span> — {% endif %}
             <a href="{{ item.get('url') or item.get('link') }}" target="_blank" rel="noopener">{{ item.get('title') or 'Article' }}</a>
-            {% if item.get('date') %}<span class="meta"> · {{ item.date }}</span>{% endif %}
-            {% if item.get('summary') %}
-              <div class="meta">
-                {% if item.get('topic') %}
-                  <strong style="font-size: 11px; text-transform: uppercase;">{{ item.topic.replace('_', ' ') }}</strong> ·
-                {% endif %}
+            <div class="meta">
+              {% if item.get('topic') %}
+                <strong style="font-size: 11px; text-transform: uppercase;">{{ item.topic.replace('_', ' ') }}</strong>
+              {% endif %}
+              {% if item.get('outlet') %}
+                {% if item.get('topic') %} · {% endif %}
+                {{ item.outlet }}
+              {% endif %}
+              {% if item.get('summary') %}
+                {% if item.get('topic') or item.get('outlet') %} · {% endif %}
                 {{ item.summary }}
-              </div>
-            {% endif %}
+              {% endif %}
+            </div>
           </li>
           {% endfor %}
         </ul>
@@ -137,7 +155,7 @@
         {% for event in events %}
         <div class="card sev-{{ event.severity }}" style="margin-top: 8px;">
           <div><strong>{{ event.title }}</strong></div>
-          <div class="meta">{{ event.category }} · {{ event.type }} · {{ event.detected_at_str }}</div>
+          <div class="meta">{{ event.occurred_at_str or event.detected_at_str }} · {{ event.category }} · {{ event.type }}</div>
           {% if event.why_it_matters %}
             <div class="meta">Why it matters: {{ event.why_it_matters }}</div>
           {% endif %}

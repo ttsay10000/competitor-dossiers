@@ -1,9 +1,16 @@
+"""
+Global press collectors (BI, CNBC, Yahoo, Google News, PR Newswire).
+
+All items use "date" = publication date only. We never set date to fetch/pull/upload time.
+When we cannot determine publication date, we leave date as None.
+"""
 from datetime import datetime, timedelta
 import json
 import re
 from typing import Any, List, Optional
 from urllib.parse import quote_plus, urljoin
 
+import feedparser
 from bs4 import BeautifulSoup
 
 from .http import fetch_url
@@ -36,11 +43,12 @@ def collect_business_insider_items(
 ) -> List[dict]:
     """
     Fetch recent Business Insider stories that mention the given company name.
+    Date on each item is publication date only (from card/listing; never fetch time).
 
     Implementation notes:
     - Uses BI's search endpoint (?q=...) and, when available, the JSON wrapper that
       includes a 'rendered' HTML field.
-    - Parses ISO-like timestamps that appear near result cards and applies a 90-day window.
+    - Parses publication-date timestamps near result cards (ISO-like); 90-day window.
     - Best-effort and defensive: on any parsing issue, returns an empty list instead of failing.
     """
     company_name = (company_name or "").strip()
@@ -94,7 +102,7 @@ def collect_business_insider_items(
         if url in seen_urls:
             continue
 
-        # Look for an ISO-like timestamp close to this link by inspecting its ancestors' text.
+        # Publication date only: look for timestamp near the card (never use fetch time).
         dt: Optional[datetime] = None
         container = a
         for _ in range(3):
@@ -132,10 +140,11 @@ def collect_cnbc_items(
 ) -> List[dict]:
     """
     Fetch recent CNBC news items that mention the given company name.
+    Date on each item is publication date only (<time> or listing; never fetch time).
 
     Implementation notes:
     - Uses CNBC's search page with tab=news and sort=recent.
-    - Parses <time> elements when available; falls back to simple pattern matching.
+    - Parses <time datetime> (publication date) when available; fallback to ISO pattern.
     - Applies a 90-day window and per-run cap.
     """
     company_name = (company_name or "").strip()
@@ -175,11 +184,10 @@ def collect_cnbc_items(
         if url in seen_urls:
             continue
 
-        # Try to parse a date from <time> tag or card text.
+        # Publication date only: <time datetime> or ISO in card (never fetch/upload time).
         dt: Optional[datetime] = None
         time_tag = card.find("time")
         if time_tag is not None:
-            # Many sites store ISO string in datetime attribute; otherwise text may be parseable.
             candidate = time_tag.get("datetime") or time_tag.get_text(strip=True)
             dt = _parse_iso_date(candidate)
         if dt is None:
@@ -214,11 +222,10 @@ def collect_yahoo_finance_items(
 ) -> List[dict]:
     """
     Fetch recent Yahoo Finance news items for a given ticker.
+    Date on each item is publication date only (<time> or listing; never fetch time).
 
-    This function expects `maybe_ticker` to be a valid ticker symbol (e.g. "ABNB").
-    For now we use a simple heuristic: the string must be 1–6 characters, alphanumeric,
-    and uppercase. If it does not look like a ticker, we skip and return [] so that
-    private companies are unaffected until an explicit mapping is introduced.
+    Expects `maybe_ticker` to be a valid ticker symbol (e.g. "ABNB").
+    Simple heuristic: 1–6 chars, alphanumeric, uppercase; else return [] for private companies.
     """
     ticker = (maybe_ticker or "").strip().upper()
     if not ticker or len(ticker) > 6 or not ticker.isalnum():
@@ -254,7 +261,7 @@ def collect_yahoo_finance_items(
         if full_url in seen_urls:
             continue
 
-        # Look for a datetime attribute on a nearby <time> tag, or ISO-like text.
+        # Publication date only: <time datetime> or ISO in card (never fetch time).
         dt: Optional[datetime] = None
         card = a
         for _ in range(3):
@@ -282,6 +289,159 @@ def collect_yahoo_finance_items(
                 "date": dt.isoformat() if dt else None,
                 "source": f"Yahoo Finance ({ticker})",
                 "provider": "yahoo_finance",
+            }
+        )
+        if len(results) >= max_items:
+            break
+
+    return results
+
+
+def collect_google_news_items(
+    company_name: str,
+    max_items: int = 40,
+    window_days: int = 30,
+) -> List[dict]:
+    """
+    Fetch Google News articles from the past 30 days that contain the company name
+    as an exact phrase (quoted search). Date on each item is publication date only
+    (from RSS published/published_parsed; never fetch time).
+
+    Uses Google News RSS search: q="CompanyName" when:1m for past month.
+    Duplicates/noise are handled by the pipeline's LLM classification and dedup.
+    """
+    company_name = (company_name or "").strip()
+    if not company_name:
+        return []
+
+    cutoff = datetime.utcnow() - timedelta(days=window_days)
+    # Quoted phrase so we only get articles that contain the exact name (e.g. "Avantstay").
+    query = f'"{company_name}" when:1m'
+    encoded = quote_plus(query)
+    rss_url = (
+        f"https://news.google.com/rss/search?q={encoded}&hl=en-US&gl=US&ceid=US:en"
+    )
+
+    try:
+        fetched = fetch_url(rss_url, timeout=25)
+    except Exception:
+        return []
+    if fetched.status_code != 200 or not fetched.text:
+        return []
+
+    feed = feedparser.parse(fetched.text)
+    results: List[dict] = []
+    seen_urls: set[str] = set()
+
+    for entry in feed.entries:
+        if len(results) >= max_items:
+            break
+        title = (entry.get("title") or "").strip()
+        link = (entry.get("link") or "").strip()
+        if not title or not link or len(title) < 6:
+            continue
+        if link in seen_urls:
+            continue
+        # Publication date only: RSS "published" / published_parsed (never updated or fetch time).
+        dt: Optional[datetime] = None
+        if entry.get("published_parsed"):
+            try:
+                import calendar
+                ts = calendar.timegm(entry.published_parsed)
+                dt = datetime.utcfromtimestamp(ts)
+            except Exception:
+                pass
+        if dt is None and entry.get("published"):
+            dt = _parse_iso_date(entry.published)
+        if dt and dt < cutoff:
+            continue
+        seen_urls.add(link)
+        results.append(
+            {
+                "title": title,
+                "url": link,
+                "date": dt.isoformat() if dt else None,
+                "source": "Google News",
+                "provider": "google_news",
+            }
+        )
+
+    return results
+
+
+def collect_prnewswire_items(
+    company_name: str,
+    max_items: int = 100,
+    window_days: int = 90,
+) -> List[dict]:
+    """
+    Fetch PR Newswire press releases for the company by searching with company name.
+    Date on each item is the release publication date (from card text; never upload/fetch time).
+    Used as the second-priority news source (after user-provided company news links).
+    """
+    company_name = (company_name or "").strip()
+    if not company_name:
+        return []
+
+    cutoff = datetime.utcnow() - timedelta(days=window_days)
+    query = quote_plus(company_name)
+    # Try max 100 results per page; PR Newswire may cap server-side.
+    search_url = (
+        f"https://www.prnewswire.com/search/all/?keyword={query}&pagesize=100"
+    )
+
+    try:
+        fetched = fetch_url(search_url, timeout=25)
+    except Exception:
+        return []
+    if fetched.status_code != 200 or not fetched.text:
+        return []
+
+    soup = BeautifulSoup(fetched.text, "html.parser")
+    results: List[dict] = []
+    seen_urls: set[str] = set()
+
+    # Find all links to PR Newswire news releases.
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if "/news-releases/" not in href or "prnewswire.com" not in href:
+            continue
+        if not href.startswith("http"):
+            href = urljoin("https://www.prnewswire.com", href)
+        if href in seen_urls:
+            continue
+        title = (a.get_text() or "").strip()
+        if not title or len(title) < 10:
+            # Try parent or sibling for title/date.
+            parent = a.parent
+            if parent:
+                title = (parent.get_text() or "").strip()[:200]
+            if not title or len(title) < 10:
+                continue
+        # Publication date only: parse release date from card (e.g. "Jan 21, 2026, 11:00 ET").
+        date_match = re.search(
+            r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s*\d{4}",
+            title,
+            re.IGNORECASE,
+        )
+        dt: Optional[datetime] = None
+        if date_match:
+            try:
+                dt = datetime.strptime(date_match.group(0), "%b %d, %Y")
+                if dt and dt < cutoff:
+                    continue
+            except Exception:
+                pass
+            # Clean title: remove leading "Mon DD, YYYY, HH:MM ET " if present.
+            title = re.sub(r"^[A-Za-z]{3}\s+\d{1,2},\s*\d{4}[^:]*:\s*", "", title).strip()
+        seen_urls.add(href)
+        results.append(
+            {
+                "title": title[:300],
+                "url": href,
+                "date": dt.isoformat() if dt else None,
+                "source": "PR Newswire",
+                "provider": "prnewswire",
             }
         )
         if len(results) >= max_items:

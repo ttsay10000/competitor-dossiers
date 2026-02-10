@@ -5,13 +5,14 @@
   <div class="card">
     <p class="meta">
       Create a new competitor and provide the key URLs we’ll use to pull data.
+      For <strong>talent</strong> and <strong>asset</strong>, the <strong>first</strong> link is the primary source; if the primary fails or returns no data, the system will try the next link (secondary). Put your best source first. Press links are all used and merged.
       Advanced flags (confidence, JS required, sitemap) are set automatically based on defaults.
     </p>
   </div>
 
   <div class="card">
     <h3>Competitor details</h3>
-    <form method="post" action="/competitors">
+    <form method="post" action="/competitors" id="competitor-form">
       <div class="row">
         <div>
           <label>Name</label>
@@ -23,28 +24,95 @@
         </div>
       </div>
 
-      <div class="row" style="margin-top: 16px;">
-        <div>
-          <label>Talent URL</label>
-          <input name="talent_url" placeholder="https://jobs.example.com/…" />
+      <!-- Talent: job boards / career pages -->
+      <div style="margin-top: 20px;">
+        <label style="font-weight: 600;">Talent (job listings)</label>
+        <p class="meta" style="margin: 4px 0 8px 0;">
+          We want the <strong>careers / job board URL</strong> so we can pull open roles. Best results with:
+          <strong>Lever</strong> (e.g. jobs.lever.co/company), <strong>Greenhouse</strong>, or <strong>Ashby</strong>—we use their APIs. Generic career pages (e.g. Kula, WizeHire) work too; we scrape job links. Add one URL per source if they use multiple boards.
+        </p>
+        <div id="talent-rows">
+          <div class="link-row row" style="margin-bottom: 8px; align-items: center;">
+            <span class="source-role" style="min-width: 72px; font-size: 12px; color: var(--accent); font-weight: 600;">Primary</span>
+            <input type="url" name="talent_urls" placeholder="https://jobs.lever.co/company or https://careers.example.com" style="flex: 1;" />
+            <button type="button" class="remove-link" aria-label="Remove row" style="margin-left: 8px;">Remove</button>
+          </div>
         </div>
-        <div>
-          <label>Asset / Locations URL</label>
-          <input name="asset_url" placeholder="https://www.example.com/locations" />
-        </div>
+        <button type="button" id="add-talent" class="secondary">+ Add another talent link</button>
       </div>
 
-      <div class="row" style="margin-top: 16px;">
-        <div>
-          <label>Press / News URL</label>
-          <input name="press_url" placeholder="https://www.example.com/blog or /press" />
+      <!-- Asset: locations / properties -->
+      <div style="margin-top: 20px;">
+        <label style="font-weight: 600;">Asset / locations (properties &amp; footprint)</label>
+        <p class="meta" style="margin: 4px 0 8px 0;">
+          We want the <strong>locations or properties page</strong> (or sitemap) so we can discover individual listings. Use the main page that links to properties—e.g. company.com/locations, /portfolio, or /properties. We’ll follow links or use the sitemap to build the footprint. Add another row if they have multiple region-specific pages.
+        </p>
+        <div id="asset-rows">
+          <div class="link-row row" style="margin-bottom: 8px; align-items: center;">
+            <span class="source-role" style="min-width: 72px; font-size: 12px; color: var(--accent); font-weight: 600;">Primary</span>
+            <input type="url" name="asset_urls" placeholder="https://www.example.com/locations or /portfolio" style="flex: 1;" />
+            <button type="button" class="remove-link" aria-label="Remove row" style="margin-left: 8px;">Remove</button>
+          </div>
         </div>
+        <button type="button" id="add-asset" class="secondary">+ Add another asset link</button>
       </div>
 
-      <div style="margin-top: 16px;">
+      <!-- Press: blog / news -->
+      <div style="margin-top: 20px;">
+        <label style="font-weight: 600;">Press / news</label>
+        <p class="meta" style="margin: 4px 0 8px 0;">
+          We want the <strong>blog or press page</strong> (or RSS feed) so we can pull recent articles for the executive summary. Use e.g. company.com/blog, /press, or an RSS URL. We filter for executive-relevant items (fundraise, partnerships, expansion, etc.). Add multiple rows if they have separate blog and press URLs.
+        </p>
+        <div id="press-rows">
+          <div class="link-row row" style="margin-bottom: 8px; align-items: center;">
+            <span class="source-role" style="min-width: 72px; font-size: 12px; color: var(--muted);">Primary</span>
+            <input type="url" name="press_urls" placeholder="https://www.example.com/blog or /press" style="flex: 1;" />
+            <button type="button" class="remove-link" aria-label="Remove row" style="margin-left: 8px;">Remove</button>
+          </div>
+        </div>
+        <button type="button" id="add-press" class="secondary">+ Add another press link</button>
+      </div>
+
+      <div style="margin-top: 20px;">
         <button type="submit">Save competitor</button>
       </div>
     </form>
   </div>
-{% endblock %}
 
+  <script>
+    (function() {
+      function addRow(containerId, name, placeholder, roleLabel) {
+        roleLabel = roleLabel || "Secondary";
+        var container = document.getElementById(containerId);
+        var row = document.createElement("div");
+        row.className = "link-row row";
+        row.style.marginBottom = "8px";
+        row.style.alignItems = "center";
+        row.innerHTML =
+          '<span class="source-role" style="min-width: 72px; font-size: 12px; color: var(--muted);">' + roleLabel + '</span>' +
+          '<input type="url" name="' + name + '" placeholder="' + (placeholder || "") + '" style="flex: 1;" />' +
+          '<button type="button" class="remove-link" aria-label="Remove row" style="margin-left: 8px;">Remove</button>';
+        container.appendChild(row);
+        row.querySelector(".remove-link").addEventListener("click", function() {
+          if (container.querySelectorAll(".link-row").length > 1) row.remove();
+        });
+      }
+      document.getElementById("add-talent").addEventListener("click", function() {
+        addRow("talent-rows", "talent_urls", "https://jobs.lever.co/company or https://careers.example.com", "Secondary");
+      });
+      document.getElementById("add-asset").addEventListener("click", function() {
+        addRow("asset-rows", "asset_urls", "https://www.example.com/locations or /portfolio", "Secondary");
+      });
+      document.getElementById("add-press").addEventListener("click", function() {
+        addRow("press-rows", "press_urls", "https://www.example.com/blog or /press", "Secondary");
+      });
+      document.querySelectorAll(".remove-link").forEach(function(btn) {
+        btn.addEventListener("click", function() {
+          var row = btn.closest(".link-row");
+          var container = row.parentElement;
+          if (container.querySelectorAll(".link-row").length > 1) row.remove();
+        });
+      });
+    })();
+  </script>
+{% endblock %}

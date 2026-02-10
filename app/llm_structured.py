@@ -12,7 +12,7 @@ import json
 import re
 from typing import Any, List, Optional
 
-from .collectors.http import fetch_url
+from .collectors.http import fetch_url, fetch_url_js, USER_AGENT_BROWSER
 
 # Max characters of page text when enricher reads raw_content (fit context, control cost).
 _ENRICH_RAW_MAX_CHARS = 14_000
@@ -267,16 +267,35 @@ def _classify_press_headlines_with_llm(
     system = (
         "You are classifying news headlines about hospitality / real estate / travel companies.\n"
         f"Possible topics are: {topics_str}.\n"
-        "For each item decide if it is primarily about the target company, and whether it is a business-focused story.\n"
-        "Business-focused examples: fundraising, new property openings, new partnerships or distribution deals, "
+        "For each item decide if it is primarily about the target company AS A BUSINESS (its funding, strategy, "
+        "corporate actions, or portfolio), and whether it is a business-focused story.\n"
+        "Business-focused examples: fundraising rounds, new property or market openings, new partnerships or distribution deals, "
         "restructuring/layoffs, significant market expansion or exits, major product or strategy shifts, "
         "or in-depth interviews / Q&A with senior executives of the target company (those should use topic 'executive_interview').\n"
-        "Promo or brand marketing includes thought-leadership pieces, opinion columns, 'why we are best', awards, lifestyle content.\n"
+        "VERY IMPORTANT: Articles that are guides, checklists, ROI explainers, destination or travel guides, "
+        "homeowner education, generic investment advice, thought-leadership, comparisons like 'X vs Y', "
+        "or awards/roundups (e.g. 'Best homes', 'Guest review roundup') should be treated as marketing/blog content, "
+        "NOT business news, even if the company name appears in the title or URL.\n"
+        "Those pieces should normally have topic 'promo_or_brand_marketing' and is_promo=true, and is_about_company=false "
+        "unless the article is principally about a discrete corporate action by the company.\n"
+        "When the URL clearly looks like the company's own marketing site or blog (e.g. contains the company name plus "
+        "paths like '/blog', '/destinations', '/guides', '/owners', '/awards', '/itinerary'), be extra strict: "
+        "only treat the item as business-focused if the headline clearly states a concrete business event such as "
+        "'<Company> raises...', '<Company> acquires...', '<Company> launches...', '<Company> partners with ...'.\n\n"
+        "Examples of NONSENSE (set is_about_company=false; use topic 'promo_or_brand_marketing' and is_promo=true where applicable):\n"
+        "- Listicles/roundups where the company is one of many: '10 Best Vacation Rental Companies', 'Top Short-Term Rental Platforms to Watch', 'Best Places to Stay in Miami' (company just listed).\n"
+        "- Industry trend pieces that mention the company in passing: 'Why the Short-Term Rental Market Is Cooling', 'Travel Industry Faces Headwinds' (company named once).\n"
+        "- Comparisons or alternatives: 'AvantStay vs Vrbo', 'Alternatives to Airbnb for Group Travel'.\n"
+        "- Travel/destination guides or SEO content: 'Things to Do in Austin', 'Weekend Guide to Nashville', 'How to Invest in Vacation Rentals' (company name in body only).\n"
+        "- Review or awards fluff: 'Guest Review Roundup', 'Best Vacation Homes 2024', 'Awards We Won'.\n"
+        "- Generic thought-leadership or tips: '5 Tips for Property Owners', 'Why We Love Group Travel', 'What Makes a Great Stay' (no discrete business event).\n"
+        "- Third-party articles where the company is not the subject: 'Sonder Files for Bankruptcy' (only briefly mentions another company), earnings roundups that list many tickers.\n"
+        "If the headline does not clearly indicate the article is *about* the target company's own business (funding, launch, partnership, exit, exec change, strategy), treat as not about company.\n\n"
         "Output a JSON array with one object per line. Each object must have:\n"
         "- \"index\" (int, the index from the line),\n"
         "- \"is_about_company\" (bool),\n"
         "- \"topic\" (string, one of the topics list),\n"
-        "- \"is_promo\" (bool, true for promo_or_brand_marketing stories even if they mention the company).\n"
+        "- \"is_promo\" (bool), which MUST be true for promo_or_brand_marketing stories and other marketing/blog content even if they mention the company.\n"
         "Return only the JSON array."
     )
     user = (
@@ -317,7 +336,7 @@ def _classify_press_headlines_fallback(competitor_name: str, items: List[dict]) 
     Heuristic-only press classifier used when LLM is unavailable.
     """
     name_lower = (competitor_name or "").lower()
-    fund_keywords = ("fundraise", "funding", "series ", "raises", "raise", "round", "investment")
+    fund_keywords = ("fundraise", "funding", "series ", "raises", "raise", "investment")
     partner_keywords = ("partnership", "partners with", "partners up", "alliance", "distribution deal")
     opening_keywords = ("opens", "opening", "debut", "debuts", "launches", "new hotel", "new property")
     restructure_keywords = ("layoff", "restructuring", "restructure", "cut", "cuts jobs", "bankruptcy")
@@ -347,6 +366,10 @@ def _classify_press_headlines_fallback(competitor_name: str, items: List[dict]) 
         elif any(ek in text for ek in exec_keywords) and any(ik in text for ik in interview_keywords):
             topic = "executive_interview"
 
+        # Treat classic guide/SEO content as promo marketing when not otherwise classified.
+        if is_promo and topic == "other_business":
+            topic = "promo_or_brand_marketing"
+
         if not is_about and topic == "other_business":
             topic = "irrelevant"
 
@@ -355,6 +378,87 @@ def _classify_press_headlines_fallback(competitor_name: str, items: List[dict]) 
         out["is_promo"] = is_promo
         result.append(out)
     return result
+
+
+# Phrases that often indicate a JS/consent/ad wall instead of article content.
+_ARTICLE_WALL_PHRASES = (
+    "please enable js",
+    "enable javascript",
+    "disable any ad blocker",
+    "ad blocker",
+    "enable js and disable",
+    "please enable js and",
+)
+
+
+def _fetch_article_html(url: str, timeout: int = 20) -> Optional[str]:
+    """
+    Fetch article HTML, trying to get past JS/ad-block walls.
+    1) Request with a browser-like User-Agent (many walls only check UA).
+    2) If we get 200 but extracted text is tiny and the page contains wall phrases,
+       retry with Playwright (execute JS) when available.
+    Returns the HTML that produced the most extractable text, or None on failure.
+    """
+    if not url or not url.strip().startswith("http"):
+        return None
+    html_best: Optional[str] = None
+    text_len_best = 0
+
+    # 1) Fetch with browser User-Agent to get past simple UA checks.
+    try:
+        fetched = fetch_url(
+            url,
+            timeout=timeout,
+            headers={"User-Agent": USER_AGENT_BROWSER},
+        )
+        if fetched.status_code == 200 and fetched.text:
+            text = _html_to_article_text(fetched.text, max_chars=100_000)
+            if len(text) > text_len_best:
+                text_len_best = len(text)
+                html_best = fetched.text
+            # If we got very little text and the raw HTML looks like a wall, try Playwright.
+            if len(text) < 500:
+                lower = fetched.text.lower()
+                if any(phrase in lower for phrase in _ARTICLE_WALL_PHRASES):
+                    try:
+                        js_fetched = fetch_url_js(url)
+                        if js_fetched.text:
+                            js_text = _html_to_article_text(js_fetched.text, max_chars=100_000)
+                            if len(js_text) > text_len_best:
+                                html_best = js_fetched.text
+                            # Don't overwrite if JS didn't help
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+    return html_best
+
+
+def _html_to_article_text(html: str, max_chars: int = 6000) -> str:
+    """
+    Extract text for press article summarization. Prefer <article> or <main> so
+    we send the release/body to the LLM instead of nav/chrome (many sites put
+    article content inside article/main). Fall back to full body if needed.
+    """
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return html[:max_chars] + "\n[... truncated]" if len(html) > max_chars else html
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup.find_all(["script", "style", "noscript"]):
+        tag.decompose()
+    # Prefer article or main so we don't waste space on header/nav (e.g. PR Newswire).
+    root = soup.find("article") or soup.find("main")
+    if root:
+        text = root.get_text(separator="\n", strip=True)
+    else:
+        body = soup.find("body") or soup
+        text = body.get_text(separator="\n", strip=True)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n[... truncated]"
+    return text
 
 
 def _summarize_press_article_with_llm(
@@ -377,9 +481,13 @@ def _summarize_press_article_with_llm(
             "refined_topic": topic,
         }
 
+    # html_text may be empty or minimal if fetch failed (401, paywall, JS-only, etc.); we then infer from title/outlet.
     text_for_llm = ""
     if html_text:
-        text_for_llm = _html_to_text_for_enricher(html_text, max_chars=6000)
+        text_for_llm = _html_to_article_text(html_text, max_chars=6000)
+        # If we got almost no real content (consent wall, paywall, "enable JS"), use title-only path.
+        if len(text_for_llm.strip()) < 200:
+            text_for_llm = ""
 
     system = (
         "You are summarizing business-relevant news about hospitality / real estate / travel companies.\n"
@@ -454,11 +562,15 @@ def enrich_press_items_with_llm(
     End-to-end press pipeline for a single competitor.
 
     Steps:
-    - Classify headlines for relevance/topic (LLM + heuristics).
-    - Filter out irrelevant / promo items.
-    - Heuristically deduplicate by normalized title; choose primary URL per cluster.
-    - For up to `max_articles_to_summarize` canonical articles, fetch HTML and ask LLM
-      for a 1-line summary and (optionally refined) topic.
+    - All articles are read/classified by LLM to remove nonsense and promo.
+    - PR Newswire items are automatically included (press releases; high priority).
+    - Company-sourced (press_endpoint) items are reviewed carefully—may be promo, so
+      we require is_about_company and drop promo/irrelevant.
+    - Heuristically deduplicate by normalized title; when the same article appears
+      from multiple sources, choose primary by priority: press_endpoint > prnewswire
+      > tier-1 outlets (Bloomberg, Reuters, etc.) > tier-2 (CNBC, etc.) > rest.
+    - For up to `max_articles_to_summarize` canonical articles, fetch HTML and ask
+      LLM for a 1-line summary and (optionally refined) topic.
 
     Returns a list of canonical press dicts with keys:
     - title, url, date, outlet, topic, summary, secondary_urls (list[str])
@@ -468,22 +580,91 @@ def enrich_press_items_with_llm(
 
     classified = _classify_press_headlines_with_llm(competitor_name, items)
 
-    # Filter to business-relevant, company-focused items
+    # Lightweight heuristics on top of LLM labels to aggressively drop
+    # own-site marketing/blog noise (guides, itineraries, owner education, etc.)
+    # for the target company. This is especially important for AvantStay-style
+    # content where the blog produces many SEO/how-to pieces that mention the
+    # company but are not discrete business events.
+    import re as _re  # local alias to avoid confusion with top-level imports
+
+    name_slug = _re.sub(r"[^a-z0-9]", "", (competitor_name or "").lower())
+
+    def _looks_like_own_marketing_page(url: str) -> bool:
+        u = (url or "").lower()
+        if not u or not name_slug:
+            return False
+        if name_slug not in u:
+            return False
+        # Common marketing/blog path fragments for hospitality competitors.
+        marketing_fragments = (
+            "/blog",
+            "/blogs/",
+            "/destinations",
+            "/destination/",
+            "/itinerary",
+            "/itineraries",
+            "/guide",
+            "/guides",
+            "/owner",
+            "/owners",
+            "/invest",
+            "/awards",
+        )
+        return any(fragment in u for fragment in marketing_fragments)
+
+    def _looks_like_guide_title(title: str) -> bool:
+        t = (title or "").lower()
+        if not t:
+            return False
+        guide_keywords = (
+            "guide",
+            "checklist",
+            "how to ",
+            "how-to ",
+            "itinerary",
+            "roundup",
+            "review roundup",
+            "what ",
+            "need to know",
+            "roi ",
+            "valuation",
+            "worth?",
+            "alternatives",
+            "vs ",
+            "best ",
+        )
+        return any(kw in t for kw in guide_keywords)
+
+    for it in classified:
+        url = (it.get("url") or it.get("link") or "").strip()
+        title = (it.get("title") or "").strip()
+        topic = (it.get("topic") or "").strip()
+        is_promo = bool(it.get("is_promo"))
+
+        if _looks_like_own_marketing_page(url) and _looks_like_guide_title(title):
+            # Force marketing classification so downstream filters drop it.
+            it["is_promo"] = True
+            it["topic"] = "promo_or_brand_marketing"
+            # Treat as not primarily about the company as a business.
+            it["is_about_company"] = False
+
+    # Filter to business-relevant items. Priority rules:
+    # - PR Newswire: always include (press releases about the company; high priority).
+    # - User-provided company news (press_endpoint): LLM review only—may be promo, so we
+    #   require is_about_company and drop promo/irrelevant.
+    # - All other sources: require is_about_company and drop promo/irrelevant.
     filtered: List[dict] = []
     for it in classified:
+        provider = (it.get("provider") or "").strip().lower()
+        if provider == "prnewswire":
+            filtered.append(it)
+            continue
         topic = (it.get("topic") or "").lower()
         if topic in {"irrelevant"}:
             continue
         if it.get("is_promo") and topic in {"promo_or_brand_marketing"}:
             continue
-        if not it.get("is_about_company") and topic not in {
-            "fundraising",
-            "new_hotel_opening",
-            "new_partnership",
-            "restructuring_or_layoffs",
-            "executive_interview",
-        }:
-            # Keep some high-signal industry stories even if not strictly about this company.
+        if not it.get("is_about_company"):
             continue
         filtered.append(it)
 
@@ -505,31 +686,34 @@ def enrich_press_items_with_llm(
             key = (it.get("url") or it.get("link") or "").lower()
         clusters.setdefault(key, []).append(it)
 
-    # Outlet preference for picking primary story in a cluster.
+    # Source priority for picking primary when the same article appears from multiple sources.
+    # Order: user company links (press_endpoint) > PR Newswire > tier-1 outlets > tier-2 > rest.
+    provider_rank = {
+        "press_endpoint": 6,
+        "prnewswire": 5,
+    }
     outlet_rank = {
-        # Highest priority: PR Newswire wire stories (canonical source for many releases).
         "prnewswire.com": 4,
         "www.prnewswire.com": 4,
-        # Tier-1 business/finance outlets.
         "bloomberg.com": 3,
         "reuters.com": 3,
         "wsj.com": 3,
         "ft.com": 3,
-        # Tier-1/2 tech and business.
         "cnbc.com": 2,
         "techcrunch.com": 2,
         "crunchbase.com": 2,
         "axios.com": 2,
     }
 
-    def _outlet_score(outlet: str, url: str) -> int:
-        domain = outlet or ""
+    def _source_score(provider: str, outlet: str, url: str) -> int:
+        p = (provider or "").strip().lower()
+        if p in provider_rank:
+            return provider_rank[p]
+        domain = (outlet or "").lower()
         if domain in outlet_rank:
             return outlet_rank[domain]
-        # Try domain from URL
         try:
             import urllib.parse
-
             parsed = urllib.parse.urlparse(url)
             dom = (parsed.netloc or "").lower()
             return outlet_rank.get(dom, 1)
@@ -538,14 +722,15 @@ def enrich_press_items_with_llm(
 
     canonical: List[dict] = []
     for _, group in clusters.items():
-        # Choose best primary by outlet score; fall back to first.
+        # Choose best primary by source priority (no duplicates across sources; pick one).
         best = None
         best_score = -1
         secondary_urls: List[str] = []
         for it in group:
             url = (it.get("url") or it.get("link") or "").strip()
             outlet = _press_outlet_from_item(it)
-            score = _outlet_score(outlet, url)
+            provider = (it.get("provider") or "").strip()
+            score = _source_score(provider, outlet, url)
             if best is None or score > best_score:
                 if best is not None:
                     prev_url = (best.get("url") or best.get("link") or "").strip()
@@ -587,14 +772,7 @@ def enrich_press_items_with_llm(
             continue
 
         url = item.get("url") or ""
-        html_text = None
-        if url:
-            try:
-                fetched = fetch_url(url)
-                if fetched.status_code == 200 and fetched.text:
-                    html_text = fetched.text
-            except Exception:
-                html_text = None
+        html_text = _fetch_article_html(url) if url else None
 
         meta = _summarize_press_article_with_llm(
             competitor_name=competitor_name,

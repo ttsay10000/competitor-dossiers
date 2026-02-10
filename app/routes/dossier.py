@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 
 from fastapi import APIRouter, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, RedirectResponse
 
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, Snapshot, Capability
@@ -66,6 +66,7 @@ def _event_dict(e) -> dict:
         "category": e.category,
         "type": e.type,
         "detected_at_str": e.detected_at.strftime("%Y-%m-%d"),
+        "occurred_at_str": e.occurred_at.strftime("%Y-%m-%d") if e.occurred_at else None,
         "why_it_matters": e.why_it_matters,
         "evidence_json": e.evidence_json,
     }
@@ -130,6 +131,29 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         .all()
     )
 
+    # Reporting baseline = manual seed date when set, otherwise oldest snapshot.
+    # Only events and news *after* this count as "new" in summaries.
+    reporting_baseline_date = None
+    if getattr(competitor, "reporting_baseline_at", None):
+        reporting_baseline_date = competitor.reporting_baseline_at.strftime("%Y-%m-%d")
+    else:
+        for ch in ("asset", "talent", "press"):
+            oldest = (
+                session.query(Snapshot)
+                .filter(Snapshot.competitor_id == competitor_id, Snapshot.channel == ch)
+                .order_by(Snapshot.captured_at.asc())
+                .first()
+            )
+            if oldest:
+                d = oldest.captured_at.strftime("%Y-%m-%d")
+                if reporting_baseline_date is None or d < reporting_baseline_date:
+                    reporting_baseline_date = d
+    if reporting_baseline_date:
+        baseline_cutoff = datetime.strptime(reporting_baseline_date, "%Y-%m-%d")
+        events = [e for e in events if e.detected_at.date() >= baseline_cutoff.date()]
+    # Order events by date published (occurred_at) when available, else detected_at, newest first.
+    events = sorted(events, key=lambda e: (e.occurred_at or e.detected_at), reverse=True)
+
     capabilities = (
         session.query(Capability)
         .filter(Capability.competitor_id == competitor_id)
@@ -184,7 +208,7 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     events_this_week = [e for e in events if e.detected_at >= week_cutoff]
     events_this_week_dicts = [_event_dict(e) for e in events_this_week]
 
-    # Canonical press list for last 90 days, with display-ready date strings.
+    # Canonical press list for last 90 days, with display-ready date strings, sorted by date published (newest first).
     press_90d = []
     now = datetime.utcnow()
     press_cutoff = now - timedelta(days=90)
@@ -196,31 +220,52 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         out = dict(item)
         if display_date:
             out["date"] = display_date
+        out["_sort_dt"] = dt  # for sorting; removed before template
         press_90d.append(out)
+    press_90d.sort(key=lambda x: (x["_sort_dt"] is None, -(x["_sort_dt"].timestamp() if x["_sort_dt"] else 0)))
+    for p in press_90d:
+        p.pop("_sort_dt", None)
 
-    # Top 5 news from canonical list: rank by topic importance + recency.
-    topic_weights = {
-        "fundraising": 5,
-        "restructuring_or_layoffs": 5,
-        "executive_interview": 4,
-        "new_partnership": 4,
-        "new_hotel_opening": 3,
-        "other_business": 1,
+    # Top news: up to 5 most newsworthy articles. Press releases (e.g. PR Newswire) and strategic topics rank highest; recency breaks ties.
+    STRONG_BUSINESS_TOPICS = {
+        "fundraising", "restructuring_or_layoffs", "executive_interview",
+        "new_partnership", "new_hotel_opening", "other_business",
     }
-    scored_top = []
-    for item in press_90d:
+    # Tiers 5/4/3 treated equally (strategic topics); other_business slightly lower. Unlikely to have many in a week.
+    TOPIC_NEWSWORTHINESS = {
+        "fundraising": 5,
+        "new_partnership": 5,
+        "restructuring_or_layoffs": 5,
+        "executive_interview": 5,
+        "new_hotel_opening": 5,
+        "other_business": 2,
+    }
+    pool = [
+        item for item in press_90d
+        if (item.get("topic") or "").lower() in STRONG_BUSINESS_TOPICS
+    ]
+    week_cutoff_pub = now - timedelta(days=7)
+
+    def _newsworthiness_score(item: dict) -> tuple:
         topic = (item.get("topic") or "").lower()
-        base = topic_weights.get(topic, 0)
+        topic_score = TOPIC_NEWSWORTHINESS.get(topic, 0)
+        url = (item.get("url") or item.get("link") or "").lower()
+        outlet = (item.get("outlet") or "").lower()
+        is_press_release = "prnewswire" in url or "prnewswire" in outlet
+        source_score = 10 if is_press_release else 0  # press releases = highest priority
         dt = _parse_press_date(item.get("date"))
-        recency_boost = 0.0
-        if dt:
-            days_ago = max((now - dt).days, 0)
-            # Within 30 days => up to +3; then taper.
-            recency_boost = max(0.0, 3.0 - (days_ago / 10.0))
-        score = base + recency_boost
-        scored_top.append((score, dt or now, item))
-    scored_top.sort(key=lambda x: (-x[0], -x[1].timestamp()))
-    top_news = [item for _, _, item in scored_top[:5]]
+        recency_score = 5 if (dt and dt >= week_cutoff_pub) else 0  # last 7 days boost
+        score = source_score + topic_score + recency_score
+        sort_dt = dt or datetime.min.replace(tzinfo=dt.tzinfo if dt else None)
+        return (score, sort_dt)
+
+    pool_scored = []
+    for item in pool:
+        score, sort_dt = _newsworthiness_score(item)
+        pool_scored.append((score, sort_dt, item))
+    # Highest newsworthiness first; within same score, newest date first
+    pool_scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    top_news = [item for _, _, item in pool_scored[:5]]
 
     # Properties by location (state/city) for high-level week-over-week tracking.
     # Aggregate count and total keys per location (keys parsed from property details).
@@ -257,8 +302,9 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     ]
     total_properties = len(asset_props)
 
-    # Baseline = oldest asset snapshot (first run). Week-over-week: compare latest to baseline.
-    # Baseline = previous run (so "today's pull" is the reference for next week).
+    # Comparison baseline = oldest snapshot (seed run). All deltas and "new" content
+    # are computed vs this baseline so weekly pulls only surface post-seed changes.
+    reporting_baseline_date = None
     asset_baseline_date = None
     asset_added_since_baseline = 0
     asset_removed_since_baseline = 0
@@ -267,8 +313,7 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         baseline_asset = (
             session.query(Snapshot)
             .filter(Snapshot.competitor_id == competitor_id, Snapshot.channel == "asset")
-            .order_by(Snapshot.captured_at.desc())
-            .offset(1)
+            .order_by(Snapshot.captured_at.asc())
             .first()
         )
         if baseline_asset:
@@ -329,6 +374,7 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         "asset_removed_since_baseline": asset_removed_since_baseline,
         "asset_delta_by_city": asset_delta_by_city,
         "other_properties_display": other_properties_display,
+        "comparison_baseline_date": reporting_baseline_date,
     }
     context["executive_summary"] = generate_executive_summary(context)
     return context
@@ -403,6 +449,38 @@ def dossier(request: Request, competitor_id: int):
         {"request": request, **context},
     )
 
+
+@router.post("/dossier/{competitor_id}/seed", status_code=303)
+def dossier_seed(request: Request, competitor_id: int):
+    """
+    Manual seed/baseline reset for a single competitor.
+
+    Does three things:
+    1) Refreshes data using the normal runner (all channels, all competitors).
+    2) Sets a reporting baseline timestamp for this competitor so future weekly
+       summaries treat only post-baseline items as "new".
+    3) Effectively resets the visible timeline in the dossier because events
+       and top news are filtered to post-baseline dates.
+    """
+    from ..runner import run as run_all_channels
+
+    with get_session() as session:
+        competitor = session.get(Competitor, competitor_id)
+        if competitor is None:
+            return request.app.state.templates.TemplateResponse(
+                "dossier.html",
+                {"request": request, "error": "Competitor not found."},
+            )
+        # Set baseline to "now" so subsequent views only surface post-baseline changes.
+        competitor.reporting_baseline_at = datetime.utcnow()
+        session.add(competitor)
+        session.commit()
+
+    # Run a fresh pull for all channels (includes this competitor).
+    # This keeps logic consistent with the scheduled cron job.
+    run_all_channels()
+
+    return RedirectResponse(url=f"/dossier/{competitor_id}", status_code=303)
 
 @router.get("/dossier/{competitor_id}/pdf")
 def dossier_pdf(request: Request, competitor_id: int):

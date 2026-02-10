@@ -20,6 +20,10 @@ class Competitor(Base):
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     primary_domain: Mapped[Optional[str]] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    # Optional manual baseline for reporting (seed run). When set, dossier
+    # summaries and timelines treat this as the comparison start date so that
+    # only events/press after this point are considered "new".
+    reporting_baseline_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     source_endpoints: Mapped[list["SourceEndpoint"]] = relationship(
         back_populates="competitor",

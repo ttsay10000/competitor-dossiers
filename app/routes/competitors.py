@@ -39,37 +39,41 @@ def competitors_new(request: Request):
 
 
 @router.post("/competitors")
-def competitors_create(
-    name: str = Form(...),
-    primary_domain: Optional[str] = Form(None),
-    talent_url: Optional[str] = Form(None),
-    asset_url: Optional[str] = Form(None),
-    press_url: Optional[str] = Form(None),
-):
+def competitors_create(request: Request):
+    form = request.form
+    name = (form.get("name") or "").strip()
+    if not name:
+        return RedirectResponse(url="/competitors/new", status_code=HTTP_303_SEE_OTHER)
+    primary_domain = (form.get("primary_domain") or "").strip() or None
+    talent_urls = form.getlist("talent_urls")
+    asset_urls = form.getlist("asset_urls")
+    press_urls = form.getlist("press_urls")
+
     with get_session() as session:
-        competitor = Competitor(name=name.strip(), primary_domain=(primary_domain or "").strip() or None)
+        competitor = Competitor(name=name, primary_domain=primary_domain)
         session.add(competitor)
         session.flush()
 
-        def _add_source(url: Optional[str], channel: str) -> None:
-            if not url:
-                return
-            clean = url.strip()
-            if not clean:
-                return
-            endpoint = SourceEndpoint(
-                competitor_id=competitor.id,
-                channel=channel,
-                url=clean,
-                confidence="high",
-                js_required=False,
-                use_sitemap_first=False,
-            )
-            session.add(endpoint)
+        def _add_sources(urls, channel: str) -> None:
+            for url in urls:
+                if not url:
+                    continue
+                clean = url.strip()
+                if not clean:
+                    continue
+                endpoint = SourceEndpoint(
+                    competitor_id=competitor.id,
+                    channel=channel,
+                    url=clean,
+                    confidence="high",
+                    js_required=False,
+                    use_sitemap_first=False,
+                )
+                session.add(endpoint)
 
-        _add_source(talent_url, "talent")
-        _add_source(asset_url, "asset")
-        _add_source(press_url, "press")
+        _add_sources(talent_urls, "talent")
+        _add_sources(asset_urls, "asset")
+        _add_sources(press_urls, "press")
 
     return RedirectResponse(url="/competitors", status_code=HTTP_303_SEE_OTHER)
 
@@ -80,7 +84,13 @@ def competitors_edit(request: Request, competitor_id: int):
         competitor = session.get(Competitor, competitor_id)
         if competitor is None:
             return RedirectResponse(url="/competitors", status_code=HTTP_303_SEE_OTHER)
-        endpoints = list(competitor.source_endpoints)
+        endpoints = sorted(competitor.source_endpoints, key=lambda e: e.id)
+        # First endpoint (by id) per channel is primary for talent/asset; used for fallback in runner
+        primary_ids = set()
+        for ch in ("talent", "asset"):
+            first = next((e.id for e in endpoints if e.channel == ch), None)
+            if first is not None:
+                primary_ids.add(first)
         recent_logs = (
             session.query(RunLog)
             .filter(RunLog.competitor_id == competitor_id)
@@ -102,7 +112,15 @@ def competitors_edit(request: Request, competitor_id: int):
             "primary_domain": competitor.primary_domain,
         }
         endpoints_data = [
-            {"id": ep.id, "channel": ep.channel, "url": ep.url, "confidence": ep.confidence, "js_required": ep.js_required, "use_sitemap_first": ep.use_sitemap_first}
+            {
+                "id": ep.id,
+                "channel": ep.channel,
+                "url": ep.url,
+                "confidence": ep.confidence,
+                "js_required": ep.js_required,
+                "use_sitemap_first": ep.use_sitemap_first,
+                "is_primary": ep.channel in ("talent", "asset") and ep.id in primary_ids,
+            }
             for ep in endpoints
         ]
         all_competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()

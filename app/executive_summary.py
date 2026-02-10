@@ -13,6 +13,18 @@ def _build_context_text(context: Dict[str, Any]) -> str:
     parts = []
     name = context.get("competitor", {}).get("name", "Competitor")
 
+    # Comparison baseline: only changes/news *after* this date should be summarized.
+    comparison_baseline = context.get("comparison_baseline_date")
+    if comparison_baseline:
+        parts.append(
+            f"Comparison baseline date: {comparison_baseline}. "
+            "The data below is already restricted to post-baseline: 'Events this week' and 'Top news headlines' "
+            "are only items detected or added AFTER this date; 'Properties vs baseline' and location add/removal "
+            "counts are deltas versus the baseline. Your summary must ONLY synthesize these post-baseline "
+            "items. Do not report current snapshot totals (e.g. total roles, total properties) as new "
+            "information—only mention counts when describing a change since baseline (e.g. 'X added in Y')."
+        )
+
     # Talent: job counts by function (business + property ops)
     jobs_by_function = context.get("jobs_by_function") or []
     jobs_property = context.get("jobs_by_function_property") or []
@@ -59,11 +71,15 @@ def _build_context_text(context: Dict[str, Any]) -> str:
                 loc_lines.append(f"{loc}: {count} properties")
         parts.append("Current properties by location (use this format in output): " + "; ".join(loc_lines))
 
-    # Top news headlines
+    # Top news headlines (with date when available)
     top_news = context.get("top_news") or []
     if top_news:
-        headlines = [n.get("title", "Untitled")[:80] for n in top_news]
-        parts.append("Top news headlines: " + " | ".join(headlines))
+        lines = []
+        for n in top_news:
+            title = (n.get("title") or "Untitled")[:80]
+            date_str = n.get("date")
+            lines.append(f"({date_str}) {title}" if date_str else title)
+        parts.append("Top news headlines: " + " | ".join(lines))
 
     return "\n\n".join(parts)
 
@@ -87,20 +103,17 @@ def generate_executive_summary(context: Dict[str, Any]) -> Optional[str]:
     context_text = _build_context_text(context)
     competitor_name = context.get("competitor", {}).get("name", "Competitor")
 
-    system = """You are an executive briefing analyst. Given factual data about a competitor (including a baseline snapshot, recent events, and current counts), write a concise executive summary for a leadership reader.
-Focus ONLY on what has changed recently and what is happening now versus the prior weekly report or baseline in the data.
-Output only a short bullet list (3–6 bullets). Each bullet should be one clear, high-level takeaway about recent change or current momentum.
+    system = """You are an executive briefing analyst. You must ONLY output bullets that compare against the baseline (seed run)—i.e. changes or new items since that date. Do not summarize all data you see; only synthesize post-baseline signals.
 
-Prioritize bullets that draw from:
-- Talent & hiring: shifts in hiring focus (e.g. more partnerships roles, more engineering), notable new senior roles posted, or meaningful changes in total open roles. If there is no meaningful change, say so explicitly (e.g. "No material change in talent vs last week").
-- Assets & markets: new markets or locations entered, meaningful adds/removals versus the baseline date, standout growth/exit markets, or notable footprint concentration or pullback.
-- Operations, partnerships, and strategy: notable openings/closings, partnerships, funding, or clear strategic/ops shifts visible in the events or news.
-- News: only include press or events that represent new, strategically relevant developments; skip generic marketing or brand noise.
+Rules:
+- The data you receive is already filtered: "Events this week" and "Top news headlines" are only items detected or added AFTER the comparison baseline. "Properties vs baseline" and location add/removal counts are deltas versus baseline. Use only these when writing bullets.
+- Do NOT output bullets that merely describe current state (e.g. "Company has 50 open roles" or "They operate in 10 states") unless you are describing a *change* since baseline (e.g. "5 new Engineering roles since baseline" or "Entered Texas since baseline") supported by the events or deltas provided.
+- If there are no post-baseline events and no post-baseline news and no meaningful asset deltas, output a single bullet such as "No material change since baseline."
+- Output only a short bullet list (3–6 bullets, or 1 if no change). Each bullet = one clear takeaway about a change or new development since baseline.
 
-Use static counts or lists (e.g. by-location property counts) only to explain the change, not as standalone background bullets.
-When referencing properties by location, use a single summary line per location in the form "State - N properties (M keys)" when the data allows. Do not add sub-bullets or per-property lists.
+Prioritize: talent changes (from events), asset/market adds or removals (from deltas), partnerships/funding/strategy (from events or news), and new press (from Top news). Use location counts only to explain a change (e.g. "Texas – 3 properties (80 keys) added since baseline"), not as standalone facts.
 
-Be specific (numbers, locations) when the data provides them. Tone: calm and executive. Format: each line starting with a single bullet (use "- "). Use only top-level bullets—no sub-bullets, nested bullets, or indented sub-points. No intro sentence, no subheadings."""
+Format: each line starting with "- ". No sub-bullets, no intro sentence, no subheadings. Tone: calm and executive."""
 
     user = f"Competitor: {competitor_name}\n\nData:\n{context_text}"
 

@@ -10,6 +10,8 @@ from .collectors.global_press import (
     collect_business_insider_items,
     collect_cnbc_items,
     collect_yahoo_finance_items,
+    collect_google_news_items,
+    collect_prnewswire_items,
 )
 from .collectors.homepage import collect_homepage_snapshot, build_structured_json as build_homepage_structured
 from .collectors.public_records import collect_public_records_snapshot, build_structured_json as build_public_records_structured
@@ -229,16 +231,27 @@ def compute_capability_counts(jobs: list[dict]) -> dict[str, int]:
     return counts
 
 
+def _endpoints_ordered(endpoints: list[SourceEndpoint]) -> list[SourceEndpoint]:
+    """Return endpoints sorted by id (primary first). Used for talent/asset with fallback to secondary."""
+    return sorted(endpoints, key=lambda e: e.id)
+
+
 def run_talent() -> None:
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         for competitor in competitors:
-            endpoints = [
-                endpoint
-                for endpoint in competitor.source_endpoints
-                if endpoint.channel == "talent"
-            ]
-            for endpoint in endpoints:
+            endpoints_ordered = _endpoints_ordered([
+                e for e in competitor.source_endpoints if e.channel == "talent"
+            ])
+            if not endpoints_ordered:
+                continue
+
+            snapshot = None
+            endpoint_used = None
+            structured = None
+            current_jobs = []
+
+            for endpoint in endpoints_ordered:
                 print(
                     f"[{datetime.utcnow().isoformat()}] talent run: "
                     f"{competitor.name} {endpoint.url} ({endpoint.confidence})"
@@ -273,140 +286,167 @@ def run_talent() -> None:
                     continue
                 structured = build_talent_structured(snapshot)
                 structured["jobs"] = enrich_jobs_with_llm(structured.get("jobs") or [])
-
-                latest = load_latest_snapshot(session, competitor.id, "talent")
-                previous_jobs = (latest.structured_json or {}).get("jobs", []) if latest else []
-                current_jobs = structured.get("jobs", [])
-
-                # Don't persist an empty talent snapshot if we already have any snapshot with jobs
-                # (e.g. JS-rendered page returned no jobs on cron without Playwright).
-                existing_job_count = 0
-                if not current_jobs:
-                    for s in (
-                        session.query(Snapshot)
-                        .filter(Snapshot.competitor_id == competitor.id, Snapshot.channel == "talent")
-                        .order_by(Snapshot.captured_at.desc())
-                        .limit(20)
-                        .all()
-                    ):
-                        jobs_in = (s.structured_json or {}).get("jobs", [])
-                        if jobs_in and any(isinstance(j, dict) for j in jobs_in):
-                            existing_job_count = len([j for j in jobs_in if isinstance(j, dict)])
-                            break
-                if not current_jobs and existing_job_count:
-                    log_run(
-                        session,
-                        competitor.id,
-                        "talent",
-                        "skipped",
-                        message="empty_snapshot_kept_previous",
-                        extra={"url": endpoint.url, "existing_job_count": existing_job_count},
-                    )
-                    continue
-
-                current_jobs = [assign_job_flags(job) for job in current_jobs]
-                previous_jobs = [assign_job_flags(job) for job in previous_jobs]
-                structured["jobs"] = current_jobs
-
-                persist_snapshot(
+                current_jobs = structured.get("jobs") or []
+                if current_jobs:
+                    endpoint_used = endpoint
+                    break
+                if endpoint is endpoints_ordered[-1]:
+                    endpoint_used = endpoint
+                    break
+                log_run(
                     session,
                     competitor.id,
                     "talent",
-                    snapshot.get("raw_content") or "",
-                    snapshot.get("raw_hash") or "",
-                    structured,
+                    "skipped",
+                    message="primary_returned_zero_jobs_trying_secondary",
+                    extra={"url": endpoint.url},
                 )
-                # Log when we stored 0 jobs after falling back from Playwright (cron often has no browser).
-                if not current_jobs and snapshot.get("playwright_fallback"):
-                    log_run(
-                        session,
-                        competitor.id,
-                        "talent",
-                        "skipped",
-                        message="talent_js_fallback_zero_jobs",
-                        extra={
-                            "url": endpoint.url,
-                            "hint": "Cron needs playwright package + 'playwright install chromium' in build and PLAYWRIGHT_ENABLED=true",
-                        },
-                    )
 
-                diff = diff_jobs(previous_jobs, current_jobs)
-                added_jobs = diff["added"]
+            if endpoint_used is None:
+                continue
 
-                previous_counts = compute_capability_counts(previous_jobs)
-                current_counts = compute_capability_counts(current_jobs)
+            latest = load_latest_snapshot(session, competitor.id, "talent")
+            previous_jobs = (latest.structured_json or {}).get("jobs", []) if latest else []
+            current_jobs = structured.get("jobs") or []
 
-                # New capability detection
-                for capability in current_counts.keys():
-                    if not capability_seen(session, competitor.id, capability):
-                        store_capability(session, competitor.id, capability)
-                        event = build_capability_event(capability)
-                        if not event_recently_created(
-                            session,
-                            competitor.id,
-                            event["type"],
-                            event["title"],
-                            window_days=dedupe_window_for(event["type"]),
-                        ):
-                            create_event(session, competitor.id, event)
+            existing_job_count = 0
+            if not current_jobs:
+                for s in (
+                    session.query(Snapshot)
+                    .filter(Snapshot.competitor_id == competitor.id, Snapshot.channel == "talent")
+                    .order_by(Snapshot.captured_at.desc())
+                    .limit(20)
+                    .all()
+                ):
+                    jobs_in = (s.structured_json or {}).get("jobs", [])
+                    if jobs_in and any(isinstance(j, dict) for j in jobs_in):
+                        existing_job_count = len([j for j in jobs_in if isinstance(j, dict)])
+                        break
+            if not current_jobs and existing_job_count:
+                log_run(
+                    session,
+                    competitor.id,
+                    "talent",
+                    "skipped",
+                    message="empty_snapshot_kept_previous",
+                    extra={"url": endpoint_used.url, "existing_job_count": existing_job_count},
+                )
+                continue
 
-                # Senior / strategic roles
-                for job in added_jobs:
-                    if job.get("is_senior"):
-                        event = build_senior_event(job)
-                        if not event_recently_created(
-                            session,
-                            competitor.id,
-                            event["type"],
-                            event["title"],
-                            window_days=dedupe_window_for(event["type"]),
-                        ):
-                            create_event(session, competitor.id, event)
-                    elif job.get("is_strategic"):
-                        event = build_strategic_role_event(job)
-                        if not event_recently_created(
-                            session,
-                            competitor.id,
-                            event["type"],
-                            event["title"],
-                            window_days=dedupe_window_for(event["type"]),
-                        ):
-                            create_event(session, competitor.id, event)
+            current_jobs = [assign_job_flags(job) for job in current_jobs]
+            previous_jobs = [assign_job_flags(job) for job in previous_jobs]
+            structured["jobs"] = current_jobs
 
-                # Hiring surge
-                for capability in current_counts.keys():
-                    previous_count = count_recent_by_capability(previous_jobs, capability, days=30)
-                    current_count = count_recent_by_capability(current_jobs, capability, days=30)
-                    if recent_threshold_crossed(previous_count, current_count, threshold=5):
-                        event = build_hiring_surge_event(capability, current_count)
-                        if not event_recently_created(
-                            session,
-                            competitor.id,
-                            event["type"],
-                            event["title"],
-                            window_days=dedupe_window_for(event["type"]),
-                        ):
-                            create_event(session, competitor.id, event)
-
+            persist_snapshot(
+                session,
+                competitor.id,
+                "talent",
+                snapshot.get("raw_content") or "",
+                snapshot.get("raw_hash") or "",
+                structured,
+            )
+            if not current_jobs and snapshot.get("playwright_fallback"):
+                log_run(
+                    session,
+                    competitor.id,
+                    "talent",
+                    "skipped",
+                    message="talent_js_fallback_zero_jobs",
+                    extra={
+                        "url": endpoint_used.url,
+                        "hint": "Cron needs playwright package + 'playwright install chromium' in build and PLAYWRIGHT_ENABLED=true",
+                    },
+                )
+            seed_mode = getattr(settings, "seed_mode", False)
+            is_first_snapshot = latest is None
+            if seed_mode and is_first_snapshot:
                 log_run(
                     session,
                     competitor.id,
                     "talent",
                     "success",
-                    extra={"added_jobs": len(added_jobs)},
+                    message="talent_seed_baseline",
+                    extra={"jobs": len(current_jobs)},
                 )
+                continue
+
+            diff = diff_jobs(previous_jobs, current_jobs)
+            added_jobs = diff["added"]
+            previous_counts = compute_capability_counts(previous_jobs)
+            current_counts = compute_capability_counts(current_jobs)
+
+            for capability in current_counts.keys():
+                if not capability_seen(session, competitor.id, capability):
+                    store_capability(session, competitor.id, capability)
+                    event = build_capability_event(capability)
+                    if not settings.seed_mode and not event_recently_created(
+                        session,
+                        competitor.id,
+                        event["type"],
+                        event["title"],
+                        window_days=dedupe_window_for(event["type"]),
+                    ):
+                        create_event(session, competitor.id, event)
+            for job in added_jobs:
+                if job.get("is_senior"):
+                    event = build_senior_event(job)
+                    if not settings.seed_mode and not event_recently_created(
+                        session,
+                        competitor.id,
+                        event["type"],
+                        event["title"],
+                        window_days=dedupe_window_for(event["type"]),
+                    ):
+                        create_event(session, competitor.id, event)
+                elif job.get("is_strategic"):
+                    event = build_strategic_role_event(job)
+                    if not settings.seed_mode and not event_recently_created(
+                        session,
+                        competitor.id,
+                        event["type"],
+                        event["title"],
+                        window_days=dedupe_window_for(event["type"]),
+                    ):
+                        create_event(session, competitor.id, event)
+            for capability in current_counts.keys():
+                previous_count = count_recent_by_capability(previous_jobs, capability, days=30)
+                current_count = count_recent_by_capability(current_jobs, capability, days=30)
+                if recent_threshold_crossed(previous_count, current_count, threshold=5):
+                    event = build_hiring_surge_event(capability, current_count)
+                    if not settings.seed_mode and not event_recently_created(
+                        session,
+                        competitor.id,
+                        event["type"],
+                        event["title"],
+                        window_days=dedupe_window_for(event["type"]),
+                    ):
+                        create_event(session, competitor.id, event)
+
+            log_run(
+                session,
+                competitor.id,
+                "talent",
+                "success",
+                extra={"added_jobs": len(added_jobs), "url": endpoint_used.url},
+            )
 
 
 def run_asset() -> None:
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         for competitor in competitors:
-            endpoints = [
-                endpoint
-                for endpoint in competitor.source_endpoints
-                if endpoint.channel == "asset"
-            ]
-            for endpoint in endpoints:
+            endpoints_ordered = _endpoints_ordered([
+                e for e in competitor.source_endpoints if e.channel == "asset"
+            ])
+            if not endpoints_ordered:
+                continue
+
+            snapshot = None
+            endpoint_used = None
+            structured = None
+            current_props = []
+
+            for endpoint in endpoints_ordered:
                 print(
                     f"[{datetime.utcnow().isoformat()}] asset run: "
                     f"{competitor.name} {endpoint.url} ({endpoint.confidence})"
@@ -449,86 +489,111 @@ def run_asset() -> None:
                     structured.get("properties") or [],
                     raw_content=snapshot.get("raw_content"),
                 )
-
-                latest = load_latest_snapshot(session, competitor.id, "asset")
-                previous_props = (latest.structured_json or {}).get("properties", []) if latest else []
-                current_props = structured.get("properties", [])
-
-                persist_snapshot(
+                current_props = structured.get("properties") or []
+                if current_props:
+                    endpoint_used = endpoint
+                    break
+                if endpoint is endpoints_ordered[-1]:
+                    endpoint_used = endpoint
+                    break
+                log_run(
                     session,
                     competitor.id,
                     "asset",
-                    snapshot.get("raw_content") or "",
-                    snapshot.get("raw_hash") or "",
-                    structured,
+                    "skipped",
+                    message="primary_returned_zero_properties_trying_secondary",
+                    extra={"url": endpoint.url},
                 )
 
-                diff = diff_properties(previous_props, current_props)
-                added_props = diff["added"]
+            if endpoint_used is None:
+                continue
 
-                previous_markets = extract_markets(previous_props)
-                current_markets = extract_markets(current_props)
+            latest = load_latest_snapshot(session, competitor.id, "asset")
+            previous_props = (latest.structured_json or {}).get("properties", []) if latest else []
+            current_props = structured.get("properties") or []
 
-                # New market detection
-                for market in current_markets:
-                    if market not in previous_markets:
-                        event = build_new_market_event(market)
-                        if not event_recently_created(
-                            session,
-                            competitor.id,
-                            event["type"],
-                            event["title"],
-                            window_days=dedupe_window_for(event["type"]),
-                        ):
-                            create_event(session, competitor.id, event)
+            persist_snapshot(
+                session,
+                competitor.id,
+                "asset",
+                snapshot.get("raw_content") or "",
+                snapshot.get("raw_hash") or "",
+                structured,
+            )
 
-                # Pipeline signals
-                for prop in added_props:
-                    status = (prop.get("status") or "").lower()
-                    name = (prop.get("name") or "").lower()
-                    if "coming soon" in status or "coming soon" in name:
-                        event = build_pipeline_event(prop)
-                        if not event_recently_created(
-                            session,
-                            competitor.id,
-                            event["type"],
-                            event["title"],
-                            window_days=dedupe_window_for(event["type"]),
-                        ):
-                            create_event(session, competitor.id, event)
-
-                # Market exit (requires two consecutive runs showing removal)
-                if latest:
-                    removed_markets = previous_markets - current_markets
-                    if removed_markets:
-                        older = (
-                            session.query(Snapshot)
-                            .filter(Snapshot.competitor_id == competitor.id, Snapshot.channel == "asset")
-                            .order_by(Snapshot.captured_at.desc())
-                            .offset(1)
-                            .first()
-                        )
-                        if older:
-                            older_markets = extract_markets((older.structured_json or {}).get("properties", []))
-                            confirmed_exits = [m for m in removed_markets if m not in older_markets]
-                            for market in confirmed_exits:
-                                event = build_market_exit_event(market)
-                                if not event_recently_created(
-                                    session,
-                                    competitor.id,
-                                    event["type"],
-                                    event["title"],
-                                    window_days=dedupe_window_for(event["type"]),
-                                ):
-                                    create_event(session, competitor.id, event)
-
+            seed_mode = getattr(settings, "seed_mode", False)
+            is_first_snapshot = latest is None
+            if seed_mode and is_first_snapshot:
                 log_run(
                     session,
                     competitor.id,
                     "asset",
                     "success",
-                    extra={"added_properties": len(added_props)},
+                    message="asset_seed_baseline",
+                    extra={"properties": len(current_props)},
                 )
+                continue
+
+            diff = diff_properties(previous_props, current_props)
+            added_props = diff["added"]
+            previous_markets = extract_markets(previous_props)
+            current_markets = extract_markets(current_props)
+
+            for market in current_markets:
+                if market not in previous_markets:
+                    event = build_new_market_event(market)
+                    if not settings.seed_mode and not event_recently_created(
+                        session,
+                        competitor.id,
+                        event["type"],
+                        event["title"],
+                        window_days=dedupe_window_for(event["type"]),
+                    ):
+                        create_event(session, competitor.id, event)
+            for prop in added_props:
+                status = (prop.get("status") or "").lower()
+                name = (prop.get("name") or "").lower()
+                if "coming soon" in status or "coming soon" in name:
+                    event = build_pipeline_event(prop)
+                    if not settings.seed_mode and not event_recently_created(
+                        session,
+                        competitor.id,
+                        event["type"],
+                        event["title"],
+                        window_days=dedupe_window_for(event["type"]),
+                    ):
+                        create_event(session, competitor.id, event)
+            if latest:
+                removed_markets = previous_markets - current_markets
+                if removed_markets:
+                    older = (
+                        session.query(Snapshot)
+                        .filter(Snapshot.competitor_id == competitor.id, Snapshot.channel == "asset")
+                        .order_by(Snapshot.captured_at.desc())
+                        .offset(1)
+                        .first()
+                    )
+                    if older:
+                        older_markets = extract_markets((older.structured_json or {}).get("properties", []))
+                        confirmed_exits = [m for m in removed_markets if m not in older_markets]
+                        for market in confirmed_exits:
+                            event = build_market_exit_event(market)
+                            if not settings.seed_mode and not event_recently_created(
+                                session,
+                                competitor.id,
+                                event["type"],
+                                event["title"],
+                                window_days=dedupe_window_for(event["type"]),
+                            ):
+                                create_event(session, competitor.id, event)
+
+            log_run(
+                session,
+                competitor.id,
+                "asset",
+                "success",
+                extra={"added_properties": len(added_props), "url": endpoint_used.url},
+            )
 
 
 def run_press() -> None:
@@ -546,7 +611,8 @@ def run_press() -> None:
                 f"({len(endpoints)} endpoint(s))"
             )
 
-            # 1) Collect items from competitor-specific press endpoints (PRNewswire, company press, etc.).
+            # 1) Primary: user-provided company news links (saved in DB on Add company / Add Source).
+            #    These run first and are highest priority for dedup (e.g. Lark company news page).
             raw_items: list[dict] = []
             source_meta: list[dict] = []
 
@@ -583,10 +649,22 @@ def run_press() -> None:
                     )
                 source_meta.append({"type": "press_endpoint", "url": endpoint.url})
 
-            # 2) Global sources: Business Insider, Yahoo Finance (placeholder), CNBC.
+            # 2) Second: PR Newswire (company name search, max 100). Always run; user may also add a PRN URL as press endpoint.
             max_per_source = settings.press_max_items_per_source
             window_days = 90
+            try:
+                prn_items = collect_prnewswire_items(
+                    competitor.name,
+                    max_items=100,
+                    window_days=window_days,
+                )
+                raw_items.extend(prn_items)
+                if prn_items:
+                    source_meta.append({"type": "prnewswire"})
+            except Exception:
+                pass
 
+            # 3) Secondary backups: Business Insider, Yahoo Finance, CNBC, Google News (still relevant for newsworthy clips).
             if settings.press_enable_business_insider:
                 try:
                     bi_items = collect_business_insider_items(
@@ -624,6 +702,21 @@ def run_press() -> None:
                     )
                     raw_items.extend(cnbc_items)
                     source_meta.append({"type": "cnbc"})
+                except Exception:
+                    pass
+
+            # Google News: past 30 days, quoted company name (e.g. "Avantstay"). Duplicates/noise
+            # are handled by the pipeline's LLM classification and deduplication.
+            if getattr(settings, "press_enable_google_news", True):
+                try:
+                    gn_items = collect_google_news_items(
+                        competitor.name,
+                        max_items=max_per_source,
+                        window_days=30,
+                    )
+                    raw_items.extend(gn_items)
+                    if gn_items:
+                        source_meta.append({"type": "google_news"})
                 except Exception:
                     pass
 
@@ -706,6 +799,20 @@ def run_press() -> None:
                 raw_hash,
                 structured,
             )
+            # If seed_mode is enabled and this is the first snapshot for this competitor/channel,
+            # persist a baseline but skip diff + events so future runs compare against this state.
+            seed_mode = getattr(settings, "seed_mode", False)
+            is_first_snapshot = latest is None
+            if seed_mode and is_first_snapshot:
+                log_run(
+                    session,
+                    competitor.id,
+                    "press",
+                    "success",
+                    message="press_seed_baseline",
+                    extra={"raw_items": len(raw_items), "filtered_items": len(filtered_items)},
+                )
+                continue
 
             # 6) Diff for new items and create press events (same rules as before).
             diff = diff_items(previous_items, current_items)
@@ -718,7 +825,7 @@ def run_press() -> None:
                 if not is_executive_relevant(item):
                     continue
                 event = build_press_event(category, item)
-                if not event_recently_created(
+                if not settings.seed_mode and not event_recently_created(
                     session,
                     competitor.id,
                     event["type"],

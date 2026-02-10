@@ -1,22 +1,25 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Tuple
 
 import feedparser
 from bs4 import BeautifulSoup
 
-from .http import fetch_url
+from .http import fetch_url, FetchResult
 
 
-def parse_rss(url: str) -> list[dict[str, Any]]:
+def parse_rss(url: str) -> Tuple[list[dict[str, Any]], FetchResult]:
+    """Parse RSS/Atom feed. Date is publication date only (never fetch/pull time)."""
     fetched = fetch_url(url)
     feed = feedparser.parse(fetched.text)
     items = []
     for entry in feed.entries:
+        # Prefer published (first publication); use updated only if published is missing.
+        pub_date = entry.get("published") or entry.get("updated")
         items.append(
             {
                 "title": entry.get("title"),
                 "url": entry.get("link"),
-                "date": entry.get("published") or entry.get("updated"),
+                "date": pub_date,
                 "source": feed.feed.get("title"),
             }
         )
@@ -24,6 +27,7 @@ def parse_rss(url: str) -> list[dict[str, Any]]:
 
 
 def extract_press_from_html(html: str) -> list[dict[str, Any]]:
+    """Extract press links from HTML. Date is left None unless we can parse publication date from the page (never use fetch/pull time)."""
     soup = BeautifulSoup(html, "html.parser")
     items = []
     for link in soup.find_all("a"):
@@ -35,6 +39,7 @@ def extract_press_from_html(html: str) -> list[dict[str, Any]]:
             continue
         if "press" not in href and "blog" not in href and "news" not in href:
             continue
+        # Only use publication date when we can parse it; never set date to fetch time.
         items.append({"title": title, "url": href, "date": None, "source": None})
     return items
 

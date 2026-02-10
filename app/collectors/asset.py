@@ -11,7 +11,9 @@ from bs4 import BeautifulSoup
 from .http import fetch_url, fetch_url_js, fetch_url_js_exhaust
 
 # Max characters of page text to send to LLM for property extraction (fit context, control cost).
-_LLM_EXTRACT_MAX_CHARS = 14_000
+# Increased to 50k so large property lists (e.g. AvantStay-style search pages) are not silently
+# truncated to just the first handful of properties when using the generic HTML→LLM extractor.
+_LLM_EXTRACT_MAX_CHARS = 50_000
 # Max blocks per LLM call when extracting from Lark-style blocks (avoids truncation; we chunk and merge).
 _LARK_BLOCKS_BATCH_SIZE = 80
 
@@ -779,20 +781,58 @@ def collect_asset_snapshot(
             strategy = "html"
 
     def fetch_from_sitemap() -> Optional[Dict[str, Any]]:
-        for sitemap_url in discover_sitemap(source_url):
-            urls = expand_sitemap(sitemap_url)
-            if not urls:
-                continue
-            property_urls = [url for url in urls if is_property_like(url)]
+        """
+        Crawl sitemap.xml (and any nested sitemap indexes) for property-like URLs.
+
+        Many competitors (including AvantStay) expose properties only via secondary
+        sitemap files (e.g. /sitemap-0.xml). The previous implementation only
+        inspected the top-level sitemap and could therefore return a heavily
+        truncated property list. Here we walk nested sitemap URLs on the same
+        origin and aggregate all links that look like property/location pages.
+        """
+
+        for root_sitemap_url in discover_sitemap(source_url):
+            visited: set[str] = set()
+            property_urls: set[str] = set()
+            stack: list[str] = [root_sitemap_url]
+
+            while stack:
+                sitemap_url = stack.pop()
+                if sitemap_url in visited:
+                    continue
+                visited.add(sitemap_url)
+
+                urls = expand_sitemap(sitemap_url)
+                if not urls:
+                    continue
+
+                for url in urls:
+                    if not url:
+                        continue
+                    # If this looks like a property/location URL, keep it.
+                    if is_property_like(url):
+                        property_urls.add(url)
+                        continue
+
+                    # Otherwise, if it's another sitemap (same origin), enqueue it so we
+                    # can pull property URLs from section-specific sitemaps as well.
+                    if url.endswith(".xml") or url.endswith(".xml.gz"):
+                        parsed_child = urlparse(url)
+                        parsed_root = urlparse(root_sitemap_url)
+                        if parsed_child.netloc and parsed_child.netloc == parsed_root.netloc and url not in visited:
+                            stack.append(url)
+
             # Only return sitemap result when we found property-like URLs so caller can fall back to HTML.
-            if not property_urls:
-                continue
-            return {
-                "source_url": sitemap_url,
-                "raw_content": None,
-                "raw_hash": None,
-                "properties": normalize_properties([{"url": url, "name": url} for url in property_urls]),
-            }
+            if property_urls:
+                return {
+                    "source_url": root_sitemap_url,
+                    "raw_content": None,
+                    "raw_hash": None,
+                    "properties": normalize_properties(
+                        [{"url": url, "name": url} for url in sorted(property_urls)]
+                    ),
+                }
+
         return None
 
     def fetch_from_html() -> dict[str, Any]:

@@ -5,6 +5,14 @@ from typing import Any, Dict, Optional
 
 import requests
 
+# Default UA for general crawling.
+USER_AGENT_DEFAULT = "competitor-signals/0.1"
+# Browser-like UA to reduce "Please enable JS" / ad-block walls that only check User-Agent.
+USER_AGENT_BROWSER = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
 
 @dataclass
 class FetchResult:
@@ -15,8 +23,13 @@ class FetchResult:
     raw_hash: str
 
 
-def fetch_url(url: str, timeout: int = 20) -> FetchResult:
-    response = requests.get(url, timeout=timeout, headers={"User-Agent": "competitor-signals/0.1"})
+def fetch_url(url: str, timeout: int = 20, headers: Optional[Dict[str, str]] = None) -> FetchResult:
+    h = headers if headers is not None else {"User-Agent": USER_AGENT_DEFAULT}
+    if "User-Agent" not in h and headers is not None:
+        h = {**h, "User-Agent": USER_AGENT_DEFAULT}
+    elif headers is None:
+        h = {"User-Agent": USER_AGENT_DEFAULT}
+    response = requests.get(url, timeout=timeout, headers=h)
     content_type = response.headers.get("content-type")
     text = response.text or ""
     raw_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()

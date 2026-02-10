@@ -43,7 +43,7 @@
           <select name="channel">
             <option value="talent">talent</option>
             <option value="asset">asset</option>
-            <option value="press">press</option>
+            <option value="press">press (primary company news; used first each run)</option>
             <option value="homepage">homepage</option>
             <option value="public_records">public_records</option>
           </select>
@@ -79,10 +79,12 @@
       </div>
     </form>
 
+    <p class="meta" style="margin: 0 0 12px 0;">For talent and asset, the first source (Primary) is used; if it fails or returns no data, the system tries the next (Secondary).</p>
     <table>
       <thead>
         <tr>
           <th>Channel</th>
+          <th>Role</th>
           <th>URL</th>
           <th>Confidence</th>
           <th>JS</th>
@@ -94,6 +96,7 @@
         {% for endpoint in endpoints %}
         <tr>
           <td>{{ endpoint.channel }}</td>
+          <td>{% if endpoint.channel in ("talent", "asset") %}<span style="font-size: 12px; font-weight: 600; color: var(--accent);">{% if endpoint.is_primary %}Primary{% else %}Secondary{% endif %}</span>{% else %}—{% endif %}</td>
           <td class="muted">{{ endpoint.url }}</td>
           <td>{{ endpoint.confidence }}</td>
           <td>{{ "yes" if endpoint.js_required else "no" }}</td>
@@ -144,7 +147,7 @@
         {% endfor %}
         {% if endpoints|length == 0 %}
         <tr>
-          <td colspan="4" class="muted">No sources yet.</td>
+          <td colspan="7" class="muted">No sources yet.</td>
         </tr>
         {% endif %}
       </tbody>
