@@ -60,6 +60,7 @@ def exhaust_list_in_browser(page: Any, options: Dict[str, Any]) -> None:
     Click 'Load more' or scroll until the trigger is gone or max iterations.
     Mutates the page DOM by triggering loading; caller should then call page.content().
     options: click_selector, stop_when_selector_gone (default True), wait_after_click_ms (1500), max_clicks (50),
+             wait_for_selector_timeout_ms (8000), wait_after_gone_ms (2500),
              optional scroll_selector (scroll this element to bottom instead of clicking).
     """
     click_selector = options.get("click_selector")
@@ -67,22 +68,64 @@ def exhaust_list_in_browser(page: Any, options: Dict[str, Any]) -> None:
     stop_when_gone = options.get("stop_when_selector_gone", True)
     wait_ms = options.get("wait_after_click_ms", 1500)
     max_clicks = options.get("max_clicks", 50)
+    wait_for_timeout_ms = options.get("wait_for_selector_timeout_ms", 8000)
+    wait_after_gone_ms = options.get("wait_after_gone_ms", 2500)
     wait_sec = wait_ms / 1000.0
 
+    # Support multiple selectors (e.g. "Load more" / "Load More" / "View more"); use first that appears
+    selectors = click_selector if isinstance(click_selector, list) else [click_selector] if click_selector else []
+
+    if selectors:
+        # Wait for any of the buttons to appear (page may load list + button after networkidle)
+        try:
+            for sel in selectors:
+                page.locator(sel).first.wait_for(state="visible", timeout=wait_for_timeout_ms)
+                break
+        except Exception:
+            pass  # None visible yet; loop will run and may find it or return current content
+
     for _ in range(max_clicks):
-        if click_selector:
+        if selectors:
+            btn = None
+            for sel in selectors:
+                loc = page.locator(sel).first
+                try:
+                    if loc.is_visible():
+                        btn = loc
+                        break
+                except Exception:
+                    continue
+            if not btn:
+                break
             try:
-                btn = page.locator(click_selector).first
-                if not btn.is_visible():
-                    break
+                btn.scroll_into_view_if_needed()
                 btn.click()
             except Exception:
                 break
             time.sleep(wait_sec)
             if stop_when_gone:
                 try:
-                    if not page.locator(click_selector).first.is_visible():
-                        break
+                    visible = False
+                    for sel in selectors:
+                        try:
+                            if page.locator(sel).first.is_visible():
+                                visible = True
+                                break
+                        except Exception:
+                            continue
+                    if not visible:
+                        # Button may be temporarily hidden (e.g. "Loading..."); wait and recheck
+                        time.sleep(wait_after_gone_ms / 1000.0)
+                        visible_after = False
+                        for sel in selectors:
+                            try:
+                                if page.locator(sel).first.is_visible():
+                                    visible_after = True
+                                    break
+                            except Exception:
+                                continue
+                        if not visible_after:
+                            break
                 except Exception:
                     break
         elif scroll_selector:
