@@ -26,8 +26,23 @@ def discover_sitemap(url: str) -> list[str]:
 
 
 def extract_links_from_sitemap(xml_text: str) -> list[str]:
-    soup = BeautifulSoup(xml_text, "xml")
-    urls = []
+    """
+    Parse a sitemap XML string and return all <loc> URLs.
+
+    Uses the 'xml' tree builder when available (preferred), and falls back to the
+    default HTML parser when an XML-capable parser is not installed so that runs
+    do not hard-fail with "Couldn't find a tree builder with the features you
+    requested: xml". In the worst case, returns an empty list so callers can
+    continue with HTML/JS-based extraction.
+    """
+    try:
+        soup = BeautifulSoup(xml_text, "xml")
+    except Exception:
+        try:
+            soup = BeautifulSoup(xml_text, "html.parser")
+        except Exception:
+            return []
+    urls: list[str] = []
     for loc in soup.find_all("loc"):
         if loc.text:
             urls.append(loc.text.strip())

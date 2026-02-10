@@ -3,10 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Hosted editorial serif font (EB Garamond as Minion-style) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- If you have an Adobe Fonts kit for Minion Pro, replace the href below with your kit URL -->
+  <!-- <link rel="stylesheet" href="https://use.typekit.net/YOUR_KIT_ID.css"> -->
   <title>Competitor Signals</title>
   <style>
     :root {
-      --bg: #f7f4ef;
+      --bg: #f5eee4;
       --card: #ffffff;
       --text: #1d1c1a;
       --muted: #6b6863;
@@ -16,9 +22,45 @@
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: "Georgia", "Times New Roman", serif;
-      background: linear-gradient(120deg, #f7f4ef, #f1e8dc);
+      font-family: "Minion Pro", "Minion", "EB Garamond", "Georgia", "Times New Roman", serif;
+      font-size: 15px;
+      line-height: 1.6;
+      background: radial-gradient(circle at top left, var(--bg), #e6ded3);
       color: var(--text);
+    }
+
+    h1, h2, h3, h4 {
+      font-family: "Minion Pro", "Minion", "EB Garamond", "Georgia", "Times New Roman", serif;
+      color: var(--text);
+      margin: 0 0 8px 0;
+      letter-spacing: 0.02em;
+    }
+
+    h1 { font-size: 26px; }
+    h2 { font-size: 20px; }
+    h3 { font-size: 17px; text-transform: uppercase; letter-spacing: 0.12em; font-weight: 600; }
+    h4 { font-size: 15px; font-weight: 600; }
+
+    p {
+      margin: 0 0 8px 0;
+    }
+
+    ul {
+      margin: 0 0 8px 1.25rem;
+      padding: 0;
+    }
+
+    li {
+      margin-bottom: 4px;
+    }
+
+    .card > strong:first-of-type {
+      display: block;
+      font-size: 17px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
     }
     header {
       display: flex;
@@ -78,7 +120,8 @@
     .pill.med { background: #f3e8c8; color: #735b18; }
     .pill.low { background: #e2f0e8; color: #20523e; }
     .meta {
-      font-size: 12px;
+      font-size: 13px;
+      line-height: 1.4;
       color: var(--muted);
       margin-top: 6px;
     }

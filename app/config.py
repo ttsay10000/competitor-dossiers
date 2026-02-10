@@ -16,6 +16,14 @@ class Settings:
         self.playwright_enabled = os.getenv("PLAYWRIGHT_ENABLED", "false").lower() in {"1", "true", "yes"}
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
         self.version = os.getenv("APP_VERSION", "0.1.0")
+        # Press / news aggregation tuning knobs (lightweight defaults).
+        self.press_enable_business_insider = os.getenv("PRESS_ENABLE_BUSINESS_INSIDER", "true").lower() in {"1", "true", "yes"}
+        self.press_enable_yahoo_finance = os.getenv("PRESS_ENABLE_YAHOO_FINANCE", "false").lower() in {"1", "true", "yes"}
+        self.press_enable_cnbc = os.getenv("PRESS_ENABLE_CNBC", "true").lower() in {"1", "true", "yes"}
+        # Global caps to keep LLM + HTTP work manageable.
+        self.press_max_raw_items_per_competitor = int(os.getenv("PRESS_MAX_RAW_ITEMS_PER_COMPETITOR", "120") or "120")
+        self.press_max_items_per_source = int(os.getenv("PRESS_MAX_ITEMS_PER_SOURCE", "30") or "30")
+        self.press_max_articles_to_summarize = int(os.getenv("PRESS_MAX_ARTICLES_TO_SUMMARIZE", "40") or "40")
 
 
 settings = Settings()

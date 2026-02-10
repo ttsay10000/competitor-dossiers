@@ -273,10 +273,10 @@ def _classify_press_headlines_with_llm(
         "or in-depth interviews / Q&A with senior executives of the target company (those should use topic 'executive_interview').\n"
         "Promo or brand marketing includes thought-leadership pieces, opinion columns, 'why we are best', awards, lifestyle content.\n"
         "Output a JSON array with one object per line. Each object must have:\n"
-        '- "index" (int, the index from the line),\n'
-        '- "is_about_company" (bool),\n'
-        '- "topic" (string, one of the topics list),\n'
-        '- "is_promo" (bool, true for promo_or_brand_marketing stories even if they mention the company).\n"
+        "- \"index\" (int, the index from the line),\n"
+        "- \"is_about_company\" (bool),\n"
+        "- \"topic\" (string, one of the topics list),\n"
+        "- \"is_promo\" (bool, true for promo_or_brand_marketing stories even if they mention the company).\n"
         "Return only the JSON array."
     )
     user = (

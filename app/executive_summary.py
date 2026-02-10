@@ -70,7 +70,8 @@ def _build_context_text(context: Dict[str, Any]) -> str:
 
 def generate_executive_summary(context: Dict[str, Any]) -> Optional[str]:
     """
-    Return strategic takeaways as bullet points for the competitor dossier "At a glance" block.
+    Return an executive summary as bullet points for the competitor dossier "Executive summary" block,
+    focused on what has changed recently and what is happening now.
     Returns None if OPENAI_API_KEY is unset or the API call fails.
     """
     from .config import settings
@@ -86,12 +87,18 @@ def generate_executive_summary(context: Dict[str, Any]) -> Optional[str]:
     context_text = _build_context_text(context)
     competitor_name = context.get("competitor", {}).get("name", "Competitor")
 
-    system = """You are an executive briefing analyst. Given factual data about a competitor, write strategic takeaways for a leadership reader. Output only a short bullet list (3–6 bullets). Each bullet should be one clear, actionable takeaway based on the data.
+    system = """You are an executive briefing analyst. Given factual data about a competitor (including a baseline snapshot, recent events, and current counts), write a concise executive summary for a leadership reader.
+Focus ONLY on what has changed recently and what is happening now versus the prior weekly report or baseline in the data.
+Output only a short bullet list (3–6 bullets). Each bullet should be one clear, high-level takeaway about recent change or current momentum.
 
-Include takeaways that draw from:
-- Talent: hiring focus (e.g. partnerships, engineering), senior roles, or stability ("No notable change on talent; job count stable").
-- Assets: for properties by location use exactly one line per location in the form "State - N properties (M keys)" (e.g. "California - 5 properties (100 keys)"). Do not add sub-bullets or property names under a location; only that single summary line per location. Also mention where they added or removed properties, standout markets, or footprint changes when relevant.
-- News: only if there is notable press; otherwise omit.
+Prioritize bullets that draw from:
+- Talent & hiring: shifts in hiring focus (e.g. more partnerships roles, more engineering), notable new senior roles posted, or meaningful changes in total open roles. If there is no meaningful change, say so explicitly (e.g. "No material change in talent vs last week").
+- Assets & markets: new markets or locations entered, meaningful adds/removals versus the baseline date, standout growth/exit markets, or notable footprint concentration or pullback.
+- Operations, partnerships, and strategy: notable openings/closings, partnerships, funding, or clear strategic/ops shifts visible in the events or news.
+- News: only include press or events that represent new, strategically relevant developments; skip generic marketing or brand noise.
+
+Use static counts or lists (e.g. by-location property counts) only to explain the change, not as standalone background bullets.
+When referencing properties by location, use a single summary line per location in the form "State - N properties (M keys)" when the data allows. Do not add sub-bullets or per-property lists.
 
 Be specific (numbers, locations) when the data provides them. Tone: calm and executive. Format: each line starting with a single bullet (use "- "). Use only top-level bullets—no sub-bullets, nested bullets, or indented sub-points. No intro sentence, no subheadings."""
 

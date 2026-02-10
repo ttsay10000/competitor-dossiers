@@ -1,18 +1,26 @@
 from datetime import datetime, timedelta
+import hashlib
 import json
 from typing import Any, Optional
 
 from .collectors.talent import collect_talent_snapshot, build_structured_json as build_talent_structured
 from .collectors.asset import collect_asset_snapshot, build_structured_json as build_asset_structured
 from .collectors.press import collect_press_snapshot, build_structured_json as build_press_structured
+from .collectors.global_press import (
+    collect_business_insider_items,
+    collect_cnbc_items,
+    collect_yahoo_finance_items,
+)
 from .collectors.homepage import collect_homepage_snapshot, build_structured_json as build_homepage_structured
 from .collectors.public_records import collect_public_records_snapshot, build_structured_json as build_public_records_structured
+from .config import settings
 from .db import get_session
 from .diff.talent_diff import diff_jobs, count_recent_by_capability
 from .diff.asset_diff import diff_properties, extract_markets
 from .llm_structured import enrich_properties_with_llm, enrich_jobs_with_llm, enrich_press_items_with_llm
 from .diff.press_diff import diff_items
 from .models import Competitor, SourceEndpoint, Snapshot, Event, Capability, RunLog
+from .tickers import get_competitor_ticker
 from .rules.talent_rules import (
     assign_job_flags,
     build_capability_event,
@@ -129,6 +137,47 @@ DEDUPE_WINDOWS_DAYS = {
     "narrative.homepage_updated": 14,
     "public_record.filing": 60,
 }
+
+
+def _parse_press_date(value: Any) -> Optional[datetime]:
+    """Best-effort parse for press item dates (RSS or ISO strings)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.utcfromtimestamp(value / 1000.0)
+        except Exception:
+            return None
+    if isinstance(value, str):
+        val = value.strip()
+        if not val:
+            return None
+        try:
+            return datetime.fromisoformat(val.replace("Z", "+00:00"))
+        except Exception:
+            return None
+    return None
+
+
+def _build_press_raw_hash(items: list[dict]) -> str:
+    """
+    Compute a stable hash for a set of press items so we can skip unchanged snapshots.
+    Uses provider + url/link + title + date; order-independent.
+    """
+    if not items:
+        return ""
+    keys: list[str] = []
+    for it in items:
+        provider = (it.get("provider") or "").strip()
+        url = (it.get("url") or it.get("link") or "").strip()
+        title = (it.get("title") or "").strip()
+        date = (it.get("date") or "").strip() if isinstance(it.get("date"), str) else str(it.get("date") or "")
+        keys.append(f"{provider}|{url}|{title}|{date}")
+    keys.sort()
+    payload = "\n".join(keys)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def event_recently_created(
@@ -491,11 +540,17 @@ def run_press() -> None:
                 for endpoint in competitor.source_endpoints
                 if endpoint.channel == "press"
             ]
+
+            print(
+                f"[{datetime.utcnow().isoformat()}] press run: {competitor.name} "
+                f"({len(endpoints)} endpoint(s))"
+            )
+
+            # 1) Collect items from competitor-specific press endpoints (PRNewswire, company press, etc.).
+            raw_items: list[dict] = []
+            source_meta: list[dict] = []
+
             for endpoint in endpoints:
-                print(
-                    f"[{datetime.utcnow().isoformat()}] press run: "
-                    f"{competitor.name} {endpoint.url} ({endpoint.confidence})"
-                )
                 try:
                     snapshot = collect_press_snapshot(endpoint.url)
                 except Exception as exc:
@@ -508,68 +563,177 @@ def run_press() -> None:
                         extra={"url": endpoint.url},
                     )
                     continue
-                if should_skip_due_to_hash(session, competitor.id, "press", snapshot.get("raw_hash")):
-                    log_event(
-                        "snapshot_unchanged",
-                        competitor=competitor.name,
-                        channel="press",
-                        url=endpoint.url,
-                    )
-                    log_run(
-                        session,
-                        competitor.id,
-                        "press",
-                        "skipped",
-                        message="snapshot_unchanged",
-                        extra={"url": endpoint.url},
-                    )
-                    continue
-                structured = build_press_structured(snapshot)
-                # LLM-enriched, deduplicated, business-focused press items with 1-line summaries.
-                structured["canonical_items"] = enrich_press_items_with_llm(
-                    competitor.name,
-                    structured.get("items") or [],
-                )
-
-                latest = load_latest_snapshot(session, competitor.id, "press")
-                previous_items = (latest.structured_json or {}).get("items", []) if latest else []
-                current_items = structured.get("items", [])
-
-                persist_snapshot(
-                    session,
-                    competitor.id,
-                    "press",
-                    snapshot.get("raw_content") or "",
-                    snapshot.get("raw_hash") or "",
-                    structured,
-                )
-
-                diff = diff_items(previous_items, current_items)
-                added_items = diff["added"]
-
-                for item in added_items:
-                    category = classify_press(item)
-                    if not category:
+                items = snapshot.get("items") or []
+                for item in items:
+                    if not isinstance(item, dict):
                         continue
-                    if not is_executive_relevant(item):
-                        continue
-                    event = build_press_event(category, item)
-                    if not event_recently_created(
-                        session,
-                        competitor.id,
-                        event["type"],
-                        event["title"],
-                        window_days=dedupe_window_for(event["type"]),
-                    ):
-                        create_event(session, competitor.id, event)
+                    url = (item.get("url") or item.get("link") or "").strip()
+                    if url and not url.startswith("http"):
+                        from urllib.parse import urljoin
 
+                        url = urljoin(snapshot.get("source_url") or endpoint.url, url)
+                    raw_items.append(
+                        {
+                            "title": item.get("title"),
+                            "url": url,
+                            "date": item.get("date"),
+                            "source": item.get("source") or snapshot.get("source_url"),
+                            "provider": "press_endpoint",
+                        }
+                    )
+                source_meta.append({"type": "press_endpoint", "url": endpoint.url})
+
+            # 2) Global sources: Business Insider, Yahoo Finance (placeholder), CNBC.
+            max_per_source = settings.press_max_items_per_source
+            window_days = 90
+
+            if settings.press_enable_business_insider:
+                try:
+                    bi_items = collect_business_insider_items(
+                        competitor.name,
+                        max_items=max_per_source,
+                        window_days=window_days,
+                    )
+                    raw_items.extend(bi_items)
+                    source_meta.append({"type": "business_insider"})
+                except Exception:
+                    # Best-effort only; ignore errors.
+                    pass
+
+            if settings.press_enable_yahoo_finance:
+                ticker = get_competitor_ticker(competitor.name)
+                if ticker:
+                    try:
+                        yf_items = collect_yahoo_finance_items(
+                            ticker,
+                            max_items=max_per_source,
+                            window_days=window_days,
+                        )
+                        raw_items.extend(yf_items)
+                        if yf_items:
+                            source_meta.append({"type": "yahoo_finance", "ticker": ticker})
+                    except Exception:
+                        pass
+
+            if settings.press_enable_cnbc:
+                try:
+                    cnbc_items = collect_cnbc_items(
+                        competitor.name,
+                        max_items=max_per_source,
+                        window_days=window_days,
+                    )
+                    raw_items.extend(cnbc_items)
+                    source_meta.append({"type": "cnbc"})
+                except Exception:
+                    pass
+
+            if not raw_items:
                 log_run(
                     session,
                     competitor.id,
                     "press",
-                    "success",
-                    extra={"added_items": len(added_items)},
+                    "skipped",
+                    message="no_press_items",
+                    extra={"endpoints": [ep.url for ep in endpoints]},
                 )
+                continue
+
+            # 3) Apply 90-day window and global cap before any LLM work.
+            cutoff = datetime.utcnow() - timedelta(days=90)
+            filtered_items: list[dict] = []
+            for item in raw_items:
+                dt = _parse_press_date(item.get("date"))
+                if dt and dt < cutoff:
+                    continue
+                filtered_items.append(item)
+
+            if not filtered_items:
+                log_run(
+                    session,
+                    competitor.id,
+                    "press",
+                    "skipped",
+                    message="all_items_outside_window",
+                    extra={"endpoints": [ep.url for ep in endpoints]},
+                )
+                continue
+
+            max_raw = settings.press_max_raw_items_per_competitor
+            if len(filtered_items) > max_raw:
+                filtered_items = filtered_items[:max_raw]
+
+            # 4) Skip snapshot entirely if nothing meaningful changed.
+            raw_hash = _build_press_raw_hash(filtered_items)
+            if should_skip_due_to_hash(session, competitor.id, "press", raw_hash):
+                log_event(
+                    "snapshot_unchanged",
+                    competitor=competitor.name,
+                    channel="press",
+                    url=None,
+                )
+                log_run(
+                    session,
+                    competitor.id,
+                    "press",
+                    "skipped",
+                    message="snapshot_unchanged",
+                    extra={"endpoints": [ep.url for ep in endpoints]},
+                )
+                continue
+
+            # 5) Build structured snapshot and LLM-enriched canonical press list.
+            snapshot_like = {
+                "source_url": endpoints[0].url if endpoints else None,
+                "items": filtered_items,
+            }
+            structured = build_press_structured(snapshot_like)
+            structured["sources"] = source_meta
+            structured["canonical_items"] = enrich_press_items_with_llm(
+                competitor.name,
+                structured.get("items") or [],
+                max_articles_to_summarize=settings.press_max_articles_to_summarize,
+            )
+
+            latest = load_latest_snapshot(session, competitor.id, "press")
+            previous_items = (latest.structured_json or {}).get("items", []) if latest else []
+            current_items = structured.get("items", [])
+
+            persist_snapshot(
+                session,
+                competitor.id,
+                "press",
+                "",  # raw HTML is not retained for aggregated press; items + canonical_items are sufficient.
+                raw_hash,
+                structured,
+            )
+
+            # 6) Diff for new items and create press events (same rules as before).
+            diff = diff_items(previous_items, current_items)
+            added_items = diff["added"]
+
+            for item in added_items:
+                category = classify_press(item)
+                if not category:
+                    continue
+                if not is_executive_relevant(item):
+                    continue
+                event = build_press_event(category, item)
+                if not event_recently_created(
+                    session,
+                    competitor.id,
+                    event["type"],
+                    event["title"],
+                    window_days=dedupe_window_for(event["type"]),
+                ):
+                    create_event(session, competitor.id, event)
+
+            log_run(
+                session,
+                competitor.id,
+                "press",
+                "success",
+                extra={"added_items": len(added_items), "raw_items": len(raw_items), "filtered_items": len(filtered_items)},
+            )
 
 
 def run_homepage() -> None:
