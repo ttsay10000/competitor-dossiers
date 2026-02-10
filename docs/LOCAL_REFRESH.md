@@ -2,6 +2,19 @@
 
 You run the collector on your Mac with Playwright so Lark/AvantStay talent (and everything else) gets updated and written to the same Postgres the Render website uses.
 
+## Render: Internal vs external Postgres
+
+- **Internal URL** (Render only): host is `dpg-xxx-a` with no domain. Use this in Render’s Dashboard for the **web service** and **cron** (they run inside Render and resolve that host).
+- **External URL** (your Mac, psql, etc.): host must be the full name, e.g. `dpg-xxx-a.ohio-postgres.render.com`. Use this in `.env` when running the app or CLI **locally**.
+
+For local `.env`, always use the **external** form:
+
+```
+DATABASE_URL=postgresql://USER:PASSWORD@dpg-XXXX-a.ohio-postgres.render.com/DATABASE
+```
+
+(Not the internal form with `@dpg-xxxx-a/DATABASE` — that will fail to resolve from your machine.)
+
 ## One-time setup
 
 1. **Create `.env`** in the project root (do not commit it; it’s in `.gitignore`):
@@ -11,7 +24,7 @@ You run the collector on your Mac with Playwright so Lark/AvantStay talent (and 
    PLAYWRIGHT_ENABLED=true
    ```
 
-   Use your real **External** database URL from Render.
+   Use your real password and the **external** host (`...ohio-postgres.render.com`).
 
 2. **Install Playwright browser once:**  
    `python -m playwright install chromium`

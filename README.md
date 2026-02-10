@@ -24,7 +24,15 @@ Dashboard features:
 3. Run migrations (run locally before pushing to avoid deploy failures):
    - `./scripts/migrate.sh` or `alembic upgrade head`
 4. Start the app:
+   - `./scripts/run_local.sh` (migrates then starts at http://127.0.0.1:8000), or
    - `uvicorn app.main:app --reload`
+
+## Run the site locally (one command)
+From the project root, with `DATABASE_URL` in `.env` and dependencies installed (e.g. in a venv):
+```bash
+./scripts/run_local.sh
+```
+Then open http://127.0.0.1:8000 (landing page redirects to /competitors).
 
 ## Runner
 - Run all channels (talent, asset, press, homepage):
