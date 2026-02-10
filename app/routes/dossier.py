@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from typing import Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
@@ -29,12 +30,21 @@ RECOMMENDATIONS_MAP = {
 }
 
 
-def _parse_press_date(value) -> datetime | None:
-    """Best-effort parse for press item dates (RSS or ISO strings)."""
+def _utc_dt(dt: Optional[datetime]) -> Optional[datetime]:
+    """Return datetime as UTC-aware; avoid naive/aware comparison errors."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _parse_press_date(value) -> Optional[datetime]:
+    """Best-effort parse for press item dates (RSS or ISO strings). Always returns UTC-aware or None."""
     if value is None:
         return None
     if isinstance(value, datetime):
-        return value
+        return _utc_dt(value)
     if isinstance(value, (int, float)):
         try:
             return datetime.fromtimestamp(value / 1000.0, tz=timezone.utc)
@@ -44,14 +54,12 @@ def _parse_press_date(value) -> datetime | None:
         val = value.strip()
         if not val:
             return None
-        # Try ISO first
         try:
-            return datetime.fromisoformat(val.replace("Z", "+00:00"))
+            return _utc_dt(datetime.fromisoformat(val.replace("Z", "+00:00")))
         except Exception:
             pass
-        # Fallback: RFC822 / email-style dates used in many RSS feeds
         try:
-            return parsedate_to_datetime(val)
+            return _utc_dt(parsedate_to_datetime(val))
         except Exception:
             return None
     return None
@@ -154,7 +162,11 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         baseline_cutoff = datetime.strptime(reporting_baseline_date, "%Y-%m-%d")
         events = [e for e in events if e.detected_at.date() >= baseline_cutoff.date()]
     # Order events by date published (occurred_at) when available, else detected_at, newest first.
-    events = sorted(events, key=lambda e: (e.occurred_at or e.detected_at), reverse=True)
+    # Use timestamp to avoid naive/aware comparison errors.
+    def _event_sort_key(e):
+        dt = e.occurred_at or e.detected_at
+        return (_utc_dt(dt) or datetime.min.replace(tzinfo=timezone.utc)).timestamp()
+    events = sorted(events, key=_event_sort_key, reverse=True)
 
     capabilities = (
         session.query(Capability)
@@ -207,7 +219,7 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     recommendations = build_recommendations(events)
 
     week_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-    events_this_week = [e for e in events if e.detected_at >= week_cutoff]
+    events_this_week = [e for e in events if _utc_dt(e.detected_at) and _utc_dt(e.detected_at) >= week_cutoff]
     events_this_week_dicts = [_event_dict(e) for e in events_this_week]
 
     # Canonical press list for last 90 days, with display-ready date strings, sorted by date published (newest first).
@@ -437,11 +449,24 @@ def summary(request: Request, competitor_id: int, days: int = 7):
 
 @router.get("/dossier/{competitor_id}")
 def dossier(request: Request, competitor_id: int):
-    with get_session() as session:
-        context = build_dossier_context(session, competitor_id)
-        context["last_refreshed"] = get_last_refreshed(session)
-        all_competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
-        context["nav_competitors"] = [{"id": c.id, "name": c.name} for c in all_competitors]
+    try:
+        with get_session() as session:
+            context = build_dossier_context(session, competitor_id)
+            context["last_refreshed"] = get_last_refreshed(session)
+            all_competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+            context["nav_competitors"] = [{"id": c.id, "name": c.name} for c in all_competitors]
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return request.app.state.templates.TemplateResponse(
+            "dossier.html",
+            {
+                "request": request,
+                "error": f"Dossier failed to load: {exc!s}. Check server logs for details.",
+                "last_refreshed": None,
+                "nav_competitors": [],
+            },
+        )
     if "error" in context:
         return request.app.state.templates.TemplateResponse(
             "dossier.html",
