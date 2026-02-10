@@ -2,23 +2,14 @@
 {% block content %}
   <h1>Dossiers</h1>
 
-  <div class="card">
-    <h3>Add Competitor</h3>
-    <form method="post" action="/competitors">
-      <div class="row">
-        <div>
-          <label>Name</label>
-          <input name="name" required />
-        </div>
-        <div>
-          <label>Primary Domain</label>
-          <input name="primary_domain" placeholder="example.com" />
-        </div>
-        <div>
-          <button type="submit">Add</button>
-        </div>
-      </div>
-    </form>
+  <div class="card" style="display: flex; justify-content: space-between; align-items: center;">
+    <div>
+      <h3 style="margin: 0;">Competitors</h3>
+      <p class="meta" style="margin-top: 4px;">Manage the list of competitors and open their dossiers.</p>
+    </div>
+    <div>
+      <a href="/competitors/new"><button>Add competitor</button></a>
+    </div>
   </div>
 
   <div class="card">
@@ -38,8 +29,7 @@
           <td class="muted">{{ competitor.primary_domain or "" }}</td>
           <td>
             <a href="/competitors/{{ competitor.id }}">Edit</a> ·
-            <a href="/dossier/{{ competitor.id }}">Dossier</a> ·
-            <a href="/dossier/{{ competitor.id }}/summary">Summary</a>
+            <a href="/dossier/{{ competitor.id }}">Dossier</a>
           </td>
         </tr>
         {% endfor %}

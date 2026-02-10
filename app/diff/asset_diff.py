@@ -19,9 +19,40 @@ US_STATE_ABBREV = {
 
 # URL path segments that are not geographic locations (treat as Unspecified).
 NON_LOCATION_PATH_SEGMENTS = frozenset({
-    "search", "portfolio", "brands", "career-site", "careers", "jobs", "about", "contact",
-    "blog", "press", "news", "legal", "terms", "privacy-policy", "privacy", "login", "signup",
-    "cdn-cgi", "hotels", "api", "admin", "assets", "static", "www", "en", "us",
+    "search",
+    "portfolio",
+    "brands",
+    "career-site",
+    "careers",
+    "jobs",
+    "about",
+    "contact",
+    "blog",
+    "press",
+    "news",
+    "legal",
+    "terms",
+    "privacy-policy",
+    "privacy",
+    "login",
+    "signup",
+    "cdn-cgi",
+    "hotels",
+    "api",
+    "admin",
+    "assets",
+    "static",
+    "www",
+    "en",
+    "us",
+    # Marketing / category pages that should never be treated as geographic locations
+    # (e.g. Placemakr: /extended-stays, /corporate-group, /business, /residents).
+    "extended-stays",
+    "extended-stay",
+    "corporate-group",
+    "corporate-stays",
+    "business",
+    "residents",
 })
 
 # Raw location labels that are merged into "Other" and expanded as subbullets (include location for quick check).

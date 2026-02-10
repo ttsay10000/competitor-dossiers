@@ -28,14 +28,49 @@ def competitors_list(request: Request):
     )
 
 
+@router.get("/competitors/new")
+def competitors_new(request: Request):
+    with get_session() as session:
+        last_refreshed = get_last_refreshed(session)
+    return request.app.state.templates.TemplateResponse(
+        "competitor_new.html",
+        {"request": request, "last_refreshed": last_refreshed},
+    )
+
+
 @router.post("/competitors")
 def competitors_create(
     name: str = Form(...),
     primary_domain: Optional[str] = Form(None),
+    talent_url: Optional[str] = Form(None),
+    asset_url: Optional[str] = Form(None),
+    press_url: Optional[str] = Form(None),
 ):
     with get_session() as session:
         competitor = Competitor(name=name.strip(), primary_domain=(primary_domain or "").strip() or None)
         session.add(competitor)
+        session.flush()
+
+        def _add_source(url: Optional[str], channel: str) -> None:
+            if not url:
+                return
+            clean = url.strip()
+            if not clean:
+                return
+            endpoint = SourceEndpoint(
+                competitor_id=competitor.id,
+                channel=channel,
+                url=clean,
+                confidence="high",
+                js_required=False,
+                use_sitemap_first=False,
+            )
+            session.add(endpoint)
+
+        _add_source(talent_url, "talent")
+        _add_source(asset_url, "asset")
+        _add_source(press_url, "press")
+
     return RedirectResponse(url="/competitors", status_code=HTTP_303_SEE_OTHER)
 
 

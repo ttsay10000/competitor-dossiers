@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Add Competitor</h1>
+
+  <div class="card">
+    <p class="meta">
+      Create a new competitor and provide the key URLs we’ll use to pull data.
+      Advanced flags (confidence, JS required, sitemap) are set automatically based on defaults.
+    </p>
+  </div>
+
+  <div class="card">
+    <h3>Competitor details</h3>
+    <form method="post" action="/competitors">
+      <div class="row">
+        <div>
+          <label>Name</label>
+          <input name="name" required />
+        </div>
+        <div>
+          <label>Primary Domain</label>
+          <input name="primary_domain" placeholder="example.com" />
+        </div>
+      </div>
+
+      <div class="row" style="margin-top: 16px;">
+        <div>
+          <label>Talent URL</label>
+          <input name="talent_url" placeholder="https://jobs.example.com/…" />
+        </div>
+        <div>
+          <label>Asset / Locations URL</label>
+          <input name="asset_url" placeholder="https://www.example.com/locations" />
+        </div>
+      </div>
+
+      <div class="row" style="margin-top: 16px;">
+        <div>
+          <label>Press / News URL</label>
+          <input name="press_url" placeholder="https://www.example.com/blog or /press" />
+        </div>
+      </div>
+
+      <div style="margin-top: 16px;">
+        <button type="submit">Save competitor</button>
+      </div>
+    </form>
+  </div>
+{% endblock %}
+

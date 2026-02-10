@@ -10,7 +10,7 @@ from .collectors.public_records import collect_public_records_snapshot, build_st
 from .db import get_session
 from .diff.talent_diff import diff_jobs, count_recent_by_capability
 from .diff.asset_diff import diff_properties, extract_markets
-from .llm_structured import enrich_properties_with_llm, enrich_jobs_with_llm
+from .llm_structured import enrich_properties_with_llm, enrich_jobs_with_llm, enrich_press_items_with_llm
 from .diff.press_diff import diff_items
 from .models import Competitor, SourceEndpoint, Snapshot, Event, Capability, RunLog
 from .rules.talent_rules import (
@@ -525,6 +525,11 @@ def run_press() -> None:
                     )
                     continue
                 structured = build_press_structured(snapshot)
+                # LLM-enriched, deduplicated, business-focused press items with 1-line summaries.
+                structured["canonical_items"] = enrich_press_items_with_llm(
+                    competitor.name,
+                    structured.get("items") or [],
+                )
 
                 latest = load_latest_snapshot(session, competitor.id, "press")
                 previous_items = (latest.structured_json or {}).get("items", []) if latest else []

@@ -5,7 +5,6 @@
   {% else %}
     <h1>{{ competitor.name }} Dossier</h1>
     <div style="margin-bottom: 12px;">
-      <a href="/dossier/{{ competitor.id }}/summary"><button class="secondary">Executive summary (weekly)</button></a>
       <a href="/dossier/{{ competitor.id }}/pdf"><button>Export PDF</button></a>
     </div>
 
@@ -39,13 +38,16 @@
     <!-- 3. Top news (5 most relevant articles) -->
     <div class="card">
       <strong>Top news</strong>
-      <p class="meta">Up to 5 most relevant articles: major business changes, fundraising, markets, partnerships. Blog-style posts excluded.</p>
+      <p class="meta">Up to 5 most relevant business stories (fundraising, partnerships, openings) with links and 1-line summaries, deduped across sources.</p>
       {% if top_news|length %}
         <ul style="margin: 0; padding-left: 20px;">
           {% for item in top_news %}
           <li>
             <a href="{{ item.get('url') or item.get('link') }}" target="_blank" rel="noopener">{{ item.get('title') or 'Article' }}</a>
             {% if item.get('date') %}<span class="meta"> · {{ item.date }}</span>{% endif %}
+            {% if item.get('summary') %}
+              <div class="meta">{{ item.summary }}</div>
+            {% endif %}
           </li>
           {% endfor %}
         </ul>
@@ -118,7 +120,33 @@
       {% endif %}
     </div>
 
-    <!-- 7. Recent events feed (90 days) - at bottom -->
+    <!-- 7. Press (past 90 days) -->
+    <div class="card">
+      <strong>Press (past 90 days)</strong>
+      <p class="meta">Business-focused news only; deduped, with links and 1-line summaries.</p>
+      {% if press_90d|length %}
+        <ul style="margin: 0; padding-left: 20px;">
+          {% for item in press_90d %}
+          <li>
+            <a href="{{ item.get('url') or item.get('link') }}" target="_blank" rel="noopener">{{ item.get('title') or 'Article' }}</a>
+            {% if item.get('date') %}<span class="meta"> · {{ item.date }}</span>{% endif %}
+            {% if item.get('summary') %}
+              <div class="meta">
+                {% if item.get('topic') %}
+                  <strong style="font-size: 11px; text-transform: uppercase;">{{ item.topic.replace('_', ' ') }}</strong> ·
+                {% endif %}
+                {{ item.summary }}
+              </div>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="meta">No business-relevant press in the last 90 days.</div>
+      {% endif %}
+    </div>
+
+    <!-- 8. Recent events feed (90 days) - at bottom -->
     <div class="card">
       <strong>Recent events (past 90 days)</strong>
       {% if events|length %}

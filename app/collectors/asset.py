@@ -57,6 +57,19 @@ def is_property_like(url: str) -> bool:
     # Exclude blog, privacy, and other non-property paths that can match broad patterns
     if re.search(r"/blog|/blogs|/privacy|/privacy-policy|/legal|/terms\b", u, re.IGNORECASE):
         return False
+    # Exclude obvious marketing / nav / legal pages that are not individual assets
+    # (e.g. Placemakr: /extended-stays, /corporate-group, /business, /residents, /cookie-notice).
+    if "://" in u:
+        parsed = urlparse(u)
+        path = parsed.path or ""
+    else:
+        path = u
+    path_lower = path.lower()
+    if re.search(
+        r"/(extended-stays?|corporate-group|corporate-stays?|business|residents|about|contact-us?|cookie-notice|faqs?|help|support)(?:/|\?|$)",
+        path_lower,
+    ):
+        return False
     patterns = [
         r"/properties/",
         r"/property/",
@@ -69,8 +82,8 @@ def is_property_like(url: str) -> bool:
         r"/listing/",
         r"/stay/",
         r"/vacation-rentals/",
-        # Placemakr-style single-segment city-state paths (e.g. /saltlakecity-ut)
-        r"/[a-z0-9]+-[a-z0-9]+(?:\?|$|/)",
+        # Placemakr-style single-segment city-state paths (e.g. /saltlakecity-ut) — require trailing 2-letter state.
+        r"/[a-z0-9]+-[a-z]{2}(?:\?|$|/)",
     ]
     return any(re.search(pattern, u, re.IGNORECASE) for pattern in patterns)
 
@@ -88,6 +101,32 @@ def _is_junk_property_link(link_text: str, href: str) -> bool:
     if text in ("all properties", "all locations"):
         return True
     if text.startswith("all ") and ("properties" in text or "locations" in text):
+        return True
+    # Site-wide navigation and legal links (common across competitors, including Placemakr).
+    nav_labels = {
+        "extended stays",
+        "extended stay",
+        "corporate stays",
+        "corporate stay",
+        "business",
+        "residents",
+        "about",
+        "about us",
+        "contact",
+        "contact us",
+        "cookie notice",
+        "cookie policy",
+        "terms & conditions",
+        "terms and conditions",
+        "terms of use",
+        "privacy",
+        "privacy policy",
+        "faq",
+        "faqs",
+        "help",
+        "support",
+    }
+    if text in nav_labels:
         return True
     return False
 
@@ -501,11 +540,20 @@ def _merge_link_properties_into(block_properties: List[dict[str, Any]], html: st
     link_props = extract_properties_from_html(html)
     if not link_props:
         return block_properties
+
     def _url_key(url: Optional[str]) -> str:
+        """Normalize URL to a path-only key for deduping (handles relative vs absolute)."""
         if not url:
             return ""
-        u = (url or "").strip().rstrip("/").lower()
-        return u.split("?")[0]
+        u = (url or "").strip()
+        # Drop scheme/host so '/locations/x' and 'https://site/locations/x' collapse.
+        if "://" in u:
+            parsed = urlparse(u.split("?", 1)[0])
+            path = parsed.path or "/"
+        else:
+            path = u.split("?", 1)[0]
+        key = (path.rstrip("/") or "/").lower()
+        return key
     seen = {_url_key(p.get("url")) for p in block_properties if _url_key(p.get("url"))}
     merged = list(block_properties)
     for p in link_props:
@@ -531,9 +579,23 @@ def _is_detail_line_or_junk_name(name: str) -> bool:
         return True
     if _RE_LARK_DETAIL_H2.match(n):
         return True
-    if n.lower() == "privacy policy":
+    lower = n.lower()
+    if lower == "privacy policy":
         return True
-    if re.match(r"^see all .+ blog", n, re.IGNORECASE):
+    if re.match(r"^see all .+ blog", lower, re.IGNORECASE):
+        return True
+    # Common CTA / nav labels that should never become property names.
+    if lower in {
+        "book a hotel stay",
+        "rent an apartment",
+        "stay nightly",
+        "stay longer",
+        "view details",
+        "view property",
+        "view all properties",
+    }:
+        return True
+    if lower.startswith(("book ", "view ", "stay ", "reserve ")):
         return True
     return False
 
@@ -550,10 +612,18 @@ def normalize_properties(properties: list[dict[str, Any]]) -> list[dict[str, Any
     seen_name_market: set[tuple[str, str]] = set()
 
     def _url_key(url: Optional[str]) -> str:
+        """Normalize URL to a path-only key for deduping (handles relative vs absolute)."""
         if not url:
             return ""
-        u = (url or "").strip().rstrip("/").lower()
-        return u.split("?")[0]
+        u = (url or "").strip()
+        # Drop scheme/host so '/locations/x' and 'https://site/locations/x' collapse.
+        if "://" in u:
+            parsed = urlparse(u.split("?", 1)[0])
+            path = parsed.path or "/"
+        else:
+            path = u.split("?", 1)[0]
+        key = (path.rstrip("/") or "/").lower()
+        return key
 
     for prop in properties:
         name = (prop.get("name") or "").strip()

@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from email.utils import parsedate_to_datetime
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
@@ -26,6 +27,34 @@ RECOMMENDATIONS_MAP = {
     "narrative.homepage_updated": ("Review the updated page for messaging or product changes.", "Digital footprint"),
     "public_record.filing": ("Review filing for branding or entity strategy implications.", "Public record"),
 }
+
+
+def _parse_press_date(value) -> datetime | None:
+    """Best-effort parse for press item dates (RSS or ISO strings)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.utcfromtimestamp(value / 1000.0)
+        except Exception:
+            return None
+    if isinstance(value, str):
+        val = value.strip()
+        if not val:
+            return None
+        # Try ISO first
+        try:
+            return datetime.fromisoformat(val.replace("Z", "+00:00"))
+        except Exception:
+            pass
+        # Fallback: RFC822 / email-style dates used in many RSS feeds
+        try:
+            return parsedate_to_datetime(val)
+        except Exception:
+            return None
+    return None
 
 
 def _event_dict(e) -> dict:
@@ -136,6 +165,8 @@ def build_dossier_context(session, competitor_id: int) -> dict:
 
     raw_press_items = (latest_press.structured_json or {}).get("items", []) if latest_press else []
     press_items = [i for i in raw_press_items if isinstance(i, dict)]
+    raw_canonical_press = (latest_press.structured_json or {}).get("canonical_items", []) if latest_press else []
+    canonical_press = [i for i in raw_canonical_press if isinstance(i, dict)]
 
     takeaways = []
     if any(event.type == "asset.new_market" for event in events):
@@ -153,19 +184,43 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     events_this_week = [e for e in events if e.detected_at >= week_cutoff]
     events_this_week_dicts = [_event_dict(e) for e in events_this_week]
 
-    # Top 5 news: exclude blog-like; prefer major business topics (fundraising, partnerships, markets).
-    blog_like = ("blog", "post", "update:", "weekly", "monthly")
-    relevance_hints = ("fundraise", "funding", "partnership", "acquisition", "expansion", "launch", "series", "market", "executive", "ceo", "strategic")
-    candidates = []
-    for item in press_items:
-        title = (item.get("title") or "").lower()
-        link = (item.get("link") or item.get("url") or "").lower()
-        if any(x in title or x in link for x in blog_like):
+    # Canonical press list for last 90 days, with display-ready date strings.
+    press_90d = []
+    now = datetime.utcnow()
+    press_cutoff = now - timedelta(days=90)
+    for item in canonical_press:
+        dt = _parse_press_date(item.get("date"))
+        if dt and dt < press_cutoff:
             continue
-        score = sum(1 for h in relevance_hints if h in title)
-        candidates.append((score, item))
-    candidates.sort(key=lambda x: -x[0])
-    top_news = [item for _, item in candidates[:5]]
+        display_date = dt.strftime("%Y-%m-%d") if dt else None
+        out = dict(item)
+        if display_date:
+            out["date"] = display_date
+        press_90d.append(out)
+
+    # Top 5 news from canonical list: rank by topic importance + recency.
+    topic_weights = {
+        "fundraising": 5,
+        "restructuring_or_layoffs": 5,
+        "executive_interview": 4,
+        "new_partnership": 4,
+        "new_hotel_opening": 3,
+        "other_business": 1,
+    }
+    scored_top = []
+    for item in press_90d:
+        topic = (item.get("topic") or "").lower()
+        base = topic_weights.get(topic, 0)
+        dt = _parse_press_date(item.get("date"))
+        recency_boost = 0.0
+        if dt:
+            days_ago = max((now - dt).days, 0)
+            # Within 30 days => up to +3; then taper.
+            recency_boost = max(0.0, 3.0 - (days_ago / 10.0))
+        score = base + recency_boost
+        scored_top.append((score, dt or now, item))
+    scored_top.sort(key=lambda x: (-x[0], -x[1].timestamp()))
+    top_news = [item for _, _, item in scored_top[:5]]
 
     # Properties by location (state/city) for high-level week-over-week tracking.
     # Aggregate count and total keys per location (keys parsed from property details).
@@ -261,6 +316,7 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         "jobs_by_function": jobs_by_function,
         "jobs_by_function_property": jobs_by_function_property,
         "press_items": press_items,
+        "press_90d": press_90d,
         "takeaways": takeaways,
         "recommendations": recommendations,
         "events_this_week": events_this_week_dicts,
