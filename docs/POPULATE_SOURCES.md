@@ -92,7 +92,27 @@ If you cannot use Docker on Render (e.g. you must keep `runtime: python`), backf
 
 **What we pull:** List of properties or location-like URLs.
 
-- **Sitemap:** If the source has `use_sitemap_first`, we try `sitemap.xml` (and `.gz`) and take URLs that look like properties (e.g. contain `/locations/`, `/properties/`, `/search`).
+### Generic flow: strategy chain and minimum threshold
+
+The asset collector supports a **generic flow** so each source can try several strategies in order and only “accept” a result that meets a minimum property count. That avoids “succeeding” with the wrong process (e.g. accepting 6 junk links from HTML when sitemap would have returned 500).
+
+- **`strategy_chain`** (optional): list of strategy names to try in order, e.g. `["sitemap_first", "html"]` or `["js_exhaust", "sitemap_first", "html"]`. If present, we run each strategy in turn.
+- **`min_properties_accept`** (optional, default 5): we only **accept** a result and stop if it has at least this many properties. If a strategy returns fewer, we try the next in the chain. If all return fewer, we return the last result (best effort).
+- **New competitors (name + asset URL only):** If you add a competitor with **no** `strategy_chain` and **no** explicit `strategy` in `extra_options`, the system uses a **default discovery chain**: `["sitemap_first", "js_exhaust", "html"]`. It tries sitemap first (works for many property/vacation-rental sites like AvantStay), then JS exhaust with “Load more” (Lark-style), then HTML. We only accept when one method returns ≥ `min_properties_accept` (default 5), so we **never** falsely “succeed” with 0–4 properties from HTML. You don’t have to guess which method fits—the collector tries all three and uses the first that returns enough properties.
+- **Explicit config:** If `strategy_chain` is set, we use it. If `strategy` is set (and no chain), we use that single strategy (legacy behavior).
+
+### How each competitor’s asset process works
+
+| Competitor  | Source URL                    | Chain / strategy        | How properties are discovered |
+|-------------|-------------------------------|--------------------------|------------------------------|
+| **Placemakr** | placemakr.com/locations     | `["html"]`, min 1       | One strategy: fetch HTML, scrape property-like links. Fast, no discovery. |
+| **AvantStay**  | avantstay.com/search        | Chain: `["sitemap_first", "html"]`, min 5 | Try sitemap first; if ≥ 5, accept. Else HTML (search page + optional LLM). Works without Playwright. |
+| **Lark**      | larkhospitality.com/portfolio/ | Chain: `["js_exhaust", "sitemap_first", "html"]`, min 5 | Try **js_exhaust** first (Playwright + “Load more” + Lark blocks). If ≥ 5, accept. Else sitemap, then html. |
+| **Any new competitor** | (your URL)              | Default chain: `["sitemap_first", "js_exhaust", "html"]`, min 5 | No config needed: we try sitemap → js_exhaust → html and accept the first result with ≥ 5 properties. |
+
+**Why a single global order (e.g. html → js → sitemap) is not used:** For AvantStay, HTML of the search page can return a handful of links; we’d wrongly “succeed” and never try sitemap. So the **order is per source** when you set a chain; for **unknown** sources the default chain tries sitemap first, then JS, then HTML.
+
+- **Sitemap:** If the source has `use_sitemap_first`, we try `sitemap.xml` (and `.gz`) and take URLs that look like properties (e.g. contain `/locations/`, `/properties/`, `/search`, or AvantStay-style `/{id}/{destination}/{slug}`).
 - **HTML:** We scrape `<a>` links whose `href` matches property-like paths (e.g. `/locations/`, `/portfolio/`, `/properties/`).
 - **JS / Load more (e.g. Lark):** For `strategy: "js_exhaust"` we use Playwright to load the page and click “Load more” until the list is exhausted, then we have full HTML. If `llm_extract: true`, we run an LLM over that HTML to extract property names, URLs, and **location (state/city)** from the page in one pass (card text, subheadings, addresses). So for Lark we no longer rely only on link text; the LLM reads the visible card content and any location metadata.
 - **Where the scraper is limited (if you see too few properties):**
@@ -117,7 +137,7 @@ So:
 
 1. Run asset only: `python -m app.cli --channel asset`.
 2. In **Runs**, confirm success and that we’re not erroring on a given URL.
-3. If a URL is JS-heavy (e.g. AvantStay search), the current collector might get little or no HTML; then we’d need Playwright/JS support for that source or a different URL (e.g. sitemap only).
+3. AvantStay uses sitemap-first (no Playwright required); Lark uses js_exhaust and needs Playwright for full “Load more” + block extraction. If Lark returns 0 properties, ensure `PLAYWRIGHT_ENABLED=true` and re-run asset.
 4. Run asset at least twice (e.g. once now, once after a day) so diffs can produce events.
 
 ---

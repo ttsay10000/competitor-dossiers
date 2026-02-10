@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Optional
@@ -9,10 +10,35 @@ from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, Snapshot, Capability
 from ..diff.asset_diff import diff_properties, delta_by_city, infer_location_for_property, is_location_treated_as_other, parse_keys_from_details
 from ..executive_summary import generate_executive_summary, clean_location_display_for_dossier
-from ..llm_structured import assign_states_to_properties_for_dossier
+from ..llm_structured import assign_states_to_properties_for_dossier, research_and_assign_states_for_other_properties
 from ..rules.talent_rules import job_functional_area, FUNCTIONAL_AREA_DISPLAY_ORDER, PROPERTY_OPERATIONS_LABEL
 
 router = APIRouter()
+
+# In-memory caches for LLM results (keyed so repeat loads / same snapshot are fast).
+# Max entries to avoid unbounded growth; LRU-style eviction by clearing when over limit.
+_EXEC_SUMMARY_CACHE: dict[tuple, str] = {}
+_EXEC_SUMMARY_CACHE_MAX = 50
+_LOCATION_CLEAN_CACHE: dict[tuple, dict] = {}
+_LOCATION_CLEAN_CACHE_MAX = 100
+_PROPERTY_STATES_CACHE: dict[tuple, list] = {}
+_PROPERTY_STATES_CACHE_MAX = 50
+
+
+def _exec_summary_cache_key(competitor_id: int, context: dict) -> tuple:
+    """Stable key so we reuse summary when data hasn't changed."""
+    base = context.get("comparison_baseline_date") or ""
+    n_events = len(context.get("events_this_week") or [])
+    n_news = len(context.get("top_news") or [])
+    added = context.get("asset_added_since_baseline") or 0
+    removed = context.get("asset_removed_since_baseline") or 0
+    return (competitor_id, base, n_events, n_news, added, removed)
+
+
+def _location_clean_cache_key(name: str, props: list, deltas: list) -> tuple:
+    props_sig = tuple((r.get("location"), r.get("count"), r.get("keys", 0)) for r in (props or [])[:100])
+    deltas_sig = tuple((r.get("location"), r.get("added"), r.get("removed")) for r in (deltas or [])[:50])
+    return (name, props_sig, deltas_sig)
 
 # Suggested next actions based on event types (rules-based).
 RECOMMENDATIONS_MAP = {
@@ -100,7 +126,8 @@ def build_recommendations(events: list) -> list[dict]:
     return out
 
 
-def build_dossier_context(session, competitor_id: int) -> dict:
+def build_dossier_context(session, competitor_id: int, *, skip_property_llm: bool = False) -> dict:
+    """Build dossier context. When skip_property_llm=True, use URL-derived locations only (no LLM) for fast load."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=90)
     competitor = session.get(Competitor, competitor_id)
     if competitor is None:
@@ -178,10 +205,24 @@ def build_dossier_context(session, competitor_id: int) -> dict:
 
     raw_asset_props = (latest_asset.structured_json or {}).get("properties", []) if latest_asset else []
     asset_props = [p for p in raw_asset_props if isinstance(p, dict)]
-    # Run all properties through LLM to assign state per property, then bucket by state for location bullets.
-    enriched_props = assign_states_to_properties_for_dossier(competitor.name, asset_props)
-    if enriched_props is not None:
-        asset_props = enriched_props
+    # Run all properties through LLM to assign state per property (cached by competitor + snapshot).
+    # Skip when skip_property_llm=True so dossier opens fast; refined data can be lazy-loaded.
+    if not skip_property_llm and latest_asset and asset_props:
+        state_cache_key = (competitor_id, latest_asset.id)
+        if state_cache_key in _PROPERTY_STATES_CACHE:
+            asset_props = _PROPERTY_STATES_CACHE[state_cache_key]
+        else:
+            enriched_props = assign_states_to_properties_for_dossier(competitor.name, asset_props)
+            if enriched_props is not None:
+                asset_props = enriched_props
+            # For Placemakr: deep research on "Other" properties to infer location from names (e.g. Dupont Circle -> DC)
+            if competitor.name.strip().lower() == "placemakr":
+                researched = research_and_assign_states_for_other_properties(competitor.name, asset_props)
+                if researched is not None:
+                    asset_props = researched
+            if len(_PROPERTY_STATES_CACHE) >= _PROPERTY_STATES_CACHE_MAX:
+                _PROPERTY_STATES_CACHE.clear()
+            _PROPERTY_STATES_CACHE[state_cache_key] = asset_props
     # Inferred locations (LLM-set state or URL-derived) for summary and counts
     _locations = [infer_location_for_property(p) for p in asset_props]
     markets = sorted({loc for loc in _locations if loc != "Unspecified"})
@@ -232,23 +273,32 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     events_this_week = [e for e in events if _utc_dt(e.detected_at) and _utc_dt(e.detected_at) >= week_cutoff]
     events_this_week_dicts = [_event_dict(e) for e in events_this_week]
 
-    # Canonical press list for last 120 days, with display-ready date strings, sorted by date published (newest first).
-    # Exclude irrelevant and promo so we only show business-relevant news.
+    def _press_display_title(raw_title: str) -> str:
+        """Clean slug-derived titles: strip trailing numeric IDs (e.g. PR Newswire) and title-case if all lowercase."""
+        if not raw_title or not isinstance(raw_title, str):
+            return raw_title or ""
+        t = raw_title.strip()
+        t = re.sub(r"\s+\d{7,}$", "", t)  # strip trailing space + long numeric ID (e.g. 302576370)
+        if not t:
+            return raw_title.strip()
+        if t.islower() and len(t) > 3:
+            return t.title()
+        return t
+
+    # Canonical press list (no date cap); exclude irrelevant and promo. Sorted by date published, newest first.
     EXCLUDED_TOPICS = {"irrelevant", "promo_or_brand_marketing"}
     press_90d = []
-    now = datetime.now(timezone.utc)
-    press_cutoff = now - timedelta(days=120)
     for item in canonical_press:
         topic = (item.get("topic") or "").strip().lower()
         if topic in EXCLUDED_TOPICS:
             continue
         dt = _parse_press_date(item.get("date"))
-        if dt and dt < press_cutoff:
-            continue
         display_date = dt.strftime("%Y-%m-%d") if dt else None
         out = dict(item)
         if display_date:
             out["date"] = display_date
+        raw_title = out.get("title") or ""
+        out["display_title"] = _press_display_title(raw_title)
         out["_sort_dt"] = dt  # for sorting; removed before template
         press_90d.append(out)
     press_90d.sort(key=lambda x: (x["_sort_dt"] is None, -(x["_sort_dt"].timestamp() if x["_sort_dt"] else 0)))
@@ -373,10 +423,20 @@ def build_dossier_context(session, competitor_id: int) -> dict:
             asset_baseline_date = baseline_asset.captured_at.strftime("%Y-%m-%d")
             asset_delta_by_city = delta_by_city(diff["added"], diff["removed"])
 
-    # Optional: LLM-cleaned location display (State - City, group noise as Other); preserves keys.
-    cleaned = clean_location_display_for_dossier(
-        competitor.name, properties_by_location, asset_delta_by_city
-    )
+    # Optional: LLM-cleaned location display (State - City, group noise as Other); cached. Skip when skip_property_llm.
+    cleaned = None
+    if not skip_property_llm:
+        loc_key = _location_clean_cache_key(competitor.name, properties_by_location, asset_delta_by_city)
+        if loc_key in _LOCATION_CLEAN_CACHE:
+            cleaned = _LOCATION_CLEAN_CACHE[loc_key]
+        else:
+            cleaned = clean_location_display_for_dossier(
+                competitor.name, properties_by_location, asset_delta_by_city
+            )
+            if cleaned and len(_LOCATION_CLEAN_CACHE) >= _LOCATION_CLEAN_CACHE_MAX:
+                _LOCATION_CLEAN_CACHE.clear()
+            if cleaned:
+                _LOCATION_CLEAN_CACHE[loc_key] = cleaned
     if cleaned:
         properties_by_location = cleaned.get("properties_by_location") or properties_by_location
         asset_delta_by_city = cleaned.get("asset_delta_by_city") or asset_delta_by_city
@@ -424,7 +484,10 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         "other_properties_display": other_properties_display,
         "comparison_baseline_date": reporting_baseline_date,
     }
-    context["executive_summary"] = generate_executive_summary(context)
+    # Executive summary is loaded lazily via JS (see GET /dossier/{id}/executive-summary) so page renders fast.
+    context["executive_summary"] = None
+    # Set by route when skip_property_llm and API key is set, so frontend can lazy-load refined properties
+    context["properties_refinement_available"] = False
     return context
 
 
@@ -480,14 +543,73 @@ def summary(request: Request, competitor_id: int, days: int = 7):
     )
 
 
+@router.get("/dossier/{competitor_id}/properties-by-location")
+def dossier_properties_by_location(competitor_id: int):
+    """Lazy-loaded AI-refined properties by location (JSON). Used when initial page load skipped LLM for speed."""
+    with get_session() as session:
+        context = build_dossier_context(session, competitor_id, skip_property_llm=False)
+    if "error" in context:
+        return {"error": context["error"]}
+    return {
+        "total_properties": context.get("total_properties", 0),
+        "properties_by_location": context.get("properties_by_location") or [],
+        "other_properties_display": context.get("other_properties_display") or [],
+    }
+
+
+@router.get("/dossier/{competitor_id}/executive-summary")
+def dossier_executive_summary(competitor_id: int):
+    """Lazy-loaded executive summary (JSON). Cached by context so repeat requests are fast."""
+    from ..config import settings
+    if not settings.openai_api_key:
+        return {"summary": None, "error": "OPENAI_API_KEY not set"}
+    with get_session() as session:
+        context = build_dossier_context(session, competitor_id)
+    if "error" in context:
+        return {"summary": None, "error": context["error"]}
+    cache_key = _exec_summary_cache_key(competitor_id, context)
+    if cache_key in _EXEC_SUMMARY_CACHE:
+        return {"summary": _EXEC_SUMMARY_CACHE[cache_key]}
+    summary = generate_executive_summary(context)
+    if summary and len(_EXEC_SUMMARY_CACHE) >= _EXEC_SUMMARY_CACHE_MAX:
+        _EXEC_SUMMARY_CACHE.clear()
+    if summary:
+        _EXEC_SUMMARY_CACHE[cache_key] = summary
+    return {"summary": summary}
+
+
+@router.post("/dossier/set-baseline-all-and-refresh", status_code=303)
+def set_baseline_all_and_refresh(request: Request):
+    """
+    Set reporting baseline to now for every competitor, then run all collectors.
+    Use this once (or after adding competitors) so the executive summary and dossier
+    only show changes *after* this point—keeping the LLM payload small.
+    """
+    from ..runner import run as run_all_channels
+
+    with get_session() as session:
+        all_competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        now = datetime.now(timezone.utc)
+        for c in all_competitors:
+            c.reporting_baseline_at = now
+            session.add(c)
+        session.commit()
+    run_all_channels()
+    return RedirectResponse(url="/competitors", status_code=303)
+
+
 @router.get("/dossier/{competitor_id}")
 def dossier(request: Request, competitor_id: int):
     try:
+        from ..config import settings
         with get_session() as session:
-            context = build_dossier_context(session, competitor_id)
+            # Fast load: skip property/location LLM; refined data lazy-loaded via JS
+            context = build_dossier_context(session, competitor_id, skip_property_llm=True)
             context["last_refreshed"] = get_last_refreshed(session)
             all_competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
             context["nav_competitors"] = [{"id": c.id, "name": c.name} for c in all_competitors]
+            context["executive_summary_lazy"] = bool(settings.openai_api_key)
+            context["properties_refinement_available"] = bool(settings.openai_api_key)
     except Exception as exc:
         import traceback
         traceback.print_exc()

@@ -7,10 +7,14 @@
       <h3 style="margin: 0;">Competitors</h3>
       <p class="meta" style="margin-top: 4px;">Manage the list of competitors and open their dossiers.</p>
     </div>
-    <div>
+    <div style="display: flex; gap: 8px; align-items: center;">
+      <form method="post" action="/dossier/set-baseline-all-and-refresh" style="display: inline-block;">
+        <button type="submit">Set baseline for all &amp; refresh</button>
+      </form>
       <a href="/competitors/new"><button>Add competitor</button></a>
     </div>
   </div>
+  <p class="meta" style="margin: -8px 0 12px 0;">Set baseline for all &amp; refresh: sets each competitor’s comparison date to now, then runs collectors. Use once so executive summaries only summarize changes after this point (lighter LLM load).</p>
 
   <div class="card">
     <h3>Existing</h3>

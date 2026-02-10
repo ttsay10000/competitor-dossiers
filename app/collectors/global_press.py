@@ -573,6 +573,7 @@ def collect_prnewswire_items(
 
     # 2) Fallback: PR Newswire injects result links via JS but often embeds URLs in the HTML (e.g. in script/data).
     #    Extract relative paths /news-releases/...html and build items so we get articles without Playwright.
+    #    Slug is lowercase and ends with -<id>; strip the ID and title-case for display.
     if len(results) < 2 and html_content:
         path_pattern = re.compile(r"/news-releases/([^\s\"'<>?]+\.html)")
         for m in path_pattern.finditer(html_content):
@@ -581,7 +582,8 @@ def collect_prnewswire_items(
             if href in seen_urls:
                 continue
             slug = m.group(1).replace(".html", "").replace("-", " ")
-            title = slug[:300] if len(slug) >= 10 else f"Press release: {company_name}"
+            slug = re.sub(r"\s+\d{7,}$", "", slug).strip()  # strip trailing numeric ID (e.g. 302576370)
+            title = slug[:300].title() if len(slug) >= 10 else f"Press release: {company_name}"
             if not _title_mentions_company(title, href):
                 if not _article_mentions_partnership_with_company(href, company_name):
                     continue

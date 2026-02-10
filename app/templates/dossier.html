@@ -14,16 +14,45 @@
       <p class="meta" style="margin: 4px 0 0 0;">Refresh data runs all collectors (asset, talent, press) and updates events vs current baseline. Reset baseline sets comparison to now, then runs collectors.</p>
     </div>
 
-    <!-- 0. AI-generated executive summary (recent changes in bullets) -->
+    <!-- 0. AI-generated executive summary (recent changes in bullets); loaded async so page opens fast -->
     <div class="card" style="background: var(--card-bg, #f8f9fa); border-left: 4px solid var(--accent, #0d6efd);">
       <strong>Executive summary</strong>
       <p class="meta" style="margin: 2px 0 8px 0;">AI-generated executive summary focused on what has changed recently across talent, markets, assets, and news.</p>
-      {% if executive_summary %}
-        <div style="margin: 0; font-size: 15px; line-height: 1.6; white-space: pre-line;">{{ executive_summary }}</div>
-      {% else %}
-        <p class="meta" style="margin: 0;">Set <code>OPENAI_API_KEY</code> in your environment to enable an executive-level summary here. Until then, use the sections below.</p>
-      {% endif %}
+      <div id="executive-summary-content">
+        {% if executive_summary %}
+          <div style="margin: 0; font-size: 15px; line-height: 1.6; white-space: pre-line;">{{ executive_summary }}</div>
+        {% elif executive_summary_lazy %}
+          <p class="meta" style="margin: 0;">Loading executive summary…</p>
+        {% else %}
+          <p class="meta" style="margin: 0;">Set <code>OPENAI_API_KEY</code> in your environment to enable an executive-level summary here. Until then, use the sections below.</p>
+        {% endif %}
+      </div>
     </div>
+    {% if executive_summary_lazy and not executive_summary %}
+    <script>
+      (function() {
+        var el = document.getElementById('executive-summary-content');
+        fetch('/dossier/{{ competitor.id }}/executive-summary')
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (data.summary) {
+              var div = document.createElement('div');
+              div.style.cssText = 'margin: 0; font-size: 15px; line-height: 1.6; white-space: pre-line;';
+              div.textContent = data.summary;
+              el.innerHTML = '';
+              el.appendChild(div);
+            } else if (data.error && data.error !== 'OPENAI_API_KEY not set') {
+              el.innerHTML = '<p class="meta" style="margin: 0;">Summary unavailable. Use the sections below.</p>';
+            } else {
+              el.innerHTML = '<p class="meta" style="margin: 0;">No summary generated. Use the sections below.</p>';
+            }
+          })
+          .catch(function() {
+            el.innerHTML = '<p class="meta" style="margin: 0;">Could not load summary. Use the sections below.</p>';
+          });
+      })();
+    </script>
+    {% endif %}
 
     <!-- 3. Top news (up to 5 by date: last week first, else last 5 strong business in 120d) -->
     <div class="card">
@@ -56,32 +85,94 @@
       {% endif %}
     </div>
 
-    <!-- 4. Properties by location (state/city) + week-over-week vs baseline -->
-    <div class="card">
+    <!-- 4. Properties by location (state/city) + week-over-week vs baseline. Content may be replaced by JS when refinement loads. -->
+    <div class="card" id="properties-by-location-card">
       <strong>Properties by location</strong>
       <p class="meta">From latest asset pull: current counts by state or city. Any notable adds/removals are summarized in the Executive summary above.</p>
-      {% if total_properties and total_properties > 0 %}
-        <p style="margin: 0 0 8px 0;"><strong>Total: {{ total_properties }} propert{{ 'ies' if total_properties != 1 else 'y' }}</strong></p>
-      {% endif %}
-      {% if properties_by_location|length %}
-        <ul style="margin: 0; padding-left: 20px;">
-          {% for row in properties_by_location %}
-          <li>
-            <strong>{{ row.location }}</strong> – {{ row.count }} propert{{ 'ies' if row.count != 1 else 'y' }}{% if row.get('keys') %} ({{ row["keys"] }} keys){% endif %}
-            {% if row.location == 'Other' and other_properties_display|length %}
-              <ul style="margin: 4px 0 0 0; padding-left: 20px;">
-                {% for op in other_properties_display %}
-                <li><span title="{{ op.url }}">{{ op.name }}</span> — {{ op.raw_location or op.market or op.url or '—' }}</li>
-                {% endfor %}
-              </ul>
-            {% endif %}
-          </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <div class="meta">No property data yet. Run the asset collector to populate.</div>
+      <div id="properties-by-location-content">
+        {% if total_properties and total_properties > 0 %}
+          <p style="margin: 0 0 8px 0;"><strong>Total: {{ total_properties }} propert{{ 'ies' if total_properties != 1 else 'y' }}</strong></p>
+        {% endif %}
+        {% if properties_by_location|length %}
+          <ul style="margin: 0; padding-left: 20px;">
+            {% for row in properties_by_location %}
+            <li>
+              <strong>{{ row.location }}</strong> – {{ row.count }} propert{{ 'ies' if row.count != 1 else 'y' }}{% if row.get('keys') %} ({{ row["keys"] }} keys){% endif %}
+              {% if row.location == 'Other' and other_properties_display|length %}
+                <ul style="margin: 4px 0 0 0; padding-left: 20px;">
+                  {% for op in other_properties_display %}
+                  <li><span title="{{ op.url }}">{{ op.name }}</span> — {{ op.raw_location or op.market or op.url or '—' }}</li>
+                  {% endfor %}
+                </ul>
+              {% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="meta">No property data yet. Run the asset collector to populate.</div>
+        {% endif %}
+      </div>
+      {% if properties_refinement_available %}
+      <p class="meta" id="properties-refinement-status" style="margin: 4px 0 0 0;">Refining locations with AI…</p>
       {% endif %}
     </div>
+    {% if properties_refinement_available %}
+    <script>
+      (function() {
+        var statusEl = document.getElementById('properties-refinement-status');
+        var contentEl = document.getElementById('properties-by-location-content');
+        function escapeHtml(s) {
+          if (s == null) return '';
+          var div = document.createElement('div');
+          div.textContent = s;
+          return div.innerHTML;
+        }
+        fetch('/dossier/{{ competitor.id }}/properties-by-location')
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (data.error) {
+              if (statusEl) statusEl.textContent = '';
+              return;
+            }
+            var total = data.total_properties || 0;
+            var rows = data.properties_by_location || [];
+            var otherList = data.other_properties_display || [];
+            var html = '';
+            if (total > 0) {
+              html += '<p style="margin: 0 0 8px 0;"><strong>Total: ' + total + ' propert' + (total !== 1 ? 'ies' : 'y') + '</strong></p>';
+            }
+            if (rows.length) {
+              html += '<ul style="margin: 0; padding-left: 20px;">';
+              for (var i = 0; i < rows.length; i++) {
+                var row = rows[i];
+                var loc = escapeHtml(row.location || '');
+                var count = row.count || 0;
+                var keys = row.keys || 0;
+                var keysStr = keys ? ' (' + keys + ' keys)' : '';
+                html += '<li><strong>' + loc + '</strong> – ' + count + ' propert' + (count !== 1 ? 'ies' : 'y') + keysStr;
+                if ((row.location || '') === 'Other' && otherList.length) {
+                  html += '<ul style="margin: 4px 0 0 0; padding-left: 20px;">';
+                  for (var j = 0; j < otherList.length; j++) {
+                    var op = otherList[j];
+                    html += '<li><span title="' + escapeHtml(op.url || '') + '">' + escapeHtml(op.name || '') + '</span> — ' + escapeHtml(op.raw_location || op.market || op.url || '—') + '</li>';
+                  }
+                  html += '</ul>';
+                }
+                html += '</li>';
+              }
+              html += '</ul>';
+            } else {
+              html += '<div class="meta">No property data yet. Run the asset collector to populate.</div>';
+            }
+            contentEl.innerHTML = html;
+            if (statusEl) statusEl.textContent = '';
+          })
+          .catch(function() {
+            if (statusEl) statusEl.textContent = '';
+          });
+      })();
+    </script>
+    {% endif %}
 
     <!-- 6. Talent snapshot -->
     <div class="card">
@@ -120,16 +211,19 @@
       {% endif %}
     </div>
 
-    <!-- 7. Press (past 120 days) -->
+    <!-- 7. Press -->
     <div class="card">
-      <strong>Press (past 120 days)</strong>
-      <p class="meta">Business-focused news only; deduped, with links, sources, and 1-line summaries.</p>
+      <strong>Press</strong>
+      <p class="meta">Business-focused news only; deduped, with links, sources, and 1-line summaries. Newest first.</p>
       {% if press_90d|length %}
         <ul style="margin: 0; padding-left: 20px;">
           {% for item in press_90d %}
           <li>
-            {% if item.get('date') %}<span class="meta" style="font-weight: 500;">{{ item.date }}</span> — {% endif %}
-            <a href="{{ item.get('url') or item.get('link') }}" target="_blank" rel="noopener">{{ item.get('title') or 'Article' }}</a>
+            <span class="meta" style="font-weight: 500;">{{ item.get('date') or 'Date unknown' }}</span> — <a href="{{ item.get('url') or item.get('link') }}" target="_blank" rel="noopener">{{ item.get('display_title') or item.get('title') or 'Article' }}</a>
+            {% set press_url = item.get('url') or item.get('link') %}
+            {% if press_url %}
+            <div class="meta" style="font-size: 11px; word-break: break-all; margin-top: 2px;">{{ press_url }}</div>
+            {% endif %}
             <div class="meta">
               {% if item.get('topic') %}
                 <strong style="font-size: 11px; text-transform: uppercase;">{{ item.topic.replace('_', ' ') }}</strong>
@@ -147,7 +241,7 @@
           {% endfor %}
         </ul>
       {% else %}
-        <div class="meta">No business-relevant press in the last 120 days.</div>
+        <div class="meta">No business-relevant press.</div>
       {% endif %}
     </div>
 

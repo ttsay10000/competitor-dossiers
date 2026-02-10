@@ -763,6 +763,16 @@ def _playwright_available() -> bool:
         return False
 
 
+# Default minimum properties to "accept" a strategy result when using strategy_chain.
+# If a strategy returns fewer than this, we try the next in the chain (avoids "succeeding" with wrong process).
+_ASSET_CHAIN_MIN_PROPERTIES = 5
+
+# When a source has no strategy_chain and no explicit strategy, we use this chain so new competitors
+# (name + URL only) are tried with all three methods; we only accept when one returns >= min_properties_accept.
+# Order: sitemap first (works for many property/vacation-rental sites), then JS exhaust (Lark-style), then HTML.
+_DEFAULT_ASSET_STRATEGY_CHAIN = ["sitemap_first", "js_exhaust", "html"]
+
+
 def collect_asset_snapshot(
     source_url: str,
     js_required: bool = False,
@@ -770,17 +780,18 @@ def collect_asset_snapshot(
     extra_options: Optional[Dict[str, Any]] = None,
 ) -> dict[str, Any]:
     opts = extra_options or {}
-    strategy = opts.get("strategy")
-    # Infer strategy: prefer sitemap_first when set so we can run without Playwright (e.g. on Render).
-    if not strategy:
+
+    def _infer_strategy() -> str:
+        s = opts.get("strategy")
+        if s:
+            return s
         if js_required and opts.get("load_more"):
-            strategy = "js_exhaust"
-        elif use_sitemap_first:
-            strategy = "sitemap_first"
-        elif js_required:
-            strategy = "js"
-        else:
-            strategy = "html"
+            return "js_exhaust"
+        if use_sitemap_first:
+            return "sitemap_first"
+        if js_required:
+            return "js"
+        return "html"
 
     def fetch_from_sitemap() -> Optional[Dict[str, Any]]:
         """
@@ -892,54 +903,101 @@ def collect_asset_snapshot(
             "note": "html",
         }
 
-    # --- API strategy ---
-    if strategy == "api":
-        api_cfg = opts.get("api") or {}
-        properties = fetch_from_api(api_cfg, source_url)
-        return {
-            "source_url": api_cfg.get("url") or source_url,
-            "raw_content": None,
-            "raw_hash": None,
-            "properties": normalize_properties(properties),
-            "note": "api",
-        }
-
-    # --- JS exhaust (Load more): use browser when available, else sitemap+HTML ---
-    if strategy == "js_exhaust":
-        if _playwright_available():
-            load_more = opts.get("load_more") or {}
-            fetched = fetch_url_js_exhaust(source_url, load_more)
-            if opts.get("llm_extract"):
-                parsed = urlparse(source_url)
-                base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else source_url
-                lark_blocks = _extract_lark_style_blocks(fetched.text, base_url)
-                if lark_blocks:
-                    properties = _extract_properties_via_llm_from_blocks(lark_blocks, source_url)
-                    # If we got few properties, merge in any from link extraction (avoids cap when only partial h2+ul or first batch)
-                    properties = _merge_link_properties_into(properties, fetched.text)
+    def run_one_strategy(strategy: str) -> dict[str, Any]:
+        """Run a single strategy by name; returns snapshot dict. Used for both chain and single-strategy."""
+        if strategy == "api":
+            api_cfg = opts.get("api") or {}
+            properties = fetch_from_api(api_cfg, source_url)
+            return {
+                "source_url": api_cfg.get("url") or source_url,
+                "raw_content": None,
+                "raw_hash": None,
+                "properties": normalize_properties(properties),
+                "note": "api",
+            }
+        if strategy == "js_exhaust":
+            if _playwright_available():
+                load_more = opts.get("load_more") or {}
+                fetched = fetch_url_js_exhaust(source_url, load_more)
+                if opts.get("llm_extract"):
+                    parsed = urlparse(source_url)
+                    base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else source_url
+                    lark_blocks = _extract_lark_style_blocks(fetched.text, base_url)
+                    if lark_blocks:
+                        properties = _extract_properties_via_llm_from_blocks(lark_blocks, source_url)
+                        properties = _merge_link_properties_into(properties, fetched.text)
+                        return {
+                            "source_url": fetched.url,
+                            "raw_content": fetched.text,
+                            "raw_hash": fetched.raw_hash,
+                            "properties": normalize_properties(properties),
+                            "note": "js_exhaust_lark_blocks",
+                        }
+                    properties = _extract_properties_via_llm(fetched.text, source_url)
+                    if not properties:
+                        properties = extract_properties_from_html(fetched.text)
+                        return {
+                            "source_url": fetched.url,
+                            "raw_content": fetched.text,
+                            "raw_hash": fetched.raw_hash,
+                            "properties": normalize_properties(properties),
+                            "note": "js_exhaust",
+                        }
                     return {
                         "source_url": fetched.url,
                         "raw_content": fetched.text,
                         "raw_hash": fetched.raw_hash,
                         "properties": normalize_properties(properties),
-                        "note": "js_exhaust_lark_blocks",
+                        "note": "js_exhaust_llm",
                     }
-                properties = _extract_properties_via_llm(fetched.text, source_url)
-                if not properties:
-                    properties = extract_properties_from_html(fetched.text)
-                    return {
-                        "source_url": fetched.url,
-                        "raw_content": fetched.text,
-                        "raw_hash": fetched.raw_hash,
-                        "properties": normalize_properties(properties),
-                        "note": "js_exhaust",
-                    }
+                properties = extract_properties_from_html(fetched.text)
                 return {
                     "source_url": fetched.url,
                     "raw_content": fetched.text,
                     "raw_hash": fetched.raw_hash,
                     "properties": normalize_properties(properties),
-                    "note": "js_exhaust_llm",
+                    "note": "js_exhaust",
+                }
+            return _fetch_without_browser()
+        if strategy == "js":
+            if _playwright_available():
+                fetched = fetch_url_js(source_url)
+                properties = extract_properties_from_html(fetched.text)
+                return {
+                    "source_url": fetched.url,
+                    "raw_content": fetched.text,
+                    "raw_hash": fetched.raw_hash,
+                    "properties": normalize_properties(properties),
+                    "note": "js_rendered",
+                }
+            return _fetch_without_browser()
+        if strategy == "sitemap_first":
+            sitemap_snapshot = fetch_from_sitemap()
+            if sitemap_snapshot:
+                return sitemap_snapshot
+            fetched = fetch_url(source_url)
+            if fetched.status_code != 200:
+                raise RuntimeError(
+                    f"Asset fetch failed: {fetched.url} returned HTTP {fetched.status_code}. "
+                    "Refusing to parse or persist; check Runs for this error."
+                )
+            if opts.get("llm_extract"):
+                llm_props = _extract_properties_via_llm(fetched.text, source_url)
+                if llm_props:
+                    return {
+                        "source_url": fetched.url,
+                        "raw_content": fetched.text,
+                        "raw_hash": fetched.raw_hash,
+                        "properties": normalize_properties(llm_props),
+                        "note": "llm",
+                    }
+                properties = extract_properties_from_html(fetched.text)
+                return {
+                    "source_url": fetched.url,
+                    "raw_content": fetched.text,
+                    "raw_hash": fetched.raw_hash,
+                    "properties": normalize_properties(properties),
+                    "note": "html",
                 }
             properties = extract_properties_from_html(fetched.text)
             return {
@@ -947,65 +1005,47 @@ def collect_asset_snapshot(
                 "raw_content": fetched.text,
                 "raw_hash": fetched.raw_hash,
                 "properties": normalize_properties(properties),
-                "note": "js_exhaust",
+                "note": "html",
             }
-        return _fetch_without_browser()
-
-    # --- Plain JS (single paint): use browser when available, else sitemap+HTML ---
-    if strategy == "js":
-        if _playwright_available():
-            fetched = fetch_url_js(source_url)
-            properties = extract_properties_from_html(fetched.text)
-            return {
-                "source_url": fetched.url,
-                "raw_content": fetched.text,
-                "raw_hash": fetched.raw_hash,
-                "properties": normalize_properties(properties),
-                "note": "js_rendered",
-            }
-        return _fetch_without_browser()
-
-    # --- Sitemap first then HTML fallback ---
-    if strategy == "sitemap_first":
+        # "html" or default: HTML first, then sitemap fallback
+        html_snapshot = fetch_from_html()
+        if html_snapshot.get("properties"):
+            return html_snapshot
         sitemap_snapshot = fetch_from_sitemap()
-        if sitemap_snapshot:
-            return sitemap_snapshot
-        fetched = fetch_url(source_url)
-        if fetched.status_code != 200:
-            raise RuntimeError(
-                f"Asset fetch failed: {fetched.url} returned HTTP {fetched.status_code}. "
-                "Refusing to parse or persist; check Runs for this error."
-            )
-        if opts.get("llm_extract"):
-            llm_props = _extract_properties_via_llm(fetched.text, source_url)
-            if llm_props:
-                properties = llm_props
-                note = "llm"
-            else:
-                properties = extract_properties_from_html(fetched.text)
-                note = "html"
-            return {
-                "source_url": fetched.url,
-                "raw_content": fetched.text,
-                "raw_hash": fetched.raw_hash,
-                "properties": normalize_properties(properties),
-                "note": note,
-            }
-        properties = extract_properties_from_html(fetched.text)
-        return {
-            "source_url": fetched.url,
-            "raw_content": fetched.text,
-            "raw_hash": fetched.raw_hash,
-            "properties": normalize_properties(properties),
-            "note": "html",
-        }
+        return sitemap_snapshot or html_snapshot
 
-    # --- Default: HTML first, then sitemap fallback ---
-    html_snapshot = fetch_from_html()
-    if html_snapshot.get("properties"):
-        return html_snapshot
-    sitemap_snapshot = fetch_from_sitemap()
-    return sitemap_snapshot or html_snapshot
+    # --- Strategy chain: try strategies in order until one returns >= min_properties ---
+    # Use explicit chain, or default chain for unknown sources (no strategy_chain and no explicit strategy).
+    # That way new competitors (name + URL only) get sitemap → js_exhaust → html and never "succeed" with 0–4 from HTML.
+    chain = opts.get("strategy_chain")
+    if opts.get("strategy") is None:
+        if chain is None or (isinstance(chain, list) and len(chain) == 0):
+            chain = _DEFAULT_ASSET_STRATEGY_CHAIN
+    min_accept = opts.get("min_properties_accept", _ASSET_CHAIN_MIN_PROPERTIES)
+    if chain:
+        last_snapshot: Optional[Dict[str, Any]] = None
+        for strategy_name in chain:
+            try:
+                snapshot = run_one_strategy(strategy_name)
+                if not snapshot:
+                    continue
+                n = len(snapshot.get("properties") or [])
+                if n >= min_accept:
+                    note = snapshot.get("note") or strategy_name
+                    return {**snapshot, "note": f"{note}_chain_ok"}
+                if snapshot:
+                    last_snapshot = snapshot
+            except Exception:
+                continue
+        if last_snapshot:
+            return last_snapshot
+        raise RuntimeError(
+            f"Asset strategy_chain exhausted with no result: tried {chain!r} for {source_url}"
+        )
+
+    # --- Single strategy (explicit strategy in opts, no chain) ---
+    strategy = _infer_strategy()
+    return run_one_strategy(strategy)
 
 
 def build_structured_json(snapshot: dict[str, Any]) -> dict[str, Any]:

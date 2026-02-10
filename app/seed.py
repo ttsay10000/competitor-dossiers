@@ -12,7 +12,12 @@ SEED_COMPETITORS = [
         "sources": [
             # Use Lever jobs URL so we get full list via API; placemakr.com/corporate/join-our-team only gave 3 (generic scrape).
             {"channel": "talent", "url": "https://jobs.lever.co/placemakr", "confidence": "high"},
-            {"channel": "asset", "url": "https://www.placemakr.com/locations", "confidence": "high"},
+            {
+                "channel": "asset",
+                "url": "https://www.placemakr.com/locations",
+                "confidence": "high",
+                "extra_options": {"strategy_chain": ["html"], "min_properties_accept": 1},
+            },
             {"channel": "press", "url": "https://www.placemakr.com/blog", "confidence": "high"},
         ],
     },
@@ -27,13 +32,17 @@ SEED_COMPETITORS = [
                 "confidence": "low",
                 "js_required": True,
                 "use_sitemap_first": True,
-                "extra_options": {"llm_extract": True},
+                "extra_options": {
+                    "llm_extract": True,
+                    "strategy_chain": ["sitemap_first", "html"],
+                    "min_properties_accept": 5,
+                },
             },
             {"channel": "press", "url": "https://avantstay.com/blog/", "confidence": "high"},
         ],
     },
     {
-        "name": "Lark Hotels",
+        "name": "Lark",
         "primary_domain": "larkhospitality.com",
         "sources": [
             {"channel": "talent", "url": "https://ats.wizehire.com/career-site/lark-hospitality", "confidence": "high"},
@@ -43,7 +52,8 @@ SEED_COMPETITORS = [
                 "confidence": "high",
                 "js_required": True,
                 "extra_options": {
-                    "strategy": "js_exhaust",
+                    "strategy_chain": ["js_exhaust", "sitemap_first", "html"],
+                    "min_properties_accept": 5,
                     "load_more": {
                         "click_selector": [
                             "button:has-text('Load more')",
@@ -124,30 +134,10 @@ def upsert_source(
 def run_seed() -> None:
     with get_session() as session:
         for entry in SEED_COMPETITORS:
-            # If we renamed a competitor (e.g. Lark -> Lark Hotels), update existing by primary_domain.
-            primary = entry.get("primary_domain")
-            if primary:
-                existing = session.query(Competitor).filter(Competitor.primary_domain == primary).first()
-                if existing and existing.name != entry["name"]:
-                    existing.name = entry["name"]
-                    session.flush()
-                    competitor = existing
-                    for source in entry["sources"]:
-                        upsert_source(
-                            session,
-                            competitor.id,
-                            source["channel"],
-                            source["url"],
-                            source["confidence"],
-                            js_required=bool(source.get("js_required")),
-                            use_sitemap_first=bool(source.get("use_sitemap_first")),
-                            extra_options=source.get("extra_options"),
-                        )
-                    continue
             competitor = upsert_competitor(
                 session,
                 entry["name"],
-                primary,
+                entry.get("primary_domain"),
             )
             for source in entry["sources"]:
                 upsert_source(

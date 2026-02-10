@@ -292,6 +292,98 @@ Return only the JSON array, no markdown."""
     return result if result else None
 
 
+_MAX_OTHER_PROPERTIES_FOR_RESEARCH = 100
+
+
+def research_and_assign_states_for_other_properties(
+    competitor_name: str,
+    properties: List[dict],
+) -> Optional[List[dict]]:
+    """
+    For properties with state="Other", use LLM knowledge to infer location from property names.
+    E.g. "Placemakr Dupont Circle" -> Washington DC (Dupont Circle is a DC neighborhood).
+    Only runs when there are < 100 Other properties to avoid hanging. Returns updated list or None.
+    """
+    other_indices = [
+        i for i, p in enumerate(properties)
+        if ((p.get("state") or "").strip() or "Other") == "Other"
+    ]
+    if len(other_indices) >= _MAX_OTHER_PROPERTIES_FOR_RESEARCH or not other_indices:
+        return None
+    client = _openai_client()
+    if not client:
+        return None
+
+    from .diff.asset_diff import US_STATE_ABBREV
+    valid_states = set(US_STATE_ABBREV.values()) | {"Washington DC", "Other"}
+
+    lines = []
+    for local_i, orig_i in enumerate(other_indices):
+        p = properties[orig_i]
+        name = (p.get("name") or "").strip()[:150]
+        url = (p.get("url") or "").strip()[:200]
+        market = (p.get("market") or "").strip()[:100]
+        details = (p.get("details") or "").strip()[:150]
+        lines.append(
+            f"{local_i} (orig={orig_i}): name={name!r} url={url!r} market={market!r} details={details!r}"
+        )
+
+    system = """You are a location researcher for US real estate/hospitality properties. Some properties are tagged "Other" because their location could not be determined from URL or metadata. Your task is to infer the correct US state (or Washington DC) from the property name and any available context.
+
+Use your knowledge of US geography: neighborhood names (e.g. Dupont Circle -> Washington DC, Brooklyn -> New York), city names, landmarks, regions. Property names often include the neighborhood or city (e.g. "Placemakr Dupont Circle" is in Washington DC).
+
+Rules:
+- Use full US state names only (e.g. "California", "New York", "Texas"). For Washington DC use "Washington DC".
+- If you can confidently infer the state from the name or context, assign it. Otherwise keep "Other".
+- Return a JSON array with one object per property: {"index": <local_i>, "state": "StateName", "city": "optional city or omit"}.
+- Only include entries where you inferred a state different from Other.
+Return only the JSON array, no markdown."""
+
+    user = f"Competitor: {competitor_name}\n\nProperties with unknown location (index=local index, orig=original list index). Infer state from property names when possible:\n" + "\n".join(lines)
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            max_tokens=4000,
+            temperature=0.1,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        if not content:
+            return None
+        data = _parse_json_response(content)
+        if not isinstance(data, list):
+            return None
+        # Build orig_index -> {state, city} from LLM response
+        updates: dict[int, dict] = {}
+        for item in data:
+            if not isinstance(item, dict) or "index" not in item:
+                continue
+            local_i = int(item["index"])
+            if local_i < 0 or local_i >= len(other_indices):
+                continue
+            orig_i = other_indices[local_i]
+            state = (item.get("state") or "").strip() or "Other"
+            if state not in valid_states or state == "Other":
+                continue
+            city = (item.get("city") or "").strip() or None
+            updates[orig_i] = {"state": state, "city": city}
+        if not updates:
+            return None
+        # Apply updates to a copy of properties
+        result = []
+        for i, p in enumerate(properties):
+            out = dict(p)
+            if i in updates:
+                out["state"] = updates[i]["state"]
+                if updates[i].get("city"):
+                    out["city"] = updates[i]["city"]
+            result.append(out)
+        return result
+    except Exception:
+        return None
+
+
 def enrich_jobs_with_llm(jobs: List[dict]) -> List[dict]:
     """
     Use LLM to assign functional_area and is_senior to each job. On failure or no API key, return list unchanged.
