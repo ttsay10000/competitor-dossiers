@@ -1082,6 +1082,8 @@ def enrich_press_items_with_llm(
 
     # Filter to business-relevant items. Priority rules:
     # - PR Newswire: always include (press releases about the company; high priority).
+    # - Google News: always include (RSS is already scoped to quoted company name; LLM can be
+    #   conservative on is_about_company and would otherwise drop valid clips).
     # - User-provided company news (press_endpoint): LLM review only—may be promo, so we
     #   require is_about_company and drop promo/irrelevant.
     # - All other sources: require is_about_company and drop promo/irrelevant.
@@ -1089,6 +1091,13 @@ def enrich_press_items_with_llm(
     for it in classified:
         provider = (it.get("provider") or "").strip().lower()
         if provider == "prnewswire":
+            filtered.append(it)
+            continue
+        if provider == "google_news":
+            # Only drop clearly irrelevant; allow through so external coverage shows in dossier.
+            topic = (it.get("topic") or "").strip().lower()
+            if topic in {"irrelevant"}:
+                continue
             filtered.append(it)
             continue
         topic = (it.get("topic") or "").lower()
@@ -1185,8 +1194,17 @@ def enrich_press_items_with_llm(
         title = (best.get("title") or "").strip() or "Press item"
         url = (best.get("url") or best.get("link") or "").strip()
         outlet = _press_outlet_from_item(best)
-        date = (best.get("date") or "").strip() or None
         topic = (best.get("topic") or "").strip() or "other_business"
+        # Normalize date to ISO string so dossier _parse_press_date and template display work.
+        raw_date = best.get("date")
+        if raw_date is None:
+            date = None
+        elif hasattr(raw_date, "isoformat"):
+            date = raw_date.isoformat()
+        elif isinstance(raw_date, str):
+            date = raw_date.strip() or None
+        else:
+            date = str(raw_date).strip() or None
 
         canonical.append(
             {

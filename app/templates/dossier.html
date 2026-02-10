@@ -6,13 +6,16 @@
     <h1>{{ competitor.name }} Dossier</h1>
     <div style="margin-bottom: 12px;">
       <form method="post" action="/dossier/{{ competitor.id }}/refresh" class="refresh-form" style="display: inline-block; margin-right: 8px;">
+        <label style="display: inline-flex; align-items: center; gap: 6px; margin-right: 8px;">
+          <input type="checkbox" name="force" value="1" /> Force full refresh
+        </label>
         <button type="submit">Refresh data</button>
       </form>
       <form method="post" action="/dossier/{{ competitor.id }}/seed" class="refresh-form" style="display: inline-block;">
         <button type="submit">Reset baseline & refresh</button>
       </form>
       <span id="refresh-status" class="meta" style="margin-left: 8px; font-weight: 500;"></span>
-      <p class="meta" style="margin: 4px 0 0 0;">Refresh data runs all collectors (asset, talent, press) and updates events vs current baseline. Reset baseline sets comparison to now, then runs collectors.</p>
+      <p class="meta" style="margin: 4px 0 0 0;">Refresh data runs all collectors (asset, talent, press) and updates events vs current baseline. <strong>Force full refresh</strong> clears the press cache so Google News and other sources are re-fetched (use after code changes or if press links/dates are missing). Reset baseline sets comparison to now, then runs collectors.</p>
     </div>
     <script>
       (function() {

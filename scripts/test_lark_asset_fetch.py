@@ -31,7 +31,12 @@ LARK_PORTFOLIO_URL = "https://www.larkhospitality.com/portfolio/"
 LARK_EXTRA_OPTIONS = {
     "strategy": "js_exhaust",
     "load_more": {
+        "button_text": "Load more hotels",
+        "post_load_wait_ms": 3000,
         "click_selector": [
+            "a:has-text('Load more hotels')",
+            "button:has-text('Load more hotels')",
+            ":text('Load more hotels')",
             "button:has-text('Load more')",
             "button:has-text('Load More')",
             "a:has-text('Load more')",
@@ -43,6 +48,7 @@ LARK_EXTRA_OPTIONS = {
         "wait_after_click_ms": 2000,
         "wait_for_selector_timeout_ms": 10000,
         "wait_after_gone_ms": 3000,
+        "wait_reappear_attempts": 5,
         "max_clicks": 200,
     },
     "llm_extract": True,

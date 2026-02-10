@@ -641,13 +641,21 @@ def dossier_refresh(request: Request, competitor_id: int):
     After the run, advances every competitor's comparison baseline to now so the executive
     summary and dossier compare to the last refresh (e.g. changes in the last 7 days), not
     the original baseline.
+    If form field "force" is set (e.g. "Force full refresh" checked), the latest press
+    snapshot for this competitor is deleted before running so the press run is not skipped
+    due to hash (ensures Google News and other sources are re-fetched and new code paths run).
     """
-    from ..runner import run as run_all_channels, advance_baseline_after_full_refresh
+    from ..runner import run as run_all_channels, advance_baseline_after_full_refresh, load_latest_snapshot
 
     with get_session() as session:
         competitor = session.get(Competitor, competitor_id)
         if competitor is None:
             return RedirectResponse(url="/", status_code=303)
+        # Force full refresh: clear latest press snapshot so run does not skip on hash.
+        if request.form.get("force"):
+            latest_press = load_latest_snapshot(session, competitor_id, "press")
+            if latest_press:
+                session.delete(latest_press)
     run_all_channels()
     advance_baseline_after_full_refresh()
     clear_dossier_caches_for_competitor(competitor_id)

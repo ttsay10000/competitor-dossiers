@@ -486,6 +486,13 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
                     f"[{datetime.now(timezone.utc).isoformat()}] asset run: "
                     f"{competitor.name} {endpoint.url} ({endpoint.confidence})"
                 )
+                # Lark-style sources need Playwright + load_more for full portfolio; without it we get partial HTML only.
+                opts = getattr(endpoint, "extra_options", None) or {}
+                if endpoint.js_required and opts.get("load_more") and not getattr(settings, "playwright_enabled", False):
+                    print(
+                        f"[asset] {competitor.name}: JS+load_more source but PLAYWRIGHT_ENABLED is false; "
+                        "expect partial property count. Set PLAYWRIGHT_ENABLED=true for full list."
+                    )
                 try:
                     snapshot = collect_asset_snapshot(
                         endpoint.url,
@@ -783,6 +790,13 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                 except Exception:
                     pass
 
+            # Log raw counts per source so we can confirm Google News (and others) are pulled.
+            by_provider = {}
+            for it in raw_items:
+                p = (it.get("provider") or "").strip() or "unknown"
+                by_provider[p] = by_provider.get(p, 0) + 1
+            print(f"[press] {competitor.name}: raw_items={len(raw_items)} by source: {by_provider}")
+
             if not raw_items:
                 log_run(
                     session,
@@ -821,6 +835,7 @@ def run_press(competitor_name: Optional[str] = None) -> None:
             # 4) Skip snapshot entirely if nothing meaningful changed.
             raw_hash = _build_press_raw_hash(filtered_items)
             if should_skip_due_to_hash(session, competitor.id, "press", raw_hash):
+                print(f"[press] {competitor.name}: skipping (snapshot_unchanged), filtered_items={len(filtered_items)}")
                 log_event(
                     "snapshot_unchanged",
                     competitor=competitor.name,
@@ -833,9 +848,11 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                     "press",
                     "skipped",
                     message="snapshot_unchanged",
-                    extra={"endpoints": [ep.url for ep in endpoints]},
+                    extra={"endpoints": [ep.url for ep in endpoints], "filtered_items": len(filtered_items)},
                 )
                 continue
+
+            print(f"[press] {competitor.name}: persisting snapshot, filtered_items={len(filtered_items)}")
 
             # 5) Build structured snapshot and LLM-enriched canonical press list.
             # Exclude company-site links (primary_domain + press endpoint domains) so we show
