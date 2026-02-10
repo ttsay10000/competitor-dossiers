@@ -2,7 +2,7 @@ import argparse
 import sys
 
 from .db import check_db_connection
-from .runner import run
+from .runner import run, advance_baseline_after_full_refresh
 from .digest import print_weekly_digest
 
 
@@ -33,6 +33,9 @@ def main() -> None:
 
     channel = None if args.channel == "all" else args.channel
     run(channel=channel)
+    # After a full refresh, advance comparison baseline so next summary = "since last run".
+    if channel is None:
+        advance_baseline_after_full_refresh()
 
 
 if __name__ == "__main__":

@@ -329,7 +329,7 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
             item for item in pool
             if _parse_press_date(item.get("date")) and _parse_press_date(item.get("date")).date() >= baseline_cutoff.date()
         ]
-    week_cutoff_pub = now - timedelta(days=7)
+    week_cutoff_pub = datetime.now(timezone.utc) - timedelta(days=7)
 
     def _newsworthiness_score(item: dict) -> tuple:
         topic = (item.get("topic") or "").lower()
@@ -581,20 +581,15 @@ def dossier_executive_summary(competitor_id: int):
 @router.post("/dossier/set-baseline-all-and-refresh", status_code=303)
 def set_baseline_all_and_refresh(request: Request):
     """
-    Set reporting baseline to now for every competitor, then run all collectors.
-    Use this once (or after adding competitors) so the executive summary and dossier
-    only show changes *after* this point—keeping the LLM payload small.
+    Run all collectors for all competitors, then set every competitor's comparison baseline
+    to the end of that run. Use once to establish a baseline (first view will show little;
+    next refresh will compare to this run). Every subsequent refresh (this button or cron)
+    also advances the baseline so the summary always reflects changes since the last run.
     """
-    from ..runner import run as run_all_channels
+    from ..runner import run as run_all_channels, advance_baseline_after_full_refresh
 
-    with get_session() as session:
-        all_competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
-        now = datetime.now(timezone.utc)
-        for c in all_competitors:
-            c.reporting_baseline_at = now
-            session.add(c)
-        session.commit()
     run_all_channels()
+    advance_baseline_after_full_refresh()
     return RedirectResponse(url="/competitors", status_code=303)
 
 
@@ -637,32 +632,29 @@ def dossier(request: Request, competitor_id: int):
 def dossier_refresh(request: Request, competitor_id: int):
     """
     Run all collectors (asset, talent, press, etc.) for all competitors—same as the cron job.
-    Does not change the reporting baseline. Use this to pull latest data and generate events
-    compared to the existing baseline, then view the updated dossier.
+    After the run, advances every competitor's comparison baseline to now so the executive
+    summary and dossier compare to the last refresh (e.g. changes in the last 7 days), not
+    the original baseline.
     """
-    from ..runner import run as run_all_channels
+    from ..runner import run as run_all_channels, advance_baseline_after_full_refresh
 
     with get_session() as session:
         competitor = session.get(Competitor, competitor_id)
         if competitor is None:
             return RedirectResponse(url="/", status_code=303)
     run_all_channels()
+    advance_baseline_after_full_refresh()
     return RedirectResponse(url=f"/dossier/{competitor_id}", status_code=303)
 
 
 @router.post("/dossier/{competitor_id}/seed", status_code=303)
 def dossier_seed(request: Request, competitor_id: int):
     """
-    Manual seed/baseline reset for a single competitor.
-
-    Does three things:
-    1) Refreshes data using the normal runner (all channels, all competitors).
-    2) Sets a reporting baseline timestamp for this competitor so future weekly
-       summaries treat only post-baseline items as "new".
-    3) Effectively resets the visible timeline in the dossier because events
-       and top news are filtered to post-baseline dates.
+    Run a full refresh (all channels, all competitors), then set every competitor's
+    comparison baseline to the end of that run. Same effect as Refresh; use to reset
+    the timeline so the next view shows only changes after this run.
     """
-    from ..runner import run as run_all_channels
+    from ..runner import run as run_all_channels, advance_baseline_after_full_refresh
 
     with get_session() as session:
         competitor = session.get(Competitor, competitor_id)
@@ -674,14 +666,8 @@ def dossier_seed(request: Request, competitor_id: int):
                 "dossier.html",
                 {"request": request, "error": "Competitor not found.", "last_refreshed": last_refreshed, "nav_competitors": nav_competitors},
             )
-        # Set baseline to "now" so subsequent views only surface post-baseline changes.
-        competitor.reporting_baseline_at = datetime.now(timezone.utc)
-        session.add(competitor)
-        session.commit()
 
-    # Run a fresh pull for all channels (includes this competitor).
-    # This keeps logic consistent with the scheduled cron job.
     run_all_channels()
-
+    advance_baseline_after_full_refresh()
     return RedirectResponse(url=f"/dossier/{competitor_id}", status_code=303)
 

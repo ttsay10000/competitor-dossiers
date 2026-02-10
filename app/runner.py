@@ -1026,6 +1026,19 @@ def run_public_records() -> None:
                 )
 
 
+def advance_baseline_after_full_refresh() -> None:
+    """
+    Set every competitor's reporting_baseline_at to now.
+    Call this after a full refresh (all channels) so the executive summary and dossier
+    compare against the last refresh, not the original baseline—surfacing only what
+    changed since the last run (e.g. last 7 days) instead of the full period since first reset.
+    """
+    with get_session() as session:
+        now = datetime.now(timezone.utc)
+        for c in session.query(Competitor).all():
+            c.reporting_baseline_at = now
+
+
 def run(channel: Optional[str] = None) -> None:
     if channel in (None, *RUNNER_CHANNELS):
         if channel in (None, "talent"):
