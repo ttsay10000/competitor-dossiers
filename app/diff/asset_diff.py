@@ -1,5 +1,6 @@
 import hashlib
 import re
+from typing import Optional
 from urllib.parse import urlparse
 
 # US state abbreviation -> full name for "by state" summary on dossier
@@ -100,6 +101,19 @@ def extract_markets(properties: list[dict]) -> set[str]:
 def location_key(prop: dict) -> str:
     """Location label for grouping (state/city when derivable from URL, else market/location or Unspecified)."""
     return infer_location_for_property(prop)
+
+
+def parse_keys_from_details(details: Optional[str]) -> int:
+    """Extract total key count from a property details string (e.g. '67 keys' or 'Keys: 67'). Returns 0 if missing."""
+    if not details or not isinstance(details, str):
+        return 0
+    m = re.search(r"(?:^|\s|;|,)\s*(\d+)\s*keys?\s*(?:\s|;|,|$)", details.strip(), re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"keys?\s*[:\-]\s*(\d+)", details.strip(), re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    return 0
 
 
 def delta_by_city(added: list[dict], removed: list[dict]) -> list[dict]:

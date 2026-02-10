@@ -5,7 +5,7 @@ from fastapi.responses import Response
 
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, Snapshot, Capability
-from ..diff.asset_diff import diff_properties, delta_by_city, infer_location_for_property
+from ..diff.asset_diff import diff_properties, delta_by_city, infer_location_for_property, parse_keys_from_details
 from ..executive_summary import generate_executive_summary, clean_location_display_for_dossier
 from ..rules.talent_rules import job_functional_area, FUNCTIONAL_AREA_DISPLAY_ORDER, PROPERTY_OPERATIONS_LABEL
 
@@ -181,11 +181,18 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         summary_business_points.append("No major business updates in the last 90 days.")
 
     # Properties by location (state/city) for high-level week-over-week tracking.
+    # Aggregate count and total keys per location (keys parsed from property details).
     location_counts = {}
-    for loc in _locations:
+    location_keys = {}
+    for p in asset_props:
+        loc = infer_location_for_property(p)
         location_counts[loc] = location_counts.get(loc, 0) + 1
-    properties_by_location = [{"location": loc, "count": n} for loc, n in sorted(location_counts.items(), key=lambda x: (-x[1], x[0]))]
-    # Per-location list of {name, details} for display (e.g. "907 Main (67 keys, 2 F&B outlets)")
+        location_keys[loc] = location_keys.get(loc, 0) + parse_keys_from_details(p.get("details"))
+    properties_by_location = [
+        {"location": loc, "count": n, "keys": location_keys.get(loc, 0)}
+        for loc, n in sorted(location_counts.items(), key=lambda x: (-x[1], x[0]))
+    ]
+    # Per-location summary only (one bullet per location: "Location - N properties (M keys)"); no sublists.
     by_loc_list: dict[str, list[dict]] = {}
     for p in asset_props:
         loc = infer_location_for_property(p)
@@ -193,14 +200,17 @@ def build_dossier_context(session, competitor_id: int) -> dict:
             "name": (p.get("name") or "").strip() or "Unnamed",
             "details": (p.get("details") or "").strip() or None,
         })
-    # Sort by count desc, then name; put "Other" and "Unspecified" at the bottom
     def _location_sort_key(item):
         loc, plist = item
         is_trailing = 1 if (loc or "").strip() in ("Other", "Unspecified") else 0
         return (is_trailing, -len(plist), (loc or "").lower())
 
     properties_by_location_with_list = [
-        {"location": loc, "count": len(plist), "properties": plist}
+        {
+            "location": loc,
+            "count": len(plist),
+            "keys": location_keys.get(loc, 0),
+        }
         for loc, plist in sorted(by_loc_list.items(), key=_location_sort_key)
     ]
     total_properties = len(asset_props)
@@ -228,13 +238,18 @@ def build_dossier_context(session, competitor_id: int) -> dict:
             asset_baseline_date = baseline_asset.captured_at.strftime("%Y-%m-%d")
             asset_delta_by_city = delta_by_city(diff["added"], diff["removed"])
 
-    # Optional: LLM-cleaned location display (State - City, group noise as Other)
+    # Optional: LLM-cleaned location display (State - City, group noise as Other); preserves keys.
     cleaned = clean_location_display_for_dossier(
         competitor.name, properties_by_location, asset_delta_by_city
     )
     if cleaned:
         properties_by_location = cleaned.get("properties_by_location") or properties_by_location
         asset_delta_by_city = cleaned.get("asset_delta_by_city") or asset_delta_by_city
+        # Use same cleaned list for single-bullet display (one line per location: "Location - N properties (M keys)")
+        properties_by_location_with_list = [
+            {"location": r["location"], "count": r["count"], "keys": r.get("keys", 0)}
+            for r in properties_by_location
+        ]
 
     context = {
         "competitor": {"id": competitor.id, "name": competitor.name},

@@ -50,8 +50,14 @@ def _build_context_text(context: Dict[str, Any]) -> str:
         loc_changes = [f"{r['location']}: +{r['added']}/−{r['removed']}" for r in delta_by_city[:15]]
         parts.append("By location (adds/removals): " + "; ".join(loc_changes))
     if props_by_loc:
-        loc_counts = [f"{r['location']}: {r['count']}" for r in props_by_loc[:15]]
-        parts.append("Current property counts by location: " + "; ".join(loc_counts))
+        loc_lines = []
+        for r in props_by_loc[:15]:
+            loc, count, keys = r.get("location", ""), r.get("count", 0), r.get("keys", 0)
+            if keys and keys > 0:
+                loc_lines.append(f"{loc}: {count} properties ({keys} keys)")
+            else:
+                loc_lines.append(f"{loc}: {count} properties")
+        parts.append("Current properties by location (use this format in output): " + "; ".join(loc_lines))
 
     # Top news headlines
     top_news = context.get("top_news") or []
@@ -84,10 +90,10 @@ def generate_executive_summary(context: Dict[str, Any]) -> Optional[str]:
 
 Include takeaways that draw from:
 - Talent: hiring focus (e.g. partnerships, engineering), senior roles, or stability ("No notable change on talent; job count stable").
-- Assets: where they added or removed properties, standout markets, or footprint changes.
+- Assets: for properties by location use exactly one line per location in the form "State - N properties (M keys)" (e.g. "California - 5 properties (100 keys)"). Do not add sub-bullets or property names under a location; only that single summary line per location. Also mention where they added or removed properties, standout markets, or footprint changes when relevant.
 - News: only if there is notable press; otherwise omit.
 
-Be specific (numbers, locations) when the data provides them. Tone: calm and executive. Format: each line starting with a bullet (use "- "). No intro sentence, no subheadings."""
+Be specific (numbers, locations) when the data provides them. Tone: calm and executive. Format: each line starting with a single bullet (use "- "). Use only top-level bullets—no sub-bullets, nested bullets, or indented sub-points. No intro sentence, no subheadings."""
 
     user = f"Competitor: {competitor_name}\n\nData:\n{context_text}"
 
@@ -103,10 +109,25 @@ Be specific (numbers, locations) when the data provides them. Tone: calm and exe
         )
         choice = resp.choices[0] if resp.choices else None
         if choice and choice.message and choice.message.content:
-            return choice.message.content.strip()
+            text = choice.message.content.strip()
+            return _strip_subbullets(text)
     except Exception:
         pass
     return None
+
+
+def _strip_subbullets(text: str) -> str:
+    """Keep only top-level bullets (lines starting with '- ' or '* ' at column 0). Remove sub-bullets and indented lines."""
+    lines = []
+    for line in text.splitlines():
+        s = line.rstrip()
+        if not s:
+            continue
+        # Sub-bullet: indented then bullet (e.g. "  - " or "    * ")
+        if len(s) > 2 and s[0] in " \t" and (s.lstrip().startswith("- ") or s.lstrip().startswith("* ")):
+            continue
+        lines.append(s)
+    return "\n".join(lines)
 
 
 def clean_location_display_for_dossier(
@@ -128,19 +149,27 @@ def clean_location_display_for_dossier(
     except ImportError:
         return None
 
-    counts_text = "; ".join(f"{r['location']}: {r['count']}" for r in properties_by_location[:25])
+    # Include keys per location when present (e.g. "California: 5 (100 keys)")
+    def _loc_count_keys(r: Dict[str, Any]) -> str:
+        loc, count = r.get("location", ""), r.get("count", 0)
+        keys = r.get("keys", 0)
+        if keys and keys > 0:
+            return f"{loc}: {count} ({keys} keys)"
+        return f"{loc}: {count}"
+
+    counts_text = "; ".join(_loc_count_keys(r) for r in properties_by_location[:25])
     deltas_text = "; ".join(f"{r['location']}: +{r['added']}/−{r['removed']}" for r in asset_delta_by_city[:25])
     if not counts_text and not deltas_text:
         return None
 
     system = """You are organizing property location data for a real estate/hospitality competitor dashboard.
-Given raw location labels and counts (some labels are noise like "Career Site", "Unspecified", "Privacy Policy"),
+Given raw location labels with counts and optional keys (e.g. "California: 5 (100 keys)" means 5 properties, 100 keys),
 produce a cleaned list where:
 1. Only real US geographic locations are kept, formatted as "State - City" (e.g. "Texas - Austin") or just "State" (e.g. "Texas") when city is not known.
-2. Merge any non-location or unclear entries (Unspecified, Career Site, Cdn Cgi, Hotels, Privacy Policy, etc.) into a single row labeled "Other".
-3. Preserve the exact counts and added/removed numbers; only change the location labels and grouping.
-Return JSON only, no markdown: {"properties_by_location": [{"location": "...", "count": n}, ...], "asset_delta_by_city": [{"location": "...", "added": a, "removed": r}, ...]}.
-If there are no real locations, still return the structure with "Other" and the totals."""
+2. Merge any non-location or unclear entries (Unspecified, Career Site, Cdn Cgi, Hotels, Privacy Policy, etc.) into a single row labeled "Other". When merging, sum the counts and keys.
+3. Preserve exact counts and keys; only change the location labels and grouping.
+Return JSON only, no markdown: {"properties_by_location": [{"location": "...", "count": n, "keys": k}, ...], "asset_delta_by_city": [{"location": "...", "added": a, "removed": r}, ...]}.
+Each properties_by_location entry must include "keys" (number, 0 if not provided). If there are no real locations, still return the structure with "Other" and the totals."""
 
     user = f"Competitor: {competitor_name}\n\nCurrent counts by location (raw):\n{counts_text or 'none'}\n\nChanges by location (raw):\n{deltas_text or 'none'}"
 
@@ -159,6 +188,23 @@ If there are no real locations, still return the structure with "Other" and the 
         counts = data.get("properties_by_location")
         deltas = data.get("asset_delta_by_city")
         if isinstance(counts, list) and isinstance(deltas, list):
+            # Ensure each row has "count" and "keys" as int (LLM may return strings)
+            def _int(v: Any, default: int = 0) -> int:
+                if isinstance(v, (int, float)):
+                    return int(v)
+                if isinstance(v, str) and v.strip().isdigit():
+                    return int(v.strip())
+                return default
+
+            counts = [
+                {
+                    "location": r.get("location", ""),
+                    "count": _int(r.get("count"), 0),
+                    "keys": _int(r.get("keys"), 0),
+                }
+                for r in counts
+                if isinstance(r, dict) and r.get("location") is not None
+            ]
             return {"properties_by_location": counts, "asset_delta_by_city": deltas}
     except Exception:
         pass

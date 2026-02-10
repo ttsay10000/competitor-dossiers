@@ -53,6 +53,10 @@ def expand_sitemap(url: str) -> list[str]:
 
 def is_property_like(url: str) -> bool:
     """True if URL looks like a property/location page (for HTML link and sitemap filtering)."""
+    u = (url or "").strip()
+    # Exclude blog, privacy, and other non-property paths that can match broad patterns
+    if re.search(r"/blog|/blogs|/privacy|/privacy-policy|/legal|/terms\b", u, re.IGNORECASE):
+        return False
     patterns = [
         r"/properties/",
         r"/property/",
@@ -68,7 +72,19 @@ def is_property_like(url: str) -> bool:
         # Placemakr-style single-segment city-state paths (e.g. /saltlakecity-ut)
         r"/[a-z0-9]+-[a-z0-9]+(?:\?|$|/)",
     ]
-    return any(re.search(pattern, url, re.IGNORECASE) for pattern in patterns)
+    return any(re.search(pattern, u, re.IGNORECASE) for pattern in patterns)
+
+
+def _is_junk_property_link(link_text: str, href: str) -> bool:
+    """True if this link is nav/footer/metadata, not a real property (e.g. See all X blogs, Privacy Policy)."""
+    text = (link_text or "").strip().lower()
+    if not text or len(text) < 3:
+        return True
+    if text == "privacy policy" or text.startswith("see all ") and "blog" in text:
+        return True
+    if re.match(r"^(see all|view all)\s", text) and ("blog" in text or "location" in text):
+        return True
+    return False
 
 
 def extract_properties_from_html(html: str) -> list[dict[str, Any]]:
@@ -80,6 +96,8 @@ def extract_properties_from_html(html: str) -> list[dict[str, Any]]:
         if not href or len(text) < 3:
             continue
         if not is_property_like(href):
+            continue
+        if _is_junk_property_link(text, href):
             continue
         properties.append(
             {
@@ -112,22 +130,85 @@ _US_STATE_ABBREV = {
 # Pattern: "City, ST" or "City, State" at start of line (for location line in Lark blocks).
 _RE_CITY_ST = re.compile(r"^([^,]+),\s*([a-z]{2}|[A-Za-z\s]+)$", re.IGNORECASE)
 
+# Lark: h2 that is a detail line (Keys, F&B, Brand) not a property name — skip so we don't count as separate property
+_RE_LARK_DETAIL_H2 = re.compile(
+    r"^(Keys|F&B\s*Outlet|F&B\s*Outlets|Brand)\s*:",
+    re.IGNORECASE,
+)
+
 
 def _extract_lark_style_blocks(html: str, base_url: str) -> List[dict[str, Any]]:
     """
-    Parse Lark-style portfolio HTML: each property is an <h2> (name) followed by a <ul> with
-    <li> items: first is often "City, ST", then "Keys: N", "F&B Outlets: N", "Brand: X", etc.
+    Parse Lark-style portfolio HTML. Two patterns supported:
+    1. Property per block: <h2> (property name) followed by <ul> with location ("City, ST") and details.
+    2. Location as section header: <h2> is "City, ST"; <ul> contains one or more properties (each <li>
+       may have a link to the property). We emit one block per property so names are property names, not location.
     Returns list of {"name", "location_line", "details_list", "url"}.
     """
     soup = BeautifulSoup(html, "html.parser")
     blocks = []
     for h2 in soup.find_all("h2"):
-        name = (h2.get_text() or "").strip()
-        if not name or len(name) < 2:
+        h2_text = (h2.get_text() or "").strip()
+        if not h2_text or len(h2_text) < 2:
             continue
-        # Property URL: same-page link wrapping h2 or parent <a href=".../portfolio/...">
-        url_val = None
+        # Skip h2 that is a detail line (Keys: 42, F&B Outlet: 1, Brand: X) — not a property name
+        if _RE_LARK_DETAIL_H2.match(h2_text):
+            continue
+        ul = h2.find_next_sibling("ul")
+        if not ul:
+            next_el = h2.find_next_sibling()
+            if next_el:
+                ul = next_el.find("ul") if next_el.name != "ul" else next_el
+        if not ul:
+            continue
+
+        # Case: h2 is a location header ("City, ST") — page groups properties by location.
+        # Extract one block per property link (or per li) so "name" is the property name, not the location.
+        if _RE_CITY_ST.match(h2_text) and len(h2_text) < 50:
+            location_line = h2_text
+            for li in ul.find_all("li", recursive=False):
+                prop_links = []
+                for a in (li.find_all("a", href=True) or []):
+                    href = (a.get("href") or "").strip()
+                    if href and not href.startswith("#") and ("portfolio" in href or "property" in href or is_property_like(href)):
+                        prop_links.append((a, href))
+                li_text = (li.get_text() or "").strip()
+                if "Visit Website" in li_text or "website" in li_text.lower():
+                    continue
+                all_li_lines = [t.strip() for t in li_text.split("\n") if t.strip()]
+                if prop_links:
+                    for a, href in prop_links:
+                        name = (a.get_text() or "").strip()
+                        if not name or len(name) < 2:
+                            name = next((ln for ln in all_li_lines if not _RE_CITY_ST.match(ln) and not ln.lower().startswith("keys:") and not ln.lower().startswith("brand:")), all_li_lines[0] if all_li_lines else "Unnamed")
+                        url_val = urljoin(base_url, href) if not href.startswith("http") else href
+                        # Details: all li lines except the location line and the name we used
+                        details_list = [ln for ln in all_li_lines if ln != h2_text and ln != name and not (len(ln) < 50 and _RE_CITY_ST.match(ln))]
+                        blocks.append({
+                            "name": name,
+                            "location_line": location_line,
+                            "details_list": details_list,
+                            "url": url_val,
+                        })
+                elif li_text:
+                    first_line = li_text.split("\n")[0].strip() if "\n" in li_text else li_text
+                    if _RE_CITY_ST.match(first_line):
+                        continue
+                    if _RE_LARK_DETAIL_H2.match(first_line):
+                        continue
+                    details_list = [ln for ln in all_li_lines if ln != first_line and not (len(ln) < 50 and _RE_CITY_ST.match(ln))]
+                    blocks.append({
+                        "name": first_line[:100],
+                        "location_line": location_line,
+                        "details_list": details_list,
+                        "url": None,
+                    })
+            continue
+
+        # Case: h2 is the property name; ul has location line + details
+        name = h2_text
         parent = h2.parent
+        url_val = None
         if parent:
             a = parent.find("a", href=True) if parent.name == "a" else h2.find_previous("a", href=True)
             if not a and parent:
@@ -136,14 +217,6 @@ def _extract_lark_style_blocks(html: str, base_url: str) -> List[dict[str, Any]]
                 href = (a.get("href") or "").strip()
                 if href and not href.startswith("#") and ("portfolio" in href or "property" in href or is_property_like(href)):
                     url_val = urljoin(base_url, href) if not href.startswith("http") else href
-        # Next sibling <ul> (or first <ul> in next sibling container)
-        ul = h2.find_next_sibling("ul")
-        if not ul:
-            next_el = h2.find_next_sibling()
-            if next_el:
-                ul = next_el.find("ul") if next_el.name != "ul" else next_el
-        if not ul:
-            continue
         li_texts = []
         for li in ul.find_all("li", recursive=False):
             t = (li.get_text() or "").strip()
@@ -152,7 +225,6 @@ def _extract_lark_style_blocks(html: str, base_url: str) -> List[dict[str, Any]]
         if not li_texts:
             blocks.append({"name": name, "location_line": None, "details_list": [], "url": url_val})
             continue
-        # First li that looks like "City, ST" or "City, State" = location; rest = details
         location_line = None
         details_list = []
         for t in li_texts:
@@ -238,6 +310,11 @@ def _extract_properties_via_llm_from_blocks(
     state, city, and a short details string for parentheses. Processes blocks in batches
     to avoid input truncation (14k char limit) and output token limits; no cap on total properties.
     Falls back to parsing location_line in code when LLM is unavailable.
+
+    LLM iterations: blocks are batched (_LARK_BLOCKS_BATCH_SIZE); for each batch we send
+    _lark_blocks_to_text(batch) and get back a JSON array of {index, state, city, details}.
+    Details are a single line (e.g. "67 keys, 2 F&B outlets") for downstream key parsing.
+    Final dossier display uses only a summary per location (State - N properties (M keys)), not per-property subbullets.
     """
     try:
         from ..config import settings
@@ -408,13 +485,64 @@ def _extract_properties_via_llm(html: str, page_url: str) -> List[dict[str, Any]
         return []
 
 
+def _merge_link_properties_into(block_properties: List[dict[str, Any]], html: str, threshold: int = 25) -> List[dict[str, Any]]:
+    """
+    When we have few properties from Lark-style blocks (e.g. partial HTML or different page structure),
+    merge in any additional properties found via link extraction so we don't cap at ~15.
+    Preserves block-derived props; adds link-based ones whose URL is not already present.
+    """
+    if len(block_properties) > threshold or not html:
+        return block_properties
+    link_props = extract_properties_from_html(html)
+    if not link_props:
+        return block_properties
+    def _url_key(url: Optional[str]) -> str:
+        if not url:
+            return ""
+        u = (url or "").strip().rstrip("/").lower()
+        return u.split("?")[0]
+    seen = {_url_key(p.get("url")) for p in block_properties if _url_key(p.get("url"))}
+    merged = list(block_properties)
+    for p in link_props:
+        key = _url_key(p.get("url"))
+        if key and key not in seen:
+            seen.add(key)
+            merged.append({
+                "name": (p.get("name") or "").strip(),
+                "url": p.get("url"),
+                "market": p.get("market"),
+                "state": None,
+                "city": None,
+                "status": p.get("status"),
+                "details": None,
+            })
+    return merged
+
+
+def _is_detail_line_or_junk_name(name: str) -> bool:
+    """True if this looks like a metadata/detail line (Keys:, F&B:, Brand:) or nav text, not a property name."""
+    n = (name or "").strip()
+    if not n or len(n) < 2:
+        return True
+    if _RE_LARK_DETAIL_H2.match(n):
+        return True
+    if n.lower() == "privacy policy":
+        return True
+    if re.match(r"^see all .+ blog", n, re.IGNORECASE):
+        return True
+    return False
+
+
 def normalize_properties(properties: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = []
     for prop in properties:
+        name = (prop.get("name") or "").strip()
+        if _is_detail_line_or_junk_name(name):
+            continue
         normalized.append(
             {
                 "url": prop.get("url"),
-                "name": (prop.get("name") or "").strip(),
+                "name": name,
                 "market": (prop.get("market") or "").strip() or None,
                 "state": (prop.get("state") or "").strip() or None,
                 "city": (prop.get("city") or "").strip() or None,
@@ -626,6 +754,8 @@ def collect_asset_snapshot(
                 lark_blocks = _extract_lark_style_blocks(fetched.text, base_url)
                 if lark_blocks:
                     properties = _extract_properties_via_llm_from_blocks(lark_blocks, source_url)
+                    # If we got few properties, merge in any from link extraction (avoids cap when only partial h2+ul or first batch)
+                    properties = _merge_link_properties_into(properties, fetched.text)
                     return {
                         "source_url": fetched.url,
                         "raw_content": fetched.text,
