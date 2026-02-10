@@ -5,9 +5,13 @@
   {% else %}
     <h1>{{ competitor.name }} Dossier</h1>
     <div style="margin-bottom: 12px;">
+      <form method="post" action="/dossier/{{ competitor.id }}/refresh" style="display: inline-block; margin-right: 8px;">
+        <button type="submit">Refresh data</button>
+      </form>
       <form method="post" action="/dossier/{{ competitor.id }}/seed" style="display: inline-block;">
         <button type="submit">Reset baseline & refresh</button>
       </form>
+      <p class="meta" style="margin: 4px 0 0 0;">Refresh data runs all collectors (asset, talent, press) and updates events vs current baseline. Reset baseline sets comparison to now, then runs collectors.</p>
     </div>
 
     <!-- 0. AI-generated executive summary (recent changes in bullets) -->
@@ -21,10 +25,10 @@
       {% endif %}
     </div>
 
-    <!-- 3. Top news (up to 5 by date: last week first, else last 5 strong business in 90d) -->
+    <!-- 3. Top news (up to 5 by date: last week first, else last 5 strong business in 120d) -->
     <div class="card">
       <strong>Top news</strong>
-      <p class="meta">Up to 5 most relevant business stories by date published (last 7 days if any; otherwise most recent in 90 days).</p>
+      <p class="meta">Up to 5 most relevant business stories by date published (last 7 days if any; otherwise most recent in 120 days).</p>
       {% if top_news|length %}
         <ul style="margin: 0; padding-left: 20px;">
           {% for item in top_news %}
@@ -82,43 +86,43 @@
     <!-- 6. Talent snapshot -->
     <div class="card">
       <strong>Talent snapshot</strong>
-      <p class="meta">Roles by function. Business & strategy vs property operations.</p>
+      <p class="meta" style="margin-bottom: 4px;">Roles by function. Business & strategy vs property operations.</p>
       {% if talent_jobs|length %}
-        <div class="meta" style="margin-bottom: 10px;">{{ talent_jobs|length }} total role{{ 's' if talent_jobs|length != 1 else '' }}.</div>
+        <p class="staffing-total">{{ talent_jobs|length }} total role{{ 's' if talent_jobs|length != 1 else '' }}.</p>
         <div style="margin-bottom: 12px;">
           <strong class="card-section-title">Business & strategy</strong>
-          <p class="meta" style="margin: 2px 0 6px 0;">Market managers, strategy, growth, product, engineering, etc.</p>
+          <p class="staffing-body muted" style="margin: 2px 0 6px 0;">Market managers, strategy, growth, product, engineering, etc.</p>
           {% if jobs_by_function|length %}
-            <ul style="margin: 0; padding-left: 20px;">
+            <ul class="staffing-list">
               {% for row in jobs_by_function %}
               <li><strong>{{ row.function }}</strong>: {{ row.total }} role{{ 's' if row.total != 1 else '' }}{% if row.senior %} ({{ row.senior }} senior){% endif %}</li>
               {% endfor %}
             </ul>
           {% else %}
-            <div class="meta">No business/strategy roles in this snapshot.</div>
+            <p class="staffing-body muted" style="margin: 2px 0 0 0;">No business/strategy roles in this snapshot.</p>
           {% endif %}
         </div>
         <div>
           <strong class="card-section-title">Property operations</strong>
-          <p class="meta" style="margin: 2px 0 6px 0;">Front desk, housekeeping, F&B, maintenance—on-property roles.</p>
+          <p class="staffing-body muted" style="margin: 2px 0 6px 0;">Front desk, housekeeping, F&B, maintenance—on-property roles.</p>
           {% if jobs_by_function_property|length %}
-            <ul style="margin: 0; padding-left: 20px;">
+            <ul class="staffing-list">
               {% for row in jobs_by_function_property %}
               <li><strong>{{ row.function }}</strong>: {{ row.total }} role{{ 's' if row.total != 1 else '' }}{% if row.senior %} ({{ row.senior }} senior){% endif %}</li>
               {% endfor %}
             </ul>
           {% else %}
-            <div class="meta">No property operations roles in this snapshot.</div>
+            <p class="staffing-body muted" style="margin: 2px 0 0 0;">No property operations roles in this snapshot.</p>
           {% endif %}
         </div>
       {% else %}
-        <div class="meta">No talent data yet. Run the talent collector to populate.</div>
+        <p class="meta" style="margin: 0;">No talent data yet. Run the talent collector to populate.</p>
       {% endif %}
     </div>
 
-    <!-- 7. Press (past 90 days) -->
+    <!-- 7. Press (past 120 days) -->
     <div class="card">
-      <strong>Press (past 90 days)</strong>
+      <strong>Press (past 120 days)</strong>
       <p class="meta">Business-focused news only; deduped, with links, sources, and 1-line summaries.</p>
       {% if press_90d|length %}
         <ul style="margin: 0; padding-left: 20px;">
@@ -143,7 +147,7 @@
           {% endfor %}
         </ul>
       {% else %}
-        <div class="meta">No business-relevant press in the last 90 days.</div>
+        <div class="meta">No business-relevant press in the last 120 days.</div>
       {% endif %}
     </div>
 

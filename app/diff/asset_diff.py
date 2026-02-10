@@ -60,6 +60,193 @@ LOCATIONS_TREATED_AS_OTHER = frozenset({
     "Unspecified", "Other", "Career Site", "Career site", "Cdn Cgi", "Hotels", "Privacy Policy",
 })
 
+# Destination slug (from URLs like /{id}/{destination}/{slug}) -> US state full name.
+# Used to tag locations/states from Avantstay-style URLs (e.g. coachella-valley -> California).
+# Slugs are normalized to lowercase with hyphens. Include -XX suffix variants (e.g. austin-tx -> Texas).
+_DESTINATION_SLUG_TO_STATE = {
+    # California
+    "coachella-valley": "California",
+    "palm-springs": "California",
+    "newport-beach": "California",
+    "san-diego": "California",
+    "los-angeles": "California",
+    "big-bear": "California",
+    "lake-tahoe": "California",
+    "santa-barbara": "California",
+    "malibu": "California",
+    "joshua-tree": "California",
+    "south-lake-tahoe": "California",
+    "mammoth-lakes": "California",
+    "san-francisco": "California",
+    "napa": "California",
+    "sonoma": "California",
+    "carlsbad": "California",
+    "laguna-beach": "California",
+    "dana-point": "California",
+    "indio": "California",
+    "la-quinta": "California",
+    "indian-wells": "California",
+    "desert-hot-springs": "California",
+    "rancho-mirage": "California",
+    "idyllwild": "California",
+    # Colorado
+    "denver": "Colorado",
+    "breckenridge": "Colorado",
+    "vail": "Colorado",
+    "telluride": "Colorado",
+    "crested-butte": "Colorado",
+    "steamboat-springs": "Colorado",
+    "aspen": "Colorado",
+    "winter-park": "Colorado",
+    "silverthorne": "Colorado",
+    "dillon": "Colorado",
+    "frisco": "Colorado",
+    # Texas
+    "austin": "Texas",
+    "austin-tx": "Texas",
+    "galveston": "Texas",
+    "san-antonio": "Texas",
+    "houston": "Texas",
+    "dallas": "Texas",
+    "fredericksburg": "Texas",
+    "hill-country": "Texas",
+    "port-aransas": "Texas",
+    "south-padre-island": "Texas",
+    # Florida
+    "miami": "Florida",
+    "miami-beach": "Florida",
+    "destin": "Florida",
+    "panama-city-beach": "Florida",
+    "orlando": "Florida",
+    "tampa": "Florida",
+    "naples": "Florida",
+    "south-florida": "Florida",
+    "gulf-shores": "Florida",  # AL; often grouped with FL beach
+    # Hawaii
+    "maui": "Hawaii",
+    "oahu": "Hawaii",
+    "big-island": "Hawaii",
+    "kauai": "Hawaii",
+    "honolulu": "Hawaii",
+    "lahaina": "Hawaii",
+    "kihei": "Hawaii",
+    "wailea": "Hawaii",
+    "kapaa": "Hawaii",
+    # Tennessee
+    "nashville": "Tennessee",
+    "gatlinburg": "Tennessee",
+    "pigeon-forge": "Tennessee",
+    "smoky-mountains": "Tennessee",
+    "sevierville": "Tennessee",
+    # Utah
+    "park-city": "Utah",
+    "salt-lake-city": "Utah",
+    "moab": "Utah",
+    # Nevada
+    "las-vegas": "Nevada",
+    "lake-tahoe-nv": "Nevada",
+    # Arizona
+    "scottsdale": "Arizona",
+    "phoenix": "Arizona",
+    "sedona": "Arizona",
+    # New Mexico
+    "santa-fe": "New Mexico",
+    "taos": "New Mexico",
+    # Oregon
+    "bend": "Oregon",
+    "portland": "Oregon",
+    "cannon-beach": "Oregon",
+    # Washington
+    "seattle": "Washington",
+    "leavenworth": "Washington",
+    "san-juan-islands": "Washington",
+    # Idaho
+    "sun-valley": "Idaho",
+    "boise": "Idaho",
+    # Montana
+    "big-sky": "Montana",
+    "whitefish": "Montana",
+    # Wyoming
+    "jackson-hole": "Wyoming",
+    "teton-village": "Wyoming",
+    # South Carolina
+    "charleston": "South Carolina",
+    "myrtle-beach": "South Carolina",
+    "hilton-head": "South Carolina",
+    "kiawah-island": "South Carolina",
+    # North Carolina
+    "asheville": "North Carolina",
+    "outer-banks": "North Carolina",
+    "charlotte": "North Carolina",
+    # Georgia
+    "atlanta": "Georgia",
+    "savannah": "Georgia",
+    "lake-ounee": "Georgia",
+    # Louisiana
+    "new-orleans": "Louisiana",
+    # Alabama
+    "gulf-shores-al": "Alabama",
+    "orange-beach": "Alabama",
+    # New York
+    "new-york": "New York",
+    "hamptons": "New York",
+    "lake-placid": "New York",
+    # Massachusetts
+    "cape-cod": "Massachusetts",
+    "boston": "Massachusetts",
+    # Maine
+    "bar-harbor": "Maine",
+    "portland-me": "Maine",
+    # Vermont
+    "stowe": "Vermont",
+    "killington": "Vermont",
+    # New Hampshire
+    "white-mountains": "New Hampshire",
+    "north-conway": "New Hampshire",
+    # Michigan
+    "traverse-city": "Michigan",
+    "petoskey": "Michigan",
+    # Wisconsin
+    "lake-geneva": "Wisconsin",
+    "door-county": "Wisconsin",
+    # Minnesota
+    "brainerd": "Minnesota",
+    "duluth": "Minnesota",
+    # Other common
+    "branson": "Missouri",
+    "ozarks": "Missouri",
+    "arkansas": "Arkansas",
+    "hot-springs": "Arkansas",
+}
+
+
+def _parse_avantstay_style_path(path: str) -> Optional[str]:
+    """Extract destination slug from Avantstay-style path.
+    Supports /{numeric_id}/{destination_slug}/{property_slug} (3+ parts) and
+    /{numeric_id}/{destination_slug} (2 parts) so state can be resolved from sitemap URLs."""
+    parts = [p for p in path.split("/") if p]
+    if len(parts) >= 3 and parts[0].isdigit():
+        return parts[1]
+    if len(parts) == 2 and parts[0].isdigit():
+        return parts[1]
+    return None
+
+
+def resolve_destination_slug_to_state(slug: str) -> Optional[str]:
+    """
+    Resolve a destination slug (e.g. coachella-valley, palm-springs, austin-tx) to US state full name.
+    Uses static map; if slug ends with -XX (2-letter state abbrev), uses US_STATE_ABBREV.
+    """
+    if not (slug or "").strip():
+        return None
+    s = (slug or "").strip().lower()
+    # e.g. austin-tx -> Texas
+    if re.match(r"^[a-z0-9-]+-[a-z]{2}$", s):
+        state_abbrev = s[-2:]
+        if state_abbrev in US_STATE_ABBREV:
+            return US_STATE_ABBREV[state_abbrev]
+    return _DESTINATION_SLUG_TO_STATE.get(s)
+
 
 def is_location_treated_as_other(loc: str) -> bool:
     """True if this raw location is non-state and should be shown under 'Other' with subbullets."""
@@ -100,6 +287,16 @@ def infer_location_for_property(prop: dict) -> str:
         state_abbrev = match.group(2).lower()
         if state_abbrev in US_STATE_ABBREV:
             return US_STATE_ABBREV[state_abbrev]
+
+    # Avantstay-style (and similar): segment right after the numbers is the location.
+    # /{numeric_id}/{location_slug}/... or /{numeric_id}/{location_slug} -> use that slug as location.
+    dest_slug = _parse_avantstay_style_path(path)
+    if dest_slug and dest_slug.lower() not in NON_LOCATION_PATH_SEGMENTS:
+        state = resolve_destination_slug_to_state(dest_slug)
+        if state:
+            return state
+        # Not in our state map: use the slug as the location label (e.g. "newport-beach" -> "Newport Beach").
+        return dest_slug.replace("-", " ").title()
 
     # Match /locations/city/... or /city/... -> use city (title-case)
     parts = [p for p in path.split("/") if p]

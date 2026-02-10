@@ -11,8 +11,15 @@ still works and the app remains usable without an API key.
 import json
 import re
 from typing import Any, List, Optional
+from urllib.parse import urlparse
 
 from .collectors.http import fetch_url, fetch_url_js, USER_AGENT_BROWSER
+from .diff.asset_diff import (
+    NON_LOCATION_PATH_SEGMENTS,
+    _parse_avantstay_style_path,
+    resolve_destination_slug_to_state,
+    infer_location_for_property,
+)
 
 # Max characters of page text when enricher reads raw_content (fit context, control cost).
 _ENRICH_RAW_MAX_CHARS = 14_000
@@ -28,6 +35,27 @@ TALENT_FUNCTIONAL_AREAS = [
     "Property operations",
     "Other",
 ]
+
+
+def _normalize_functional_area(llm_value: str) -> str:
+    """Map LLM response to canonical functional area (case-insensitive, handles variants)."""
+    if not llm_value or not isinstance(llm_value, str):
+        return "Other"
+    v = llm_value.strip()
+    v_lower = v.lower()
+    for canonical in TALENT_FUNCTIONAL_AREAS:
+        if canonical.lower() == v_lower:
+            return canonical
+    # Common variants the model might return
+    if v_lower in ("business & strategy", "business and strategy"):
+        return "Business & Strategy"
+    if v_lower in ("property operations", "property ops"):
+        return "Property operations"
+    if v_lower in ("sales / growth", "sales", "growth"):
+        return "Sales / Growth"
+    if v_lower in ("ai / data", "ai", "data"):
+        return "AI / Data"
+    return "Other"
 
 
 def _openai_client():
@@ -80,6 +108,29 @@ def _html_to_text_for_enricher(html: str, max_chars: int = _ENRICH_RAW_MAX_CHARS
     return text
 
 
+def _assign_state_from_url(prop: dict) -> dict:
+    """
+    If property has an Avantstay-style URL (/{id}/{destination}/{slug}), resolve destination
+    to state and set state + market. Returns a copy with state/market set when resolved.
+    """
+    out = dict(prop)
+    if (out.get("state") or "").strip():
+        return out
+    url = (out.get("url") or "").strip()
+    if not url:
+        return out
+    path = urlparse(url.split("?")[0]).path or ""
+    dest_slug = _parse_avantstay_style_path(path)
+    if not dest_slug or dest_slug.lower() in NON_LOCATION_PATH_SEGMENTS:
+        return out
+    state = resolve_destination_slug_to_state(dest_slug)
+    if state:
+        out["state"] = state
+        place_name = dest_slug.replace("-", " ").title()
+        out["market"] = f"{place_name}, {state}"
+    return out
+
+
 def enrich_properties_with_llm(
     properties: List[dict],
     raw_content: Optional[str] = None,
@@ -88,15 +139,20 @@ def enrich_properties_with_llm(
     Use LLM to assign state (and optionally city) to each property. On failure or no API key, return list unchanged.
     When raw_content is provided, the LLM reads the page text and assigns state/city from page context; otherwise
     it infers from url/name/market only.
+    First assigns state from URL when possible (Avantstay-style /{id}/{destination}/{slug} -> lookup destination to state).
     """
     if not properties:
         return properties
+
+    # Assign state (and market) from URL for Avantstay-style URLs so we tag locations without LLM when possible
+    working = [_assign_state_from_url(p) for p in properties]
+
     client = _openai_client()
     if not client:
-        return properties
+        return working
 
     # Batch up to 100 to stay within context
-    batch = properties[:100]
+    batch = working[:100]
     lines = []
     for i, p in enumerate(batch):
         url = (p.get("url") or "").strip()
@@ -129,16 +185,16 @@ Use only standard US state names. For anything not clearly in a specific US stat
         )
         content = (resp.choices[0].message.content or "").strip()
         if not content:
-            return properties
+            return working
         data = _parse_json_response(content)
         if not isinstance(data, list):
-            return properties
+            return working
         by_index = {int(item["index"]): item for item in data if isinstance(item, dict) and "index" in item}
         result = []
-        for i, p in enumerate(properties):
+        for i, p in enumerate(working):
             out = dict(p)
             if i in by_index:
-                # Only fill state/city when missing (don't overwrite collector-set values with "Other")
+                # Only fill state/city when missing (don't overwrite URL-derived or collector-set values with "Other")
                 enricher_state = (by_index[i].get("state") or "Other").strip() or "Other"
                 enricher_city = (by_index[i].get("city") or "").strip() or None
                 if not (out.get("state") or "").strip():
@@ -148,18 +204,107 @@ Use only standard US state names. For anything not clearly in a specific US stat
             result.append(out)
         return result
     except Exception:
-        return properties
+        return working
+
+
+# Batch size for dossier-time state assignment (all properties run through LLM for state buckets).
+_DOSSIER_STATE_BATCH_SIZE = 80
+
+
+def assign_states_to_properties_for_dossier(
+    competitor_name: str,
+    properties: List[dict],
+) -> Optional[List[dict]]:
+    """
+    Run all properties through the LLM to assign state (and optionally city) per property,
+    using URL-derived location as a hint. Returns a new list of property dicts (copies)
+    with state/city set so dossier can bucket by state for the location bullets.
+    Returns None if no API key or empty input; caller keeps using URL-derived locations.
+    """
+    if not properties:
+        return None
+    client = _openai_client()
+    if not client:
+        return None
+
+    # US state names (full) for validation
+    from .diff.asset_diff import US_STATE_ABBREV
+    valid_states = set(US_STATE_ABBREV.values()) | {"Washington DC", "Other"}
+
+    result: List[dict] = []
+    for start in range(0, len(properties), _DOSSIER_STATE_BATCH_SIZE):
+        batch = properties[start : start + _DOSSIER_STATE_BATCH_SIZE]
+        lines = []
+        for i, p in enumerate(batch):
+            url = (p.get("url") or "").strip()[:200]
+            name = (p.get("name") or "").strip()[:150]
+            market = (p.get("market") or "").strip()[:100]
+            url_derived = infer_location_for_property(p)
+            details = (p.get("details") or "").strip()[:80]
+            lines.append(
+                f"{i}: name={name!r} url={url!r} market={market!r} url_derived_location={url_derived!r} details={details!r}"
+            )
+
+        system = """You are assigning a US state to each property for a real estate/hospitality competitor dashboard.
+Given property name, url, market, and url_derived_location (hint from URL parsing), assign the correct state for each.
+- Use full US state names only (e.g. "California", "Texas", "Florida"). No city in the state field.
+- url_derived_location may be a state name, a destination/city name (e.g. "Newport Beach", "Coachella Valley"), or "Unspecified"—use it to infer the correct state when possible.
+- For non-US, career site, privacy, or unclear, use state "Other".
+Output a JSON array with one object per line item: {"index": 0, "state": "California", "city": "optional city or omit"}.
+Return only the JSON array, no markdown."""
+
+        user = f"Competitor: {competitor_name}\n\nProperties (assign state from name, url, market, and url_derived_location):\n" + "\n".join(lines)
+
+        try:
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                max_tokens=4000,
+                temperature=0.1,
+            )
+            content = (resp.choices[0].message.content or "").strip()
+            if not content:
+                for p in batch:
+                    result.append(dict(p))
+                continue
+            data = _parse_json_response(content)
+            if not isinstance(data, list):
+                for p in batch:
+                    result.append(dict(p))
+                continue
+            by_index = {int(item["index"]): item for item in data if isinstance(item, dict) and "index" in item}
+            for i, p in enumerate(batch):
+                out = dict(p)
+                if i in by_index:
+                    state = (by_index[i].get("state") or "").strip() or "Other"
+                    if state in valid_states:
+                        out["state"] = state
+                    else:
+                        out["state"] = state if state == "Other" else "Other"
+                    city = (by_index[i].get("city") or "").strip()
+                    if city:
+                        out["city"] = city
+                result.append(out)
+        except Exception:
+            for p in batch:
+                result.append(dict(p))
+
+    return result if result else None
 
 
 def enrich_jobs_with_llm(jobs: List[dict]) -> List[dict]:
     """
     Use LLM to assign functional_area and is_senior to each job. On failure or no API key, return list unchanged.
+    LLM output is normalized (case-insensitive match to canonical areas). When LLM returns "Other", we fall back
+    to rule-based job_functional_area so keyword-based categorization (e.g. Property operations) still applies.
     """
     if not jobs:
         return jobs
     client = _openai_client()
     if not client:
         return jobs
+
+    from .rules.talent_rules import job_functional_area as rule_based_functional_area
 
     areas_str = ", ".join(TALENT_FUNCTIONAL_AREAS)
     batch = jobs[:150]
@@ -173,6 +318,12 @@ def enrich_jobs_with_llm(jobs: List[dict]) -> List[dict]:
     system = f"""You are a data enricher for job listings at real estate/hospitality companies.
 Given a list of jobs (index, title, dept, location), output a JSON array with one object per job.
 Each object must have: "index" (integer), "functional_area" (exactly one of: {areas_str}), "is_senior" (boolean).
+
+Functional area rules:
+- Use "Property operations" for on-property, guest-facing or property-level roles: front desk, housekeeping, maintenance, F&B (cook, server, bartender), concierge, guest experience, night auditor, room attendant, valet, bellman, property management, field ops, hotel/restaurant operations. When in doubt and the title suggests on-site hospitality or property-level execution, choose Property operations.
+- Use "Business & Strategy", "Sales / Growth", "Marketing", "AI / Data", "Product", "Engineering" for corporate/central roles (strategy, growth, product, engineering, data, marketing, sales, HR, finance, etc.).
+- Use "Other" only when the role clearly does not fit any of the above.
+
 Treat as senior: C-level (CEO, CFO, etc.), VP, Vice President, Head of, Director, and similar. Otherwise is_senior is false.
 Return only the JSON array, no markdown."""
 
@@ -196,8 +347,14 @@ Return only the JSON array, no markdown."""
         for i, j in enumerate(jobs):
             out = dict(j)
             if i in by_index:
-                fa = (by_index[i].get("functional_area") or "Other").strip()
-                out["functional_area"] = fa if fa in TALENT_FUNCTIONAL_AREAS else "Other"
+                fa_raw = (by_index[i].get("functional_area") or "Other").strip()
+                fa = _normalize_functional_area(fa_raw)
+                # When LLM said Other, try rule-based so keyword-matched roles (e.g. Property operations) are used
+                if fa == "Other":
+                    rule_fa = rule_based_functional_area(j)
+                    if rule_fa != "Other":
+                        fa = rule_fa
+                out["functional_area"] = fa
                 out["is_senior"] = bool(by_index[i].get("is_senior"))
             result.append(out)
         return result
@@ -344,6 +501,8 @@ def _classify_press_headlines_fallback(competitor_name: str, items: List[dict]) 
     interview_keywords = ("interview", "q&a", "q&a:", "fireside chat", "conversation with", "talks with", "speaks with")
     promo_keywords = ("why we are", "why we’re", "why we are best", "top 10", "guide to", "how to", "tips for")
 
+    # URL patterns that suggest listicle/comparison, not a story about the company.
+    url_noise = ("vs-", "versus-", "alternatives", "comparison", "vs.", "alternatives-to-")
     result: List[dict] = []
     for it in items:
         out = dict(it)
@@ -351,7 +510,9 @@ def _classify_press_headlines_fallback(competitor_name: str, items: List[dict]) 
         url = (it.get("url") or it.get("link") or "").lower()
         text = f"{title} {url}"
 
-        is_about = name_lower in text
+        is_about = name_lower in title or name_lower in url
+        if is_about and any(n in url for n in url_noise):
+            is_about = False  # e.g. "X vs Avantstay" / "alternatives to Avantstay" = not about company
         topic = "other_business"
         is_promo = any(pk in text for pk in promo_keywords)
 
@@ -553,22 +714,34 @@ def _summarize_press_article_with_llm(
         }
 
 
+def _normalize_domain(host: str) -> str:
+    """Lowercase and strip leading www. for domain comparison."""
+    if not host:
+        return ""
+    h = (host or "").lower().strip()
+    if h.startswith("www."):
+        h = h[4:]
+    return h
+
+
 def enrich_press_items_with_llm(
     competitor_name: str,
     items: List[dict],
     max_articles_to_summarize: int = 40,
+    company_domains: Optional[List[str]] = None,
 ) -> List[dict]:
     """
     End-to-end press pipeline for a single competitor.
 
     Steps:
-    - All articles are read/classified by LLM to remove nonsense and promo.
-    - PR Newswire items are automatically included (press releases; high priority).
+    - Exclude any item whose URL is on the competitor's own site (company_domains).
+    - All remaining articles are read/classified by LLM to remove nonsense and promo.
+    - PR Newswire and external sources are preferred; company blog/press links are excluded.
     - Company-sourced (press_endpoint) items are reviewed carefully—may be promo, so
       we require is_about_company and drop promo/irrelevant.
     - Heuristically deduplicate by normalized title; when the same article appears
-      from multiple sources, choose primary by priority: press_endpoint > prnewswire
-      > tier-1 outlets (Bloomberg, Reuters, etc.) > tier-2 (CNBC, etc.) > rest.
+      from multiple sources, choose primary by priority: prnewswire > tier-1 outlets
+      (Bloomberg, Reuters, etc.) > tier-2 (CNBC, etc.) > press_endpoint > rest.
     - For up to `max_articles_to_summarize` canonical articles, fetch HTML and ask
       LLM for a 1-line summary and (optionally refined) topic.
 
@@ -577,6 +750,32 @@ def enrich_press_items_with_llm(
     """
     if not items:
         return []
+
+    # Exclude links from the company's own site (blog, press page, etc.) so we focus on
+    # external coverage and press releases (e.g. PR Newswire).
+    if company_domains:
+        import urllib.parse
+        allowed_domains = {_normalize_domain(d) for d in company_domains if d}
+        filtered_items: List[dict] = []
+        for it in items:
+            url = (it.get("url") or it.get("link") or "").strip()
+            if not url:
+                filtered_items.append(it)
+                continue
+            try:
+                parsed = urllib.parse.urlparse(url)
+                host = (parsed.netloc or "").strip()
+                if not host:
+                    filtered_items.append(it)
+                    continue
+                if _normalize_domain(host) in allowed_domains:
+                    continue  # drop company-site links
+            except Exception:
+                pass
+            filtered_items.append(it)
+        items = filtered_items
+        if not items:
+            return []
 
     classified = _classify_press_headlines_with_llm(competitor_name, items)
 
@@ -687,10 +886,10 @@ def enrich_press_items_with_llm(
         clusters.setdefault(key, []).append(it)
 
     # Source priority for picking primary when the same article appears from multiple sources.
-    # Order: user company links (press_endpoint) > PR Newswire > tier-1 outlets > tier-2 > rest.
+    # Prefer external / press releases over company-site links: PR Newswire > tier-1 > tier-2 > press_endpoint.
     provider_rank = {
-        "press_endpoint": 6,
-        "prnewswire": 5,
+        "prnewswire": 6,
+        "press_endpoint": 3,
     }
     outlet_rank = {
         "prnewswire.com": 4,

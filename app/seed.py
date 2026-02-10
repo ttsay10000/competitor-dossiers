@@ -33,7 +33,7 @@ SEED_COMPETITORS = [
         ],
     },
     {
-        "name": "Lark",
+        "name": "Lark Hotels",
         "primary_domain": "larkhospitality.com",
         "sources": [
             {"channel": "talent", "url": "https://ats.wizehire.com/career-site/lark-hospitality", "confidence": "high"},
@@ -124,10 +124,30 @@ def upsert_source(
 def run_seed() -> None:
     with get_session() as session:
         for entry in SEED_COMPETITORS:
+            # If we renamed a competitor (e.g. Lark -> Lark Hotels), update existing by primary_domain.
+            primary = entry.get("primary_domain")
+            if primary:
+                existing = session.query(Competitor).filter(Competitor.primary_domain == primary).first()
+                if existing and existing.name != entry["name"]:
+                    existing.name = entry["name"]
+                    session.flush()
+                    competitor = existing
+                    for source in entry["sources"]:
+                        upsert_source(
+                            session,
+                            competitor.id,
+                            source["channel"],
+                            source["url"],
+                            source["confidence"],
+                            js_required=bool(source.get("js_required")),
+                            use_sitemap_first=bool(source.get("use_sitemap_first")),
+                            extra_options=source.get("extra_options"),
+                        )
+                    continue
             competitor = upsert_competitor(
                 session,
                 entry["name"],
-                entry.get("primary_domain"),
+                primary,
             )
             for source in entry["sources"]:
                 upsert_source(

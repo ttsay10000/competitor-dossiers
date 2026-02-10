@@ -4,11 +4,19 @@ from unittest.mock import patch
 from app.collectors.asset import (
     collect_asset_snapshot,
     extract_links_from_sitemap,
+    is_property_like,
 )
 from app.collectors.http import FetchResult
 
 
 class TestAvantstayAssetFlow(unittest.TestCase):
+    def test_is_property_like_avantstay_numeric_id_path(self) -> None:
+        """AvantStay uses /{id}/{destination}/{slug} (e.g. /429468/newport-beach/sand-castle)."""
+        self.assertTrue(is_property_like("https://avantstay.com/429468/newport-beach/sand-castle"))
+        self.assertTrue(is_property_like("https://avantstay.com/12345/austin-tx/atlas"))
+        self.assertFalse(is_property_like("https://avantstay.com/blog/"))
+        self.assertFalse(is_property_like("https://avantstay.com/429468"))  # only one segment after id
+
     def test_extract_links_from_sitemap_parses_valid_xml(self) -> None:
         """Basic sanity check: valid sitemap XML yields loc URLs."""
         xml = """<?xml version="1.0" encoding="UTF-8"?>

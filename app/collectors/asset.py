@@ -101,6 +101,8 @@ def is_property_like(url: str) -> bool:
         r"/vacation-rentals/",
         # Placemakr-style single-segment city-state paths (e.g. /saltlakecity-ut) — require trailing 2-letter state.
         r"/[a-z0-9]+-[a-z]{2}(?:\?|$|/)",
+        # AvantStay-style: /{numeric_id}/{destination}/{property-slug} (e.g. /429468/newport-beach/sand-castle)
+        r"/[0-9]+/[a-z0-9-]+/[a-z0-9-]+(?:\?|$|/)",
     ]
     return any(re.search(pattern, u, re.IGNORECASE) for pattern in patterns)
 

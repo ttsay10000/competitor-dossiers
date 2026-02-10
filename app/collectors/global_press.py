@@ -13,7 +13,7 @@ from urllib.parse import quote_plus, urljoin
 import feedparser
 from bs4 import BeautifulSoup
 
-from .http import fetch_url
+from .http import fetch_url, USER_AGENT_BROWSER
 
 
 def _parse_iso_date(value: Optional[str]) -> Optional[datetime]:
@@ -62,7 +62,7 @@ def collect_business_insider_items(
     search_url = f"https://www.businessinsider.com/s?q={query}&json=1"
 
     try:
-        fetched = fetch_url(search_url)
+        fetched = fetch_url(search_url, headers={"User-Agent": USER_AGENT_BROWSER})
     except Exception:
         return []
     if fetched.status_code != 200 or not fetched.text:
@@ -156,7 +156,7 @@ def collect_cnbc_items(
     search_url = f"https://www.cnbc.com/search/?query={query}&tab=news&sort=recent"
 
     try:
-        fetched = fetch_url(search_url)
+        fetched = fetch_url(search_url, headers={"User-Agent": USER_AGENT_BROWSER})
     except Exception:
         return []
     if fetched.status_code != 200 or not fetched.text:
@@ -235,7 +235,7 @@ def collect_yahoo_finance_items(
     url = f"https://finance.yahoo.com/quote/{ticker}/news/"
 
     try:
-        fetched = fetch_url(url)
+        fetched = fetch_url(url, headers={"User-Agent": USER_AGENT_BROWSER})
     except Exception:
         return []
     if fetched.status_code != 200 or not fetched.text:
@@ -300,15 +300,15 @@ def collect_yahoo_finance_items(
 def collect_google_news_items(
     company_name: str,
     max_items: int = 40,
-    window_days: int = 30,
+    window_days: int = 120,
 ) -> List[dict]:
     """
-    Fetch Google News articles from the past 30 days that contain the company name
-    as an exact phrase (quoted search). Date on each item is publication date only
-    (from RSS published/published_parsed; never fetch time).
+    Fetch Google News articles that contain the company name as an exact phrase
+    (quoted search). Date on each item is publication date only (from RSS
+    published/published_parsed; never fetch time).
 
-    Uses Google News RSS search: q="CompanyName" when:1m for past month.
-    Duplicates/noise are handled by the pipeline's LLM classification and dedup.
+    Uses Google News RSS: when:1m for <=31 days, when:6m for longer windows.
+    Company blog links are filtered out by the pipeline (company_domains).
     """
     company_name = (company_name or "").strip()
     if not company_name:
@@ -316,14 +316,15 @@ def collect_google_news_items(
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
     # Quoted phrase so we only get articles that contain the exact name (e.g. "Avantstay").
-    query = f'"{company_name}" when:1m'
+    when_param = "when:6m" if window_days > 31 else "when:1m"
+    query = f'"{company_name}" {when_param}'
     encoded = quote_plus(query)
     rss_url = (
         f"https://news.google.com/rss/search?q={encoded}&hl=en-US&gl=US&ceid=US:en"
     )
 
     try:
-        fetched = fetch_url(rss_url, timeout=25)
+        fetched = fetch_url(rss_url, timeout=25, headers={"User-Agent": USER_AGENT_BROWSER})
     except Exception:
         return []
     if fetched.status_code != 200 or not fetched.text:
@@ -390,18 +391,108 @@ def collect_prnewswire_items(
         f"https://www.prnewswire.com/search/all/?keyword={query}&pagesize=100"
     )
 
+    html_content: Optional[str] = None
     try:
-        fetched = fetch_url(search_url, timeout=25)
+        fetched = fetch_url(search_url, timeout=25, headers={"User-Agent": USER_AGENT_BROWSER})
+        if fetched.status_code == 200 and fetched.text:
+            html_content = fetched.text
     except Exception:
-        return []
-    if fetched.status_code != 200 or not fetched.text:
+        pass
+
+    # PR Newswire search results are JS-rendered; initial HTML often has no article links (only nav links).
+    # If we have no release-style links (path contains /news-releases/ and ends with .html or has long path), try Playwright.
+    def _count_release_links(html: str) -> int:
+        if not html:
+            return 0
+        s = BeautifulSoup(html, "html.parser")
+        n = 0
+        for a in s.find_all("a", href=True):
+            h = (a.get("href") or "").strip()
+            if "/news-releases/" not in h or "prnewswire.com" not in h:
+                continue
+            if ".html" in h or "/news-releases/" in h.split("?")[0]:
+                n += 1
+        return n
+
+    release_links = _count_release_links(html_content or "")
+    if release_links < 2:
+        try:
+            from ..config import settings
+            if getattr(settings, "playwright_enabled", False):
+                from .http import fetch_url_js
+                js_fetched = fetch_url_js(search_url)
+                if js_fetched.text and len(js_fetched.text) > 1000:
+                    html_content = js_fetched.text
+        except Exception:
+            pass
+
+    if not html_content:
         return []
 
-    soup = BeautifulSoup(fetched.text, "html.parser")
+    soup = BeautifulSoup(html_content, "html.parser")
     results: List[dict] = []
     seen_urls: set[str] = set()
+    name_lower = company_name.lower()
+    name_slug = re.sub(r"[^a-z0-9]", "", name_lower)
 
-    # Find all links to PR Newswire news releases.
+    def _title_mentions_company(title_text: str, url_for_fallback: str = "") -> bool:
+        t = (title_text or "").lower()
+        if name_lower in t:
+            return True
+        if name_slug and name_slug in re.sub(r"[^a-z0-9]", "", t):
+            return True
+        first_word = name_lower.split()[0] if name_lower.split() else ""
+        if len(first_word) >= 4 and first_word in t:
+            return True
+        if url_for_fallback and (name_lower in url_for_fallback.lower() or name_slug in re.sub(r"[^a-z0-9]", "", url_for_fallback.lower())):
+            return True
+        return False
+
+    def _slug_to_title(slug: str) -> str:
+        if not slug:
+            return "Press release"
+        return slug.replace("-", " ").strip()[:300]
+
+    # Rescue: include article if body contains partnership/collaboration phrasing re company (e.g. "The Code" hotel with Avantstay).
+    _rescue_fetches_left = 10  # cap to avoid rate limits
+
+    def _article_mentions_partnership_with_company(article_url: str, company: str) -> bool:
+        nonlocal _rescue_fetches_left
+        if _rescue_fetches_left <= 0:
+            return False
+        _rescue_fetches_left -= 1
+        try:
+            resp = fetch_url(article_url, timeout=15, headers={"User-Agent": USER_AGENT_BROWSER})
+            if resp.status_code != 200 or not resp.text:
+                return False
+            # Use raw HTML for the check: partnership/collaboration text may live in script/JSON (e.g. PR Newswire).
+            body_lower = resp.text.lower()[:15000]
+            company_lower = (company or "").strip().lower()
+            if not company_lower:
+                return False
+            partnership_phrases = (
+                "in collaboration with",
+                "in partnership with",
+                "partnership with",
+                "collaboration with",
+                "partnered with",
+                "collaborating with",
+            )
+            for phrase in partnership_phrases:
+                idx = body_lower.find(phrase)
+                if idx == -1:
+                    continue
+                snippet = body_lower[max(0, idx - 40) : idx + len(phrase) + 100]
+                if company_lower in snippet:
+                    return True
+                company_slug = re.sub(r"[^a-z0-9]", "", company_lower)
+                if company_slug and company_slug in re.sub(r"[^a-z0-9]", "", snippet):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    # 1) Find all <a> links to PR Newswire news releases.
     for a in soup.find_all("a", href=True):
         href = (a.get("href") or "").strip()
         if "/news-releases/" not in href or "prnewswire.com" not in href:
@@ -412,13 +503,11 @@ def collect_prnewswire_items(
             continue
         title = (a.get_text() or "").strip()
         if not title or len(title) < 10:
-            # Try parent or sibling for title/date.
             parent = a.parent
             if parent:
                 title = (parent.get_text() or "").strip()[:200]
             if not title or len(title) < 10:
                 continue
-        # Publication date only: parse release date from card (e.g. "Jan 21, 2026, 11:00 ET").
         date_match = re.search(
             r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s*\d{4}",
             title,
@@ -432,8 +521,10 @@ def collect_prnewswire_items(
                     continue
             except Exception:
                 pass
-            # Clean title: remove leading "Mon DD, YYYY, HH:MM ET " if present.
             title = re.sub(r"^[A-Za-z]{3}\s+\d{1,2},\s*\d{4}[^:]*:\s*", "", title).strip()
+        if not _title_mentions_company(title, href):
+            if not _article_mentions_partnership_with_company(href, company_name):
+                continue
         seen_urls.add(href)
         results.append(
             {
@@ -445,7 +536,34 @@ def collect_prnewswire_items(
             }
         )
         if len(results) >= max_items:
-            break
+            return results
+
+    # 2) Fallback: PR Newswire injects result links via JS but often embeds URLs in the HTML (e.g. in script/data).
+    #    Extract relative paths /news-releases/...html and build items so we get articles without Playwright.
+    if len(results) < 2 and html_content:
+        path_pattern = re.compile(r"/news-releases/([^\s\"'<>?]+\.html)")
+        for m in path_pattern.finditer(html_content):
+            path = "/news-releases/" + m.group(1).split("?")[0].strip()
+            href = urljoin("https://www.prnewswire.com", path)
+            if href in seen_urls:
+                continue
+            slug = m.group(1).replace(".html", "").replace("-", " ")
+            title = slug[:300] if len(slug) >= 10 else f"Press release: {company_name}"
+            if not _title_mentions_company(title, href):
+                if not _article_mentions_partnership_with_company(href, company_name):
+                    continue
+            seen_urls.add(href)
+            results.append(
+                {
+                    "title": title[:300],
+                    "url": href,
+                    "date": None,
+                    "source": "PR Newswire",
+                    "provider": "prnewswire",
+                }
+            )
+            if len(results) >= max_items:
+                break
 
     return results
 

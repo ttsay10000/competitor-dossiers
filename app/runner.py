@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from .collectors.talent import collect_talent_snapshot, build_structured_json as build_talent_structured
 from .collectors.asset import collect_asset_snapshot, build_structured_json as build_asset_structured
@@ -655,7 +656,7 @@ def run_press() -> None:
 
             # 2) Second: PR Newswire (company name search, max 100). Always run; user may also add a PRN URL as press endpoint.
             max_per_source = settings.press_max_items_per_source
-            window_days = 90
+            window_days = 120
             try:
                 prn_items = collect_prnewswire_items(
                     competitor.name,
@@ -709,14 +710,14 @@ def run_press() -> None:
                 except Exception:
                     pass
 
-            # Google News: past 30 days, quoted company name (e.g. "Avantstay"). Duplicates/noise
-            # are handled by the pipeline's LLM classification and deduplication.
+            # Google News: past 120 days (when:6m), quoted company name. Company blog links
+            # are filtered out later by company_domains so we keep external coverage.
             if getattr(settings, "press_enable_google_news", True):
                 try:
                     gn_items = collect_google_news_items(
                         competitor.name,
                         max_items=max_per_source,
-                        window_days=30,
+                        window_days=window_days,
                     )
                     raw_items.extend(gn_items)
                     if gn_items:
@@ -735,8 +736,8 @@ def run_press() -> None:
                 )
                 continue
 
-            # 3) Apply 90-day window and global cap before any LLM work.
-            cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+            # 3) Apply 120-day window and global cap before any LLM work.
+            cutoff = datetime.now(timezone.utc) - timedelta(days=120)
             filtered_items: list[dict] = []
             for item in raw_items:
                 dt = _parse_press_date(item.get("date"))
@@ -779,6 +780,26 @@ def run_press() -> None:
                 continue
 
             # 5) Build structured snapshot and LLM-enriched canonical press list.
+            # Exclude company-site links (primary_domain + press endpoint domains) so we show
+            # external coverage and PR Newswire only.
+            def _normalize_domain(host: str) -> str:
+                if not host:
+                    return ""
+                h = (host or "").lower().strip()
+                return h[4:] if h.startswith("www.") else h
+
+            company_domains: list[str] = []
+            if getattr(competitor, "primary_domain", None):
+                company_domains.append(competitor.primary_domain)
+            for ep in endpoints:
+                try:
+                    netloc = urlparse(ep.url).netloc
+                    if netloc:
+                        company_domains.append(netloc)
+                except Exception:
+                    pass
+            company_domains = list({_normalize_domain(d) for d in company_domains if d})
+
             snapshot_like = {
                 "source_url": endpoints[0].url if endpoints else None,
                 "items": filtered_items,
@@ -789,6 +810,7 @@ def run_press() -> None:
                 competitor.name,
                 structured.get("items") or [],
                 max_articles_to_summarize=settings.press_max_articles_to_summarize,
+                company_domains=company_domains,
             )
 
             latest = load_latest_snapshot(session, competitor.id, "press")

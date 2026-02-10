@@ -9,6 +9,7 @@ from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, Snapshot, Capability
 from ..diff.asset_diff import diff_properties, delta_by_city, infer_location_for_property, is_location_treated_as_other, parse_keys_from_details
 from ..executive_summary import generate_executive_summary, clean_location_display_for_dossier
+from ..llm_structured import assign_states_to_properties_for_dossier
 from ..rules.talent_rules import job_functional_area, FUNCTIONAL_AREA_DISPLAY_ORDER, PROPERTY_OPERATIONS_LABEL
 
 router = APIRouter()
@@ -177,7 +178,11 @@ def build_dossier_context(session, competitor_id: int) -> dict:
 
     raw_asset_props = (latest_asset.structured_json or {}).get("properties", []) if latest_asset else []
     asset_props = [p for p in raw_asset_props if isinstance(p, dict)]
-    # Inferred locations (state/city from URL when possible) for summary and counts
+    # Run all properties through LLM to assign state per property, then bucket by state for location bullets.
+    enriched_props = assign_states_to_properties_for_dossier(competitor.name, asset_props)
+    if enriched_props is not None:
+        asset_props = enriched_props
+    # Inferred locations (LLM-set state or URL-derived) for summary and counts
     _locations = [infer_location_for_property(p) for p in asset_props]
     markets = sorted({loc for loc in _locations if loc != "Unspecified"})
 
@@ -185,11 +190,16 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     talent_jobs = [j for j in raw_talent_jobs if isinstance(j, dict)]
 
     # Summarize jobs by functional area (LLM-set or rule-based fallback); split into business vs property operations.
+    # When stored value is missing or "Other", try rule-based so keyword-matched roles (e.g. Property operations) are used.
     jobs_by_function = []
     jobs_by_function_property = []
     by_func: dict[str, list[dict]] = {}
     for job in talent_jobs:
-        func = job.get("functional_area") or job_functional_area(job)
+        stored = job.get("functional_area")
+        if stored and stored != "Other":
+            func = stored
+        else:
+            func = job_functional_area(job)
         by_func.setdefault(func, []).append(job)
     order = {name: i for i, name in enumerate(FUNCTIONAL_AREA_DISPLAY_ORDER)}
     for func in sorted(by_func.keys(), key=lambda f: (order.get(f, 99), f)):
@@ -214,7 +224,7 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     if any(event.category == "partner" for event in events):
         takeaways.append("Partnership activity indicates distribution focus.")
     if not takeaways:
-        takeaways.append("No major strategic shifts detected in the last 90 days.")
+        takeaways.append("No major strategic shifts detected in the last 120 days.")
 
     recommendations = build_recommendations(events)
 
@@ -222,11 +232,16 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     events_this_week = [e for e in events if _utc_dt(e.detected_at) and _utc_dt(e.detected_at) >= week_cutoff]
     events_this_week_dicts = [_event_dict(e) for e in events_this_week]
 
-    # Canonical press list for last 90 days, with display-ready date strings, sorted by date published (newest first).
+    # Canonical press list for last 120 days, with display-ready date strings, sorted by date published (newest first).
+    # Exclude irrelevant and promo so we only show business-relevant news.
+    EXCLUDED_TOPICS = {"irrelevant", "promo_or_brand_marketing"}
     press_90d = []
     now = datetime.now(timezone.utc)
-    press_cutoff = now - timedelta(days=90)
+    press_cutoff = now - timedelta(days=120)
     for item in canonical_press:
+        topic = (item.get("topic") or "").strip().lower()
+        if topic in EXCLUDED_TOPICS:
+            continue
         dt = _parse_press_date(item.get("date"))
         if dt and dt < press_cutoff:
             continue
@@ -258,6 +273,12 @@ def build_dossier_context(session, competitor_id: int) -> dict:
         item for item in press_90d
         if (item.get("topic") or "").lower() in STRONG_BUSINESS_TOPICS
     ]
+    # When reporting baseline is set (e.g. after "Reset baseline"), only news on or after that date counts.
+    if reporting_baseline_date:
+        pool = [
+            item for item in pool
+            if _parse_press_date(item.get("date")) and _parse_press_date(item.get("date")).date() >= baseline_cutoff.date()
+        ]
     week_cutoff_pub = now - timedelta(days=7)
 
     def _newsworthiness_score(item: dict) -> tuple:
@@ -317,20 +338,32 @@ def build_dossier_context(session, competitor_id: int) -> dict:
     ]
     total_properties = len(asset_props)
 
-    # Comparison baseline = oldest snapshot (seed run). All deltas and "new" content
-    # are computed vs this baseline so weekly pulls only surface post-seed changes.
-    reporting_baseline_date = None
+    # Asset comparison baseline: when reporting_baseline_at is set, use the latest snapshot
+    # at or before that time so property deltas = "since reset". Otherwise oldest snapshot (seed).
     asset_baseline_date = None
     asset_added_since_baseline = 0
     asset_removed_since_baseline = 0
     asset_delta_by_city = []
     if latest_asset:
-        baseline_asset = (
-            session.query(Snapshot)
-            .filter(Snapshot.competitor_id == competitor_id, Snapshot.channel == "asset")
-            .order_by(Snapshot.captured_at.asc())
-            .first()
-        )
+        baseline_asset = None
+        if getattr(competitor, "reporting_baseline_at", None):
+            baseline_asset = (
+                session.query(Snapshot)
+                .filter(
+                    Snapshot.competitor_id == competitor_id,
+                    Snapshot.channel == "asset",
+                    Snapshot.captured_at <= competitor.reporting_baseline_at,
+                )
+                .order_by(Snapshot.captured_at.desc())
+                .first()
+            )
+        if baseline_asset is None:
+            baseline_asset = (
+                session.query(Snapshot)
+                .filter(Snapshot.competitor_id == competitor_id, Snapshot.channel == "asset")
+                .order_by(Snapshot.captured_at.asc())
+                .first()
+            )
         if baseline_asset:
             raw_baseline = (baseline_asset.structured_json or {}).get("properties", [])
             baseline_props = [p for p in raw_baseline if isinstance(p, dict)]
@@ -476,6 +509,23 @@ def dossier(request: Request, competitor_id: int):
         "dossier.html",
         {"request": request, **context},
     )
+
+
+@router.post("/dossier/{competitor_id}/refresh", status_code=303)
+def dossier_refresh(request: Request, competitor_id: int):
+    """
+    Run all collectors (asset, talent, press, etc.) for all competitors—same as the cron job.
+    Does not change the reporting baseline. Use this to pull latest data and generate events
+    compared to the existing baseline, then view the updated dossier.
+    """
+    from ..runner import run as run_all_channels
+
+    with get_session() as session:
+        competitor = session.get(Competitor, competitor_id)
+        if competitor is None:
+            return RedirectResponse(url="/", status_code=303)
+    run_all_channels()
+    return RedirectResponse(url=f"/dossier/{competitor_id}", status_code=303)
 
 
 @router.post("/dossier/{competitor_id}/seed", status_code=303)

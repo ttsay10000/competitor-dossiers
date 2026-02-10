@@ -18,14 +18,33 @@ Dashboard features:
 - **Dossier:** Per-competitor view with takeaways, recommendations, “New this week” (properties/footprint), and source links.
 
 ## Local Setup (MVP)
-1. Create a Postgres database named `competitor_signals`.
-2. Install dependencies:
-   - `pip install -r requirements.txt`
-3. Run migrations (run locally before pushing to avoid deploy failures):
-   - `./scripts/migrate.sh` or `alembic upgrade head`
-4. Start the app:
-   - `./scripts/run_local.sh` (migrates then starts at http://127.0.0.1:8000), or
-   - `uvicorn app.main:app --reload`
+
+**If you see "python: command not found" or "No module named 'psycopg'"** — use the project venv and the `run.sh` script so the correct Python and env are used:
+
+```bash
+# One-time: create venv and install deps
+cd "/Users/tylertsay/Desktop/AI project - competitor dossiers"
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+python3 -m playwright install chromium   # for talent/asset if needed
+
+# Create .env with (use your real Render Postgres URL):
+# DATABASE_URL=postgresql://USER:PASSWORD@dpg-xxx.ohio-postgres.render.com/DATABASE
+# PLAYWRIGHT_ENABLED=true
+
+# Run anything via run.sh (uses .venv + .env automatically):
+./scripts/run.sh              # run all channels
+./scripts/run.sh talent       # talent only
+./scripts/run.sh press        # press only
+./scripts/run.sh seed         # seed competitors
+./scripts/run.sh serve        # start web server
+./scripts/run.sh migrate      # run migrations
+```
+
+1. Create a Postgres database named `competitor_signals` (or use Render Postgres and put its URL in `.env`).
+2. Install dependencies (see above; use `.venv`).
+3. Run migrations: `./scripts/run.sh migrate` or `./scripts/run_local.sh`
+4. Start the app: `./scripts/run.sh serve` or `./scripts/run_local.sh` (http://127.0.0.1:8000)
 
 ## Run the site locally (one command)
 From the project root, with `DATABASE_URL` in `.env` and dependencies installed (e.g. in a venv):
@@ -35,16 +54,16 @@ From the project root, with `DATABASE_URL` in `.env` and dependencies installed 
 Then open http://127.0.0.1:8000 (landing page redirects to /competitors).
 
 ## Runner
-- Run all channels (talent, asset, press, homepage):
-  - `python -m app.cli --channel all`
-- Run a single channel:
-  - `python -m app.cli --channel talent`
-  - `python -m app.cli --channel asset`
-  - `python -m app.cli --channel press`
-  - `python -m app.cli --channel homepage`
-  - `python -m app.cli --channel public_records`
-- Weekly digest:
-  - `python -m app.cli --digest`
+Use `./scripts/run.sh` so the project venv and `.env` are used (avoids "python not found" / "No module named psycopg"):
+
+- Run all channels: `./scripts/run.sh` or `./scripts/run.sh all`
+- Single channel: `./scripts/run.sh talent`, `./scripts/run.sh asset`, `./scripts/run.sh press`, etc.
+- Seed: `./scripts/run.sh seed`
+- Serve: `./scripts/run.sh serve`
+- Migrate: `./scripts/run.sh migrate`
+
+Or with venv activated: `python -m app.cli --channel all`, `python -m app.cli --channel talent`, etc.  
+Weekly digest: `python -m app.cli --digest` (with venv active).
 
 ## Update cadence and scheduling
 - **Data updated weekly:** Run a full refresh (all channels) once per week (e.g. Sunday) so the dashboard reflects the latest signals.

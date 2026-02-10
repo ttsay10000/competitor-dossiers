@@ -177,7 +177,10 @@ def clean_location_display_for_dossier(
             return f"{loc}: {count} ({keys} keys)"
         return f"{loc}: {count}"
 
-    counts_text = "; ".join(_loc_count_keys(r) for r in properties_by_location[:25])
+    # Send enough rows so we don't truncate state diversity (was 25; 80 covers 50 states + Other + buffer).
+    max_location_rows = 80
+    raw_total = sum(r.get("count", 0) for r in properties_by_location)
+    counts_text = "; ".join(_loc_count_keys(r) for r in properties_by_location[:max_location_rows])
     deltas_text = "; ".join(f"{r['location']}: +{r['added']}/−{r['removed']}" for r in asset_delta_by_city[:25])
     if not counts_text and not deltas_text:
         return None
@@ -189,7 +192,7 @@ produce a cleaned list where:
 2. Anything that does not neatly fit in a specific US state (Unspecified, Career Site, Cdn Cgi, Hotels, Privacy Policy, unclear) goes into a single row labeled "Other". Sum the counts and keys when merging into Other.
 3. Preserve exact counts and keys; only change the location labels and grouping to state-only.
 Return JSON only, no markdown: {"properties_by_location": [{"location": "...", "count": n, "keys": k}, ...], "asset_delta_by_city": [{"location": "...", "added": a, "removed": r}, ...]}.
-Each properties_by_location entry must include "keys" (number, 0 if not provided). If there are no real states, still return the structure with "Other" and the totals."""
+Each properties_by_location entry must include "keys" (number, 0 if not provided). If there are no real states, still return the structure with "Other" and the totals. Include every state that appears in the raw list; do not drop or merge state rows into Other."""
 
     user = f"Competitor: {competitor_name}\n\nCurrent counts by location (raw):\n{counts_text or 'none'}\n\nChanges by location (raw):\n{deltas_text or 'none'}"
 
@@ -198,7 +201,7 @@ Each properties_by_location entry must include "keys" (number, 0 if not provided
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            max_tokens=800,
+            max_tokens=2000,
             temperature=0.1,
         )
         content = (resp.choices[0].message.content or "").strip()
@@ -225,6 +228,11 @@ Each properties_by_location entry must include "keys" (number, 0 if not provided
                 for r in counts
                 if isinstance(r, dict) and r.get("location") is not None
             ]
+            cleaned_total = sum(r.get("count", 0) for r in counts)
+            # If LLM collapsed everything into a single "Other" or returned far fewer properties than raw, keep raw breakdown.
+            only_other = len(counts) == 1 and (counts[0].get("location") or "").strip() == "Other"
+            if only_other or (raw_total > 0 and cleaned_total < 0.5 * raw_total):
+                return None
             return {"properties_by_location": counts, "asset_delta_by_city": deltas}
     except Exception:
         pass
