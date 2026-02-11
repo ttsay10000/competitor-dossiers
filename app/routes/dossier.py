@@ -1,21 +1,23 @@
 import re
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Optional
 
 from fastapi import APIRouter, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import or_
 
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, Snapshot, Capability
 from ..diff.asset_diff import diff_properties, delta_by_city, infer_location_for_property, is_location_treated_as_other, parse_keys_from_details
+from ..diff.talent_diff import diff_jobs
 from ..executive_summary import (
     generate_executive_summary,
     clean_location_display_for_dossier,
     aggregate_state_and_state_city_rows,
 )
-from ..llm_structured import _assign_state_from_url
+from ..llm_structured import _assign_state_from_url, _normalize_domain
 from ..rules.talent_rules import job_functional_area, FUNCTIONAL_AREA_DISPLAY_ORDER, PROPERTY_OPERATIONS_LABEL
 
 router = APIRouter()
@@ -35,9 +37,11 @@ def _exec_summary_cache_key(competitor_id: int, context: dict) -> tuple:
     base = context.get("comparison_baseline_date") or ""
     n_events = len(context.get("events_this_week") or [])
     n_news = len(context.get("top_news") or [])
-    added = context.get("asset_added_since_baseline") or 0
-    removed = context.get("asset_removed_since_baseline") or 0
-    return (competitor_id, base, n_events, n_news, added, removed)
+    asset_added = context.get("asset_added_since_baseline") or 0
+    asset_removed = context.get("asset_removed_since_baseline") or 0
+    jobs_added = context.get("jobs_added_since_baseline") or 0
+    jobs_removed = context.get("jobs_removed_since_baseline") or 0
+    return (competitor_id, base, n_events, n_news, asset_added, asset_removed, jobs_added, jobs_removed)
 
 
 def _location_clean_cache_key(name: str, props: list, deltas: list, other_bullets: Optional[str] = None) -> tuple:
@@ -161,11 +165,14 @@ def format_dossier_preview_text(context: dict) -> str:
             date_str = item.get("date") or ""
             title = item.get("title") or "Article"
             url = item.get("url") or item.get("link") or ""
+            group_title = item.get("group_title") or ""
             topic = (item.get("topic") or "").replace("_", " ")
             outlet = item.get("outlet") or ""
             raw_summary = item.get("summary") or ""
             summary = raw_summary[:120] + ("…" if len(raw_summary) > 120 else "") if raw_summary else ""
             parts = [f"  {date_str} — {title}", f"    URL: {url}"]
+            if group_title:
+                parts.append(f"    Group: {group_title}")
             if topic:
                 parts.append(f"    Topic: {topic}")
             if outlet:
@@ -257,6 +264,7 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     if competitor is None:
         return {"error": "Competitor not found."}
 
+    last_refreshed = get_last_refreshed(session)
     latest_asset = (
         session.query(Snapshot)
         .filter(Snapshot.competitor_id == competitor_id, Snapshot.channel == "asset")
@@ -417,48 +425,84 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
             return d[:10]
         return "0000-00-00"
 
+    def _is_url_on_competitor_domain(url: str) -> bool:
+        """True if URL's host matches competitor's primary_domain (exclude competitor-site articles from output)."""
+        if not url or not getattr(competitor, "primary_domain", None):
+            return False
+        try:
+            host = (urllib.parse.urlparse(url).netloc or "").strip()
+            return host and _normalize_domain(host) == _normalize_domain(competitor.primary_domain)
+        except Exception:
+            return False
+
     # Build press_groups for template: use snapshot groups if present, else one group per canonical item (backward compat).
+    # Filter out articles on competitor's own domain; sort groups by latest article date (most recent first); tag each group with that date.
     if press_groups_snapshot:
         press_groups = []
         for g in press_groups_snapshot:
             articles = []
             for art in g.get("articles") or []:
+                if _is_url_on_competitor_domain(art.get("url") or art.get("link") or ""):
+                    continue
                 a = dict(art)
                 a["display_title"] = _press_display_title(a.get("title") or "")
                 articles.append(a)
+            if not articles:
+                continue
             articles.sort(key=_press_article_date_key, reverse=True)
+            # Tag group with latest article date for ordering and display
+            group_latest_dt = None
+            for a in articles:
+                dt = _parse_press_date(a.get("date"))
+                if dt and (group_latest_dt is None or dt > group_latest_dt):
+                    group_latest_dt = dt
+            group_latest_date = group_latest_dt.strftime("%Y-%m-%d") if group_latest_dt else None
             press_groups.append({
                 "group_title": g.get("group_title") or "News",
                 "one_line_summary": g.get("one_line_summary") or "",
                 "articles": articles,
+                "group_latest_date": group_latest_date,
             })
+        # Order groups by most recent first (group_latest_date descending; no-date groups last)
+        def _group_sort_key(grp):
+            gd = grp.get("group_latest_date")
+            return (gd is None, -(datetime.strptime(gd, "%Y-%m-%d").timestamp() if gd and len(gd) >= 10 else 0))
+        press_groups.sort(key=_group_sort_key)
     else:
-        press_groups = [
-            {
+        press_groups = []
+        for item in canonical_press:
+            if (item.get("topic") or "").strip().lower() in {"irrelevant", "promo_or_brand_marketing"}:
+                continue
+            if _is_url_on_competitor_domain(item.get("url") or item.get("link") or ""):
+                continue
+            art = {
+                **dict(item),
+                "display_title": _press_display_title(item.get("title") or ""),
+                "url": item.get("url") or item.get("link"),
+                "outlet": item.get("outlet"),
+            }
+            dt = _parse_press_date(item.get("date"))
+            group_latest_date = dt.strftime("%Y-%m-%d") if dt else None
+            press_groups.append({
                 "group_title": _press_display_title(item.get("title") or ""),
                 "one_line_summary": (item.get("summary") or "").strip(),
-                "articles": [{
-                    **dict(item),
-                    "display_title": _press_display_title(item.get("title") or ""),
-                    "url": item.get("url") or item.get("link"),
-                    "outlet": item.get("outlet"),
-                }],
-            }
-            for item in canonical_press
-            if (item.get("topic") or "").strip().lower() not in {"irrelevant", "promo_or_brand_marketing"}
-        ]
+                "articles": [art],
+                "group_latest_date": group_latest_date,
+            })
+        def _group_sort_key(grp):
+            gd = grp.get("group_latest_date")
+            return (gd is None, -(datetime.strptime(gd, "%Y-%m-%d").timestamp() if gd and len(gd) >= 10 else 0))
+        press_groups.sort(key=_group_sort_key)
 
-    # Flat list for sorting and Top news: from groups (all articles) or from canonical_press (old snapshot).
-    if press_groups_snapshot:
-        flat_for_sort = []
-        for g in press_groups_snapshot:
-            for art in g.get("articles") or []:
-                flat_for_sort.append(dict(art))
-    else:
-        flat_for_sort = [
-            item for item in canonical_press
-            if (item.get("topic") or "").strip().lower() not in {"irrelevant", "promo_or_brand_marketing"}
-        ]
+    # Flat list for sorting and Top news: from built press_groups (already filtered; no competitor-domain).
+    # Attach group_title so top news can show "most relevant groupings".
+    flat_for_sort = []
+    for g in press_groups:
+        group_title = (g.get("group_title") or "").strip() or "News"
+        for art in g.get("articles") or []:
+            a = dict(art)
+            a["group_title"] = group_title
+            flat_for_sort.append(a)
     press_90d = []
     for item in flat_for_sort:
         dt = _parse_press_date(item.get("date"))
@@ -475,48 +519,43 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     for p in press_90d:
         p.pop("_sort_dt", None)
 
-    # Top news: up to 5 most newsworthy articles. Use topic when present; else treat as other_business (new group-based shape).
-    STRONG_BUSINESS_TOPICS = {
-        "fundraising", "restructuring_or_layoffs", "executive_interview",
-        "new_partnership", "new_hotel_opening", "other_business",
-    }
-    TOPIC_NEWSWORTHINESS = {
-        "fundraising": 5,
-        "new_partnership": 5,
-        "restructuring_or_layoffs": 5,
-        "executive_interview": 5,
-        "new_hotel_opening": 5,
-        "other_business": 2,
-    }
-    pool = [
-        item for item in press_90d
-        if (item.get("topic") or "").strip().lower() in STRONG_BUSINESS_TOPICS or not item.get("topic")
-    ]
-    # When reporting baseline is set (e.g. after "Reset baseline"), only news on or after that date counts.
-    if reporting_baseline_date:
-        pool = [
-            item for item in pool
-            if _parse_press_date(item.get("date")) and _parse_press_date(item.get("date")).date() >= baseline_cutoff.date()
-        ]
-    week_cutoff_pub = datetime.now(timezone.utc) - timedelta(days=7)
+    # Top news: from most recent groupings whose latest article date is within 7 days since last refresh.
+    # Each bullet = group topic (or news article) with latest date attached; link to latest article in group.
+    ref_dt = _utc_dt(last_refreshed) if last_refreshed else datetime.now(timezone.utc)
+    week_cutoff_date = (ref_dt - timedelta(days=7)).date()
 
-    def _newsworthiness_score(item: dict) -> tuple:
-        topic = (item.get("topic") or "").strip().lower()
-        topic_score = TOPIC_NEWSWORTHINESS.get(topic, 2)  # default 2 (other_business) when no topic (group-based shape)
-        dt = _parse_press_date(item.get("date"))
-        recency_score = 5 if (dt and dt >= week_cutoff_pub) else 0  # last 7 days boost
-        score = topic_score + recency_score  # no source prioritization; all sources equal
-        # Use timestamp for sort to avoid mixing naive/aware datetimes (TypeError on some pages)
-        ts = dt.timestamp() if dt else 0.0
-        return (score, ts)
+    def _group_date_parsed(g: dict):
+        gd = (g.get("group_latest_date") or "").strip()
+        if not gd or len(gd) < 10:
+            return None
+        try:
+            return datetime.strptime(gd[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return None
 
-    pool_scored = []
-    for item in pool:
-        score, ts = _newsworthiness_score(item)
-        pool_scored.append((score, ts, item))
-    # Highest newsworthiness first; within same score, newest date first
-    pool_scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    top_news = [item for _, _, item in pool_scored[:5]]
+    recent_groups = []
+    for g in press_groups:
+        gdate = _group_date_parsed(g)
+        if gdate is not None and gdate >= week_cutoff_date:
+            recent_groups.append(g)
+    # Already sorted by group_latest_date desc; take up to 5
+    recent_groups = recent_groups[:5]
+
+    top_news = []
+    for g in recent_groups:
+        articles = g.get("articles") or []
+        latest_art = articles[0] if articles else {}
+        url = latest_art.get("url") or latest_art.get("link") or ""
+        title = (latest_art.get("title") or latest_art.get("display_title") or "").strip() or (g.get("group_title") or "Article")
+        group_title = (g.get("group_title") or "").strip() or "News"
+        top_news.append({
+            "group_title": group_title,
+            "title": title,
+            "url": url,
+            "date": g.get("group_latest_date"),
+            "outlet": latest_art.get("outlet"),
+            "summary": g.get("one_line_summary"),
+        })
 
     # Properties by location (state/city) for high-level week-over-week tracking.
     # Aggregate count and total keys per location (keys parsed from property details).
@@ -588,6 +627,36 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
             asset_baseline_date = baseline_asset.captured_at.strftime("%Y-%m-%d")
             asset_delta_by_city = delta_by_city(diff["added"], diff["removed"])
 
+    # Talent comparison vs baseline: roles added and removed since baseline.
+    jobs_added_since_baseline = 0
+    jobs_removed_since_baseline = 0
+    if latest_talent and talent_jobs:
+        baseline_talent = None
+        if getattr(competitor, "reporting_baseline_at", None):
+            baseline_talent = (
+                session.query(Snapshot)
+                .filter(
+                    Snapshot.competitor_id == competitor_id,
+                    Snapshot.channel == "talent",
+                    Snapshot.captured_at <= competitor.reporting_baseline_at,
+                )
+                .order_by(Snapshot.captured_at.desc())
+                .first()
+            )
+        if baseline_talent is None:
+            baseline_talent = (
+                session.query(Snapshot)
+                .filter(Snapshot.competitor_id == competitor_id, Snapshot.channel == "talent")
+                .order_by(Snapshot.captured_at.asc())
+                .first()
+            )
+        if baseline_talent and baseline_talent.id != latest_talent.id:
+            raw_baseline_jobs = (baseline_talent.structured_json or {}).get("jobs", [])
+            baseline_jobs = [j for j in raw_baseline_jobs if isinstance(j, dict)]
+            talent_diff = diff_jobs(baseline_jobs, talent_jobs)
+            jobs_added_since_baseline = len(talent_diff["added"])
+            jobs_removed_since_baseline = len(talent_diff["removed"])
+
     # Expand "Other" (non-state) into subbullets for display and for LLM (URL path hints: temecula, central-oregon, etc.).
     other_properties_display = []
     other_props = [p for p in asset_props if is_location_treated_as_other(infer_location_for_property(p))]
@@ -643,6 +712,9 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         for r in properties_by_location
     ]
 
+    first_talent_endpoint = next((e for e in competitor.source_endpoints if e.channel == "talent"), None)
+    talent_job_board_url = first_talent_endpoint.url if first_talent_endpoint else None
+
     context = {
         "competitor": {"id": competitor.id, "name": competitor.name},
         "markets": markets,
@@ -651,6 +723,7 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         "talent_jobs": talent_jobs,
         "jobs_by_function": jobs_by_function,
         "jobs_by_function_property": jobs_by_function_property,
+        "talent_job_board_url": talent_job_board_url,
         "press_items": press_items,
         "press_90d": press_90d,
         "press_groups": press_groups,
@@ -666,6 +739,8 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         "asset_added_since_baseline": asset_added_since_baseline,
         "asset_removed_since_baseline": asset_removed_since_baseline,
         "asset_delta_by_city": asset_delta_by_city,
+        "jobs_added_since_baseline": jobs_added_since_baseline,
+        "jobs_removed_since_baseline": jobs_removed_since_baseline,
         "other_properties_display": other_properties_display,
         "comparison_baseline_date": reporting_baseline_date,
     }
@@ -734,6 +809,31 @@ def summary(request: Request, competitor_id: int, days: int = 7):
     )
 
 
+@router.get("/dossier/{competitor_id}/json")
+def dossier_json(competitor_id: int):
+    """Full dossier as JSON (final output). Includes press_groups (group_title, one_line_summary, articles)."""
+    with get_session() as session:
+        context = build_dossier_context(session, competitor_id, skip_property_llm=True)
+    if "error" in context:
+        return JSONResponse(status_code=404, content={"error": context["error"]})
+    # Build JSON-safe payload; include press groupings so final output has group_title, one_line_summary, articles.
+    payload = {
+        "competitor": context.get("competitor"),
+        "events": context.get("events") or [],
+        "press_groups": context.get("press_groups") or [],
+        "press_90d": context.get("press_90d") or [],
+        "top_news": context.get("top_news") or [],
+        "talent_jobs": context.get("talent_jobs") or [],
+        "jobs_by_function": context.get("jobs_by_function") or [],
+        "properties_by_location": context.get("properties_by_location") or [],
+        "total_properties": context.get("total_properties", 0),
+        "asset_added_since_baseline": context.get("asset_added_since_baseline", 0),
+        "asset_removed_since_baseline": context.get("asset_removed_since_baseline", 0),
+        "comparison_baseline_date": context.get("comparison_baseline_date"),
+    }
+    return payload
+
+
 @router.get("/dossier/{competitor_id}/properties-by-location")
 def dossier_properties_by_location(competitor_id: int):
     """Lazy-loaded AI-refined properties by location (JSON). Used when initial page load skipped LLM for speed."""
@@ -783,6 +883,23 @@ def set_baseline_all_and_refresh(request: Request):
     advance_baseline_after_full_refresh()
     run_all_channels()
     return RedirectResponse(url="/competitors?refreshed=1", status_code=303)
+
+
+@router.post("/dossier/force-refresh-and-reset-baseline", status_code=303)
+def force_refresh_and_reset_baseline(request: Request):
+    """
+    Clear latest snapshots for all channels so the run re-enriches everything (no skipping).
+    Use after changing press groupings or LLM logic—otherwise runs skip when URL set is unchanged.
+    Then runs all collectors and advances baseline.
+    """
+    from ..runner import run as run_all_channels, advance_baseline_after_full_refresh, clear_latest_snapshots
+    from ..db import get_session
+
+    with get_session() as session:
+        deleted = clear_latest_snapshots(session, channel=None)
+    advance_baseline_after_full_refresh()
+    run_all_channels()
+    return RedirectResponse(url="/competitors?refreshed=1&forced=1", status_code=303)
 
 
 @router.get("/dossier/{competitor_id}")

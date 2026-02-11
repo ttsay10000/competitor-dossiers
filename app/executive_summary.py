@@ -70,8 +70,8 @@ def _extract_properties_by_location_array(text: str) -> Optional[List[Dict[str, 
 # Hard caps so exec summary stays one fast LLM call; can relax after baseline redo.
 MAX_LOCATION_ROWS_FOR_SUMMARY = 25
 MAX_EVENTS_FOR_SUMMARY = 8
-MAX_NEWS_FOR_SUMMARY = 5
-MAX_DELTA_BY_CITY_ROWS = 10
+MAX_NEWS_FOR_SUMMARY = 15  # Include more press to surface new markets, expansion coverage
+MAX_DELTA_BY_CITY_ROWS = 15
 
 # US state full names for state-level aggregation (no LLM).
 _US_STATES = frozenset({
@@ -169,70 +169,52 @@ def _build_context_text(context: Dict[str, Any]) -> str:
     if comparison_baseline:
         parts.append(
             f"Comparison baseline date: {comparison_baseline}. "
-            "The data below is already restricted to post-baseline: 'Events this week' and 'Top news headlines' "
-            "are only items detected or added AFTER this date; 'Properties vs baseline' and location add/removal "
-            "counts are deltas versus the baseline. Your summary must ONLY synthesize these post-baseline "
-            "items. Do not report current snapshot totals (e.g. total roles, total properties) as new "
-            "information—only mention counts when describing a change since baseline (e.g. 'X added in Y')."
+            "All data below is post-baseline: property/role deltas and news are changes or additions since baseline."
         )
 
-    # Talent: job counts by function (business + property ops)
-    jobs_by_function = context.get("jobs_by_function") or []
-    jobs_property = context.get("jobs_by_function_property") or []
-    total_jobs = sum(r.get("total", 0) for r in jobs_by_function) + sum(r.get("total", 0) for r in jobs_property)
-    if total_jobs > 0:
-        talent_lines = [f"Total open roles: {total_jobs}"]
-        for r in jobs_by_function:
-            talent_lines.append(f"  {r.get('function', '')}: {r.get('total', 0)} (senior: {r.get('senior', 0)})")
-        for r in jobs_property:
-            talent_lines.append(f"  {r.get('function', '')}: {r.get('total', 0)} (senior: {r.get('senior', 0)})")
-        parts.append("Talent (current snapshot):\n" + "\n".join(talent_lines))
+    # 1. New properties: count + areas (from delta_by_city where added > 0)
+    added = context.get("asset_added_since_baseline") or 0
+    removed = context.get("asset_removed_since_baseline") or 0
+    delta_by_city = context.get("asset_delta_by_city") or []
+    added_areas = [f"{r['location']}: {r['added']}" for r in delta_by_city if r.get("added", 0) > 0]
+    removed_areas = [f"{r['location']}: {r['removed']}" for r in delta_by_city if r.get("removed", 0) > 0]
+    if added > 0:
+        n_areas = len(added_areas) or 1
+        parts.append(f"New properties: {added} properties in {n_areas} areas — " + "; ".join(added_areas[:MAX_DELTA_BY_CITY_ROWS]))
     else:
-        parts.append("Talent: no job data in current snapshot.")
+        parts.append("New properties: 0.")
+    if removed > 0:
+        n_areas = len(removed_areas) or 1
+        parts.append(f"Removed properties: {removed} properties in {n_areas} areas — " + "; ".join(removed_areas[:MAX_DELTA_BY_CITY_ROWS]))
+    else:
+        parts.append("Removed properties: 0.")
 
-    # Events this week (titles only) — capped for exec summary speed
+    # 2. New roles posted / roles removed
+    jobs_added = context.get("jobs_added_since_baseline") or 0
+    jobs_removed = context.get("jobs_removed_since_baseline") or 0
+    parts.append(f"New roles posted: {jobs_added}.")
+    parts.append(f"Roles removed: {jobs_removed}.")
+
+    # 3. Recent news: feed top_news + press_90d so LLM sees full picture (new markets, expansion coverage)
+    top_news = context.get("top_news") or []
+    press_90d = context.get("press_90d") or []
+    news_pool = top_news if top_news else press_90d[:MAX_NEWS_FOR_SUMMARY]
+    if news_pool:
+        lines = []
+        for n in news_pool[:MAX_NEWS_FOR_SUMMARY]:
+            title = (n.get("title") or n.get("display_title") or "Untitled")[:100]
+            date_str = n.get("date")
+            group = n.get("group_title")
+            lines.append(f"({date_str}) {title}" + (f" [{group}]" if group else ""))
+        parts.append("Recent news (derive bullets from these): " + " | ".join(lines))
+    else:
+        parts.append("Recent news: none.")
+
+    # Events this week (additional signal)
     events_week = context.get("events_this_week") or []
     if events_week:
         event_titles = [e.get("title", "") for e in events_week[:MAX_EVENTS_FOR_SUMMARY] if e.get("title")]
         parts.append("Events detected this week: " + "; ".join(event_titles))
-    else:
-        parts.append("Events this week: none.")
-
-    # Assets: baseline delta and by location — state-level topline only, hard caps
-    added = context.get("asset_added_since_baseline") or 0
-    removed = context.get("asset_removed_since_baseline") or 0
-    baseline_date = context.get("asset_baseline_date")
-    delta_by_city = context.get("asset_delta_by_city") or []
-    props_by_loc = context.get("properties_by_location") or []
-
-    if baseline_date:
-        parts.append(
-            f"Properties vs baseline ({baseline_date}): {added} added, {removed} removed."
-        )
-    if delta_by_city:
-        loc_changes = [f"{r['location']}: +{r['added']}/−{r['removed']}" for r in delta_by_city[:MAX_DELTA_BY_CITY_ROWS]]
-        parts.append("By location (adds/removals): " + "; ".join(loc_changes))
-    if props_by_loc:
-        # State-level aggregation so LLM gets topline (location = state, counts) in one call
-        state_rows = _aggregate_properties_by_state(props_by_loc)
-        loc_lines = []
-        for r in state_rows[:MAX_LOCATION_ROWS_FOR_SUMMARY]:
-            loc, count, keys = r.get("location", ""), r.get("count", 0), r.get("keys", 0)
-            if keys and keys > 0:
-                loc_lines.append(f"{loc}: {count} properties ({keys} keys)")
-            else:
-                loc_lines.append(f"{loc}: {count} properties")
-        parts.append("Current properties by location (state-level topline; use this format in output): " + "; ".join(loc_lines))
-
-    # Top news headlines — capped
-    top_news = context.get("top_news") or []
-    if top_news:
-        lines = []
-        for n in top_news[:MAX_NEWS_FOR_SUMMARY]:
-            title = (n.get("title") or "Untitled")[:80]
-            date_str = n.get("date")
-            lines.append(f"({date_str}) {title}" if date_str else title)
-        parts.append("Top news headlines: " + " | ".join(lines))
 
     return "\n\n".join(parts)
 
@@ -250,17 +232,22 @@ def generate_executive_summary(context: Dict[str, Any]) -> Optional[str]:
     context_text = _build_context_text(context)
     competitor_name = context.get("competitor", {}).get("name", "Competitor")
 
-    system = """You are an executive briefing analyst. You must ONLY output bullets that compare against the baseline (seed run)—i.e. changes or new items since that date. Do not summarize all data you see; only synthesize post-baseline signals.
+    system = """You are an executive briefing analyst. Output a structured summary with these exact section bullets, then a landing paragraph.
+
+OUTPUT FORMAT (follow this structure exactly):
+
+1. New properties: XX properties in YY areas — list the areas (e.g. California; Texas; Florida). If 0, say "0 properties."
+2. Removed properties: XX properties in YY areas — list the areas. If 0, say "0 properties."
+3. New roles posted: XXXX (the number given).
+4. Roles removed: YYYY (the number given).
+5. Recent news articles: derive 1–3 bullet points from the "Recent news" items provided. Focus on expansion, new markets, partnerships, funding, strategy. If no news, say "No notable press since baseline."
+
+Then add a blank line and a landing summary paragraph (1–3 sentences): what this all means and any new strategic shifts that may be happening. Tone: calm and executive.
 
 Rules:
-- The data you receive is already filtered: "Events this week" and "Top news headlines" are only items detected or added AFTER the comparison baseline. "Properties vs baseline" and location add/removal counts are deltas versus baseline. Use only these when writing bullets.
-- Do NOT output bullets that merely describe current state (e.g. "Company has 50 open roles" or "They operate in 10 states") unless you are describing a *change* since baseline (e.g. "5 new Engineering roles since baseline" or "Entered Texas since baseline") supported by the events or deltas provided.
-- If there are no post-baseline events and no post-baseline news and no meaningful asset deltas, output a single bullet such as "No material change since baseline."
-- Output only a short bullet list (3–6 bullets, or 1 if no change). Each bullet = one clear takeaway about a change or new development since baseline.
-
-Prioritize: talent changes (from events), asset/market adds or removals (from deltas), partnerships/funding/strategy (from events or news), and new press (from Top news). Use location counts only to explain a change (e.g. "Texas – 3 properties (80 keys) added since baseline"), not as standalone facts.
-
-Format: each line starting with "- ". No sub-bullets, no intro sentence, no subheadings. Tone: calm and executive."""
+- Use the exact numbers and areas from the data provided. Do not invent counts.
+- For news bullets, pull from the article titles/summaries; prioritize new market entry, expansion, partnerships, fundraising.
+- Format: each bullet starting with "- ". No sub-bullets. The landing paragraph has no bullet prefix."""
 
     user = f"Competitor: {competitor_name}\n\nData:\n{context_text}"
 
@@ -271,7 +258,7 @@ Format: each line starting with "- ". No sub-bullets, no intro sentence, no subh
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            max_tokens=400,
+            max_tokens=600,
             temperature=0.3,
         )
         choice = resp.choices[0] if resp.choices else None

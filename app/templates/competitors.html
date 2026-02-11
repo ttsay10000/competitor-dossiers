@@ -11,6 +11,9 @@
       <form method="post" action="/dossier/set-baseline-all-and-refresh" class="refresh-form" style="display: inline-block;">
         <button type="submit">Set baseline for all &amp; refresh</button>
       </form>
+      <form method="post" action="/dossier/force-refresh-and-reset-baseline" class="refresh-form" style="display: inline-block;">
+        <button type="submit">Force refresh &amp; reset baseline</button>
+      </form>
       <span id="refresh-status" class="meta" style="margin-left: 4px; font-weight: 500;"></span>
       <a href="/competitors/new"><button>Add competitor</button></a>
     </div>
@@ -36,7 +39,7 @@
       }
     })();
   </script>
-  <p class="meta" style="margin: -8px 0 12px 0;">Set baseline for all &amp; refresh: sets each competitor’s comparison date to now, then runs collectors. Use once so executive summaries only summarize changes after this point (lighter LLM load).</p>
+  <p class="meta" style="margin: -8px 0 12px 0;">Set baseline for all &amp; refresh: sets each competitor’s comparison date to now, then runs collectors. <strong>Force refresh &amp; reset baseline</strong>: clears snapshots so re-enrichment runs (use after changing press groupings or LLM logic—otherwise runs skip when URLs are unchanged).</p>
 
   <div class="card">
     <h3>Existing</h3>

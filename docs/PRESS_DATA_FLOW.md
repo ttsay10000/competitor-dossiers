@@ -37,7 +37,7 @@ This doc traces **where grouped press data goes** after the LLM groups it, and *
 **Where:** `app/llm_structured.py` — `enrich_press_items_with_llm()`.
 
 **What happens (inside that function):**
-- Drops items whose URL is on the competitor’s own domain (except `press_endpoint`).
+- Drops all items whose URL is on the competitor’s own domain (including press_endpoint).
 - Calls `_classify_press_headlines_with_llm(competitor_name, items)` → each item gets `topic` (e.g. `irrelevant`, `promo_or_brand_marketing`, `new_hotel_opening`, `other_business`).
 - Applies business filter: for Google News (and similar), drops `irrelevant` and `promo_or_brand_marketing`; PR Newswire is always kept.
 - Result is a **filtered list** of items that will be grouped.
@@ -125,6 +125,13 @@ This doc traces **where grouped press data goes** after the LLM groups it, and *
 
 ---
 
+## Final output JSON (groupings included)
+
+- **Persisted snapshot** (Step 6): `structured_json` stored in the Snapshot table includes `press_groups`. Each group has `group_title`, `one_line_summary`, and `articles` (each article: `title`, `url`, `date`, `outlet`). Do not remove or rename `press_groups` when changing the runner.
+- **Dossier JSON API**: `GET /dossier/{competitor_id}/json` returns the full dossier as JSON, including **`press_groups`** with the same structure (group_title, one_line_summary, articles). Use this when you need final output JSON with groupings.
+
+---
+
 ## Quick reference: “Final output is wrong” → where to look
 
 | If the problem is… | Look here |
@@ -132,8 +139,9 @@ This doc traces **where grouped press data goes** after the LLM groups it, and *
 | Wrong articles included (irrelevant/promo) | Step 3: `app/llm_structured.py` — classification + filter |
 | Groups are wrong (e.g. one big group, bad headlines) | Step 4: `app/llm_structured.py` — `_group_press_into_clusters_llm` (prompt + parsing) |
 | Groups not saved / old data shown | Step 6: runner `persist_snapshot`; Step 7: dossier loads latest snapshot |
+| Groupings missing from final output JSON | Snapshot has `press_groups`; API: `GET /dossier/{id}/json` includes `press_groups` |
 | Wrong title/date/outlet/link on the page | Step 8: `app/routes/dossier.py` — `press_groups` build + `_press_display_title`; Step 9: `app/templates/dossier.html` |
-| Order of groups or articles | Step 8 (order of groups from snapshot); template can re-sort if needed |
+| Order of groups or articles | Step 8: groups sorted by latest article date in group (most recent first); each group tagged with `group_latest_date`; template shows that date. Competitor-domain articles filtered out at display. |
 
 ---
 

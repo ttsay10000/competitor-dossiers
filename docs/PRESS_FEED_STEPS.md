@@ -24,7 +24,7 @@ Input: `items` = filtered_items (90d + cap). Output: **press_groups** — list o
 
 | Step | What | Where |
 |------|------|--------|
-| **2.0a** | **Company-domain filter** — Drop items whose URL is on the competitor’s own domain (so we don’t surface “Google News → company’s own link”). Exception: keep `press_endpoint` items. | `enrich_press_items_with_llm` (start) |
+| **2.0a** | **Company-domain filter** — Drop items whose URL is on the competitor’s own domain (so we don’t surface “Google News → company’s own link”). Drop ALL items on competitor domain (including `press_endpoint`); only third-party coverage kept. | `enrich_press_items_with_llm` (start) |
 | **2.1** | **Classify (headlines + body)** — LLM gets title, outlet, URL and (when fetched) body text (paragraphs only, up to ~2k chars). Assigns `is_about_company`, `topic` (e.g. new_partnership, fundraising, irrelevant), `is_promo`. Body used when available so classification is content-based. | `_classify_press_headlines_with_llm` (fetches body for up to 200 items, capped) |
 | **2.2** | **Heuristics** — Mark as promo: URLs that look like own marketing (e.g. /blog, /guides, /owners) or guide-style titles (e.g. “how to”, “best ”, “itinerary”). | `enrich_press_items_with_llm` (after classify) |
 | **2.3** | **Business-relevance filter** — PR Newswire: always keep. Google News: drop only if `topic == irrelevant`. press_endpoint / other: require `is_about_company`, drop `irrelevant` and promo. | `enrich_press_items_with_llm` |
@@ -49,7 +49,7 @@ Input: `items` = filtered_items (90d + cap). Output: **press_groups** — list o
 |------|------|--------|
 | **4.1** | **Load press_groups** — Read latest press snapshot’s `press_groups`; if missing (old snapshot), derive from `canonical_items` (one group per item). | `build_dossier_context` in `dossier.py` |
 | **4.2** | **Flat list** — Flatten groups to build `press_90d` (sorted by date, newest first) for Top news. | `dossier.py` |
-| **4.3** | **Top news** — From flattened list, score by topic newsworthiness (when present) + recency (last 7 days boost). Take up to 5; optional filter by reporting baseline date. | `dossier.py` → `top_news` |
+| **4.3** | **Top news** — From flattened list (with group_title attached per article when from press_groups). Score by topic newsworthiness + recency (last 7 days boost) + PR Newswire boost. Take up to 5; optional filter by reporting baseline date. Prioritizes articles from the last 7 days and recent PR Newswire press releases. | `dossier.py` → `top_news` |
 | **4.4** | **Template** — “Top news” shows up to 5 links; full “Press” section renders `press_groups`: each group shows group_title, one_line_summary, then articles with "see full article" per link. | `dossier.html` |
 
 ---

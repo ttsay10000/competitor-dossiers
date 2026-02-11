@@ -655,7 +655,11 @@ def _headline_looks_like_wrong_entity(competitor_name: str, title: str, outlet: 
         return False
     t = title.lower().strip()
     o = (outlet or "").lower().strip()
+    combined = f"{t} {o}"
     name_lower = (competitor_name or "").lower()
+    # Wrong company with same ticker/name: Landmark Bancorp (NASDAQ:LARK) is a bank, not Lark Hotels
+    if "lark" in name_lower and ("landmark bancorp" in combined or "nasdaq:lark" in combined):
+        return True
     # Music/artistry: violin, concerto, symphony, Tessa Lark → person/performance, not hotel
     music_artistry = ("violin", "violinist", "concerto", "symphony", "tessa lark", "bluegrass", "mendelssohn")
     if any(m in t for m in music_artistry) and ("lark" in name_lower and ("lark" in t or any(b in t for b in name_lower.split()))):
@@ -670,6 +674,9 @@ def _headline_looks_like_wrong_entity(competitor_name: str, title: str, outlet: 
             return True
     # Theater/venue: Lark Theater, Lark Theatre (arts venue)
     if ("lark theater" in t or "lark theatre" in t) and "lark" in name_lower:
+        return True
+    # Place: Lark Street (Albany, NY corridor) — community events, street festivals, not Lark Hotels
+    if "lark" in name_lower and "lark street" in combined:
         return True
     return False
 
@@ -1062,9 +1069,12 @@ def _group_press_into_clusters_llm(competitor_name: str, items: List[dict]) -> L
     system = (
         "You are given the full list of filtered press articles. Read every article TITLE and group them by the same story or event.\n\n"
         "Input: N items (index 0 to N-1). Each line is INDEX | DATE | OUTLET | TITLE. Use only what you see in the TITLEs to decide grouping—same partnership, same hire, same opening = one group.\n\n"
-        "Your job: put articles that cover the SAME story into one group. Each group gets a short headline (group_title) and optional one-line summary. Examples of group_title style:\n"
-        "- Partnership/launch: \"Placemakr and Hilton launch partnership\" or \"Hilton and Placemakr launch Apartment Collection\"\n"
-        "- Executive hire: \"Placemakr hires new EVP [person name]\" when titles mention a specific hire\n"
+        "Your job: put articles that cover the SAME story into one group. Each group gets a short headline (group_title) and optional one-line summary. "
+        "The TARGET COMPANY name is provided below—use it in group_title when relevant (e.g. \"Placemakr and Hilton launch partnership\", \"AvantStay expands in Austin\", \"Lark Hotels partnership with Mews\"). "
+        "Examples of group_title style for any hospitality company:\n"
+        "- Partnership/launch: \"[Company] and [Partner] launch partnership\" or \"[Company] expands in [market]\"\n"
+        "- Executive hire: \"[Company] hires new EVP [name]\" or \"[Company] appoints [role]\" when titles mention a specific hire\n"
+        "- Openings/expansion: \"[Company] opens property in [city]\" or \"New [Company] locations\"\n"
         "- Other: one clear headline that describes the story (e.g. \"New property opening in Phoenix\").\n\n"
         "Return a JSON object with one key: \"groups\". Value is an array of objects, each with:\n"
         "  \"group_title\": short headline for this story (see examples above),\n"
@@ -1075,7 +1085,7 @@ def _group_press_into_clusters_llm(competitor_name: str, items: List[dict]) -> L
         "Return only valid JSON, no markdown or extra text."
     )
     user = (
-        f"Target company: {competitor_name}.\n\n"
+        f"Target company: {competitor_name} (use this name in group_title when it fits the story).\n\n"
         "Below are ALL filtered articles (each line: INDEX | DATE | OUTLET | TITLE). Read every title and group by same story. Assign every index to exactly one group. Return JSON with \"groups\" array.\n\n"
         + "\n".join(lines)
         + '\n\nReturn only valid JSON: {"groups": [{"group_title": "...", "one_line_summary": "...", "article_indices": [0,1]}, ...]}'
@@ -1133,17 +1143,20 @@ def _group_press_into_clusters_llm(competitor_name: str, items: List[dict]) -> L
             return None
 
     try:
-        print(f"[press] Group LLM: calling API for {len(items)} items", file=sys.stderr)
+        n_items = len(items)
+        print(f"[press] Group LLM: calling API for {n_items} items", file=sys.stderr)
         sys.stderr.flush()
+        # Scale tokens with item count so large lists don't truncate (Placemakr/AvantStay)
+        max_tokens_group = min(8192, 400 + 200 * n_items)
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            max_tokens=4000,
+            max_tokens=max_tokens_group,
             temperature=0.1,
         )
         content = (resp.choices[0].message.content or "").strip()
         if not content:
-            print(f"[press] Group LLM: empty response, using single group for {len(items)} items", file=sys.stderr)
+            print(f"[press] Group LLM: empty response, using single group for {n_items} items", file=sys.stderr)
             sys.stderr.flush()
             return _fallback_single_group(items)
         parsed = _parse_group_response(content, len(items))
@@ -1312,13 +1325,9 @@ def get_press_classification_for_inspection(
         return []
     if company_domains:
         import urllib.parse
-        allowed_domains = {_normalize_domain(d) for d in company_domains if d}
+        company_domains_norm = {_normalize_domain(d) for d in company_domains if d}
         filtered_items: List[dict] = []
         for it in items:
-            provider = (it.get("provider") or "").strip().lower()
-            if provider == "press_endpoint":
-                filtered_items.append(it)
-                continue
             url = (it.get("url") or it.get("link") or "").strip()
             if not url:
                 filtered_items.append(it)
@@ -1326,9 +1335,9 @@ def get_press_classification_for_inspection(
             try:
                 parsed = urllib.parse.urlparse(url)
                 host = (parsed.netloc or "").strip()
-                if not host or _normalize_domain(host) not in allowed_domains:
+                if not host or _normalize_domain(host) not in company_domains_norm:
                     filtered_items.append(it)
-                # else drop: on company domain
+                # else drop: on company domain (including press_endpoint)
             except Exception:
                 filtered_items.append(it)
         items = filtered_items
@@ -1410,7 +1419,7 @@ def enrich_press_items_with_llm(
     End-to-end press pipeline for a single competitor.
 
     Steps:
-    - Drop items whose URL is on the competitor's own domain (company_domains). Exception: keep press_endpoint.
+    - Drop ALL items whose URL is on the competitor's own domain (company_domains); no exception for press_endpoint.
     - Classify all items (topic, irrelevant, promo) via LLM; apply heuristics; business-relevance filter.
     - Split by provider: PR Newswire vs rest. Group the rest via LLM (by title, date, topic) into clusters
       with group_title and one_line_summary; no articles dropped. Append one cluster "Press releases" for PR items.
@@ -1422,19 +1431,14 @@ def enrich_press_items_with_llm(
 
     import sys
 
-    # Drop items whose URL is on the competitor's own domain, so we only want Google News
-    # (and other external sources) when the link is not the competitor's own site.
-    # Exception: keep press_endpoint items (user-added company links) even if on company domain.
+    # Drop ALL items whose URL is on the competitor's own domain (including press_endpoint).
+    # We only want third-party coverage; competitor's own site (e.g. company.com/press/) is excluded from final output.
     if company_domains:
         import urllib.parse
         n_before_domain_filter = len(items)
-        allowed_domains = {_normalize_domain(d) for d in company_domains if d}
+        company_domains_normalized = {_normalize_domain(d) for d in company_domains if d}
         filtered_items: List[dict] = []
         for it in items:
-            provider = (it.get("provider") or "").strip().lower()
-            if provider == "press_endpoint":
-                filtered_items.append(it)
-                continue
             url = (it.get("url") or it.get("link") or "").strip()
             if not url:
                 filtered_items.append(it)
@@ -1445,8 +1449,8 @@ def enrich_press_items_with_llm(
                 if not host:
                     filtered_items.append(it)
                     continue
-                if _normalize_domain(host) in allowed_domains:
-                    continue  # drop: external source pointing to competitor's own link
+                if _normalize_domain(host) in company_domains_normalized:
+                    continue  # drop: on competitor's own domain (including company press page)
             except Exception:
                 pass
             filtered_items.append(it)
