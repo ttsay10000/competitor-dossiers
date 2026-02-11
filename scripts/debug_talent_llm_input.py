@@ -40,7 +40,7 @@ def build_llm_payload_lines(jobs: list) -> list[str]:
 
 
 def main():
-    name = (sys.argv[1] or "").strip()
+    name = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
     from app.db import get_session
     from app.models import Competitor, Snapshot
     from app.llm_structured import enrich_jobs_with_llm, TALENT_FUNCTIONAL_AREAS

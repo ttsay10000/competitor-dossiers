@@ -115,7 +115,7 @@ If most of your jobs come from generic HTML or ATSes that don’t expose departm
 
 **System prompt:** Asks for a JSON array with one object per job: `index`, `functional_area` (one of the fixed list), `is_senior` (boolean). No markdown.
 
-**After LLM:** Each job gets `functional_area` and `is_senior` set (and if the LLM returns “Other”, the code falls back to rule-based `job_functional_area` from `talent_rules`).
+**After LLM:** Each job gets `functional_area` and `is_senior` set (and if the LLM returns “Other”, the code falls back to rule-based `job_functional_area` from `talent_rules`). Jobs at index ≥ 150 are not sent to the LLM; for those, classification uses the same rule-based logic so every job is bucketed.
 
 ---
 

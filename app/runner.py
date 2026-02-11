@@ -342,6 +342,8 @@ def run_talent(competitor_name: Optional[str] = None) -> None:
                 print(f"[talent] Step 1 — Collect: {len(raw_jobs)} jobs (provider: {provider})")
                 structured = build_talent_structured(snapshot)
                 before_enrich = len(structured.get("jobs") or [])
+                if before_enrich > 150:
+                    print(f"[talent] Step 2 — Sending first 150 of {before_enrich} jobs to LLM; rest use rule-based classification.")
                 structured["jobs"] = enrich_jobs_with_llm(structured.get("jobs") or [])
                 current_jobs = structured.get("jobs") or []
                 after_enrich = len(current_jobs)
@@ -910,7 +912,7 @@ def run_press(competitor_name: Optional[str] = None) -> None:
             }
             structured = build_press_structured(snapshot_like)
             structured["sources"] = source_meta
-            structured["canonical_items"] = enrich_press_items_with_llm(
+            press_groups = enrich_press_items_with_llm(
                 competitor.name,
                 structured.get("items") or [],
                 max_articles_to_summarize=settings.press_max_articles_to_summarize,
@@ -918,13 +920,24 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                 previous_items=previous_items if previous_items else None,
                 previous_canonical=previous_canonical if previous_canonical else None,
             )
+            structured["press_groups"] = press_groups
+            # Flatten groups to canonical_items for Top news, diff, and backward compatibility.
+            canonical = []
+            for g in press_groups:
+                for art in g.get("articles") or []:
+                    canonical.append({
+                        "title": art.get("title") or "",
+                        "url": art.get("url") or art.get("link"),
+                        "date": art.get("date"),
+                        "outlet": art.get("outlet"),
+                        "group_title": g.get("group_title"),
+                        "summary": g.get("one_line_summary") or "",
+                    })
+            structured["canonical_items"] = canonical
 
-            canonical = structured.get("canonical_items") or []
-            EXCLUDED_TOPICS = {"irrelevant", "promo_or_brand_marketing"}
-            display_list = [c for c in canonical if (c.get("topic") or "").strip().lower() not in EXCLUDED_TOPICS]
-            display_count = len(display_list)
-            print(f"[press] Step 7 — Final canonical (to display): {display_count} items")
-            for i, item in enumerate(display_list[:10], 1):
+            display_count = len(canonical)
+            print(f"[press] Step 7 — Final: {len(press_groups)} groups, {display_count} articles")
+            for i, item in enumerate(canonical[:10], 1):
                 date_str = (item.get("date") or "no date")[:10] if item.get("date") else "no date"
                 title = (item.get("title") or "—")
                 if len(title) > 55:
@@ -1069,7 +1082,7 @@ def run_press_local(competitor_name: Optional[str] = None) -> None:
             print(f"[press] No items → skipping enrichment.")
             continue
 
-        canonical = enrich_press_items_with_llm(
+        press_groups = enrich_press_items_with_llm(
             display_name,
             filtered_items,
             max_articles_to_summarize=getattr(settings, "press_max_articles_to_summarize", 40),
@@ -1077,17 +1090,16 @@ def run_press_local(competitor_name: Optional[str] = None) -> None:
             previous_items=None,
             previous_canonical=None,
         )
-        EXCLUDED = {"irrelevant", "promo_or_brand_marketing"}
-        display_list = [c for c in canonical if (c.get("topic") or "").strip().lower() not in EXCLUDED]
-        print(f"[press] Final (to display): {len(display_list)} items\n")
-        for i, item in enumerate(display_list[:15], 1):
+        canonical = [art for g in press_groups for art in (g.get("articles") or [])]
+        print(f"[press] Final: {len(press_groups)} groups, {len(canonical)} articles\n")
+        for i, item in enumerate(canonical[:15], 1):
             date_str = (item.get("date") or "no date")[:10] if item.get("date") else "no date"
             title = (item.get("title") or "—")[:65]
             url = (item.get("url") or item.get("link") or "")
             print(f"  {i}. [{date_str}] {title}")
             print(f"      {url}")
-        if len(display_list) > 15:
-            print(f"  ... and {len(display_list) - 15} more")
+        if len(canonical) > 15:
+            print(f"  ... and {len(canonical) - 15} more")
         print()
 
 

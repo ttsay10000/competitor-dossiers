@@ -5,7 +5,7 @@ WORKDIR /app
 
 # Install Playwright and Chromium (with system deps). Required for Lark/AvantStay talent (JS-rendered career pages).
 RUN pip install --no-cache-dir playwright==1.42.0 && \
-    playwright install --with-deps chromium
+    (playwright install --with-deps chromium || (sleep 10 && playwright install --with-deps chromium))
 
 # App dependencies (lean list; playwright already installed above).
 COPY requirements-render.txt .

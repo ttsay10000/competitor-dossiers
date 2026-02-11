@@ -6,7 +6,7 @@ from typing import Any, Optional
 import requests
 from bs4 import BeautifulSoup
 
-from .http import fetch_url, fetch_url_js
+from .http import fetch_url, fetch_url_js, fetch_url_js_exhaust
 
 
 # Priority order: Lever > Greenhouse > Ashby > generic (competitor career pages).
@@ -148,21 +148,56 @@ def _posted_date_from_element(element) -> Optional[str]:
     return None
 
 
+def _is_cta_or_section_text(text: str) -> bool:
+    """True if text is a button/CTA or section heading (e.g. 'View Job', \"We're hiring\") rather than a job title."""
+    if not text or len(text) > 50:
+        return False
+    lower = text.strip().lower()
+    # Exact CTA / section phrases (never use as job title)
+    skip_phrases = (
+        "apply", "apply now", "view", "view all", "see more", "learn more",
+        "view job", "view jobs", "view details", "view role", "view position",
+        "see job", "read more", "view opening",
+        "we're hiring", "we are hiring", "open positions", "join our team",
+    )
+    if lower in skip_phrases:
+        return True
+    # "View ..." or "Apply ..." with no substantive title (e.g. "View Job", "Apply Here")
+    if lower.startswith("view ") or lower.startswith("apply "):
+        return True
+    return False
+
+
+def _is_cta_link_text(text: str) -> bool:
+    """True if link text is a button/CTA rather than a job title. Use for link-based extraction."""
+    return _is_cta_or_section_text(text)
+
+
 def _title_from_apply_link(link) -> Optional[str]:
-    """For 'Apply' / 'Apply Now' links, get job title from parent card (e.g. Kula-style layout)."""
+    """For 'Apply' / 'View Job' / CTA links, get job title from parent card (e.g. Kula-style, WizeHire)."""
+    # Often the title is a previous sibling (e.g. <h3>Title</h3> then <a>View Job</a>)
+    for sib in link.previous_siblings:
+        if getattr(sib, "name", None) in ("h1", "h2", "h3", "h4", "h5", "strong"):
+            t = (sib.get_text() or "").strip() if hasattr(sib, "get_text") else ""
+            if len(t) >= 4 and len(t) <= 120 and not _is_cta_link_text(t):
+                return t
+        if hasattr(sib, "get_text") and sib != link:
+            t = (sib.get_text() or "").strip()
+            if len(t) >= 4 and len(t) <= 120 and not _is_cta_link_text(t):
+                return t
     parent = link.parent
     while parent and parent.name not in ("body", "html"):
         for tag in ("h1", "h2", "h3", "h4", "h5", "strong"):
             heading = parent.find(tag)
             if heading:
                 t = (heading.get_text() or "").strip()
-                if len(t) >= 4 and len(t) <= 120 and "apply" not in t.lower():
+                if len(t) >= 4 and len(t) <= 120 and not _is_cta_link_text(t):
                     return t
         # Try first text-heavy child that isn't the link
         for child in parent.children:
             if hasattr(child, "get_text") and child != link:
                 t = (child.get_text() or "").strip()
-                if len(t) >= 4 and len(t) <= 120 and "apply" not in t.lower():
+                if len(t) >= 4 and len(t) <= 120 and not _is_cta_link_text(t):
                     return t
         parent = parent.parent
     return None
@@ -172,7 +207,6 @@ def extract_jobs_from_html(html: str) -> list[dict[str, Any]]:
     # Fallback to capture job links; allow common ATS path segments (WizeHire, Kula, etc.).
     soup = BeautifulSoup(html, "html.parser")
     href_lower_ok = ("job", "career", "position", "opening", "role", "career-site", "apply", "wizehire")
-    generic_cta = ("apply", "apply now", "view", "view all", "see more", "learn more")
     jobs = []
     seen = set()
     for link in soup.find_all("a"):
@@ -185,16 +219,17 @@ def extract_jobs_from_html(html: str) -> list[dict[str, Any]]:
         is_fragment = h in ("#", "") or h.startswith("#")
         if not href_ok and not is_fragment:
             link_text_lower = (link.get_text() or "").strip().lower()
-            if "apply" not in link_text_lower:
+            if "apply" not in link_text_lower and "view" not in link_text_lower:
                 continue
-        title = (link.get_text() or "").strip()
-        if not title or len(title) < 2:
-            title = None
-        if not title or title.lower() in generic_cta:
+        raw_title = (link.get_text() or "").strip()
+        # If link text is a CTA (e.g. "View Job"), get real title from parent card
+        if _is_cta_link_text(raw_title) or not raw_title or len(raw_title) < 2:
             title = _title_from_apply_link(link)
+        else:
+            title = raw_title
         if not title or len(title) < 4 or len(title) > 120:
             continue
-        if title.lower() in generic_cta:
+        if _is_cta_link_text(title):
             continue
         # Dedupe by normalized url (or title if url is #)
         url_norm = href.split("?")[0].rstrip("/") or ("title:" + title[:80])
@@ -215,6 +250,29 @@ def extract_jobs_from_html(html: str) -> list[dict[str, Any]]:
     return jobs
 
 
+def extract_jobs_from_wizehire_title_divs(html: str) -> list[dict[str, Any]]:
+    """Extract job titles from WizeHire/Lark career pages where titles are in div.jss83 (e.g. 'Hotel Housekeeper', 'Building Maintenance Technician')."""
+    soup = BeautifulSoup(html, "html.parser")
+    jobs = []
+    seen = set()
+    # Lark/WizeHire use JSS classes; job title is in a div with class jss83 (may be multiple elements with same class)
+    for div in soup.find_all("div", class_=lambda c: c and "jss83" in (c if isinstance(c, str) else " ".join(c))):
+        title = (div.get_text() or "").strip()
+        if not title or len(title) < 4 or len(title) > 120:
+            continue
+        if _is_cta_or_section_text(title):
+            continue
+        key = title[:80]
+        if key in seen:
+            continue
+        seen.add(key)
+        posted_date = _posted_date_from_element(div)
+        jobs.append(
+            {"job_id": None, "title": title, "location": None, "dept": None, "posted_date": posted_date, "url": None}
+        )
+    return jobs
+
+
 def extract_jobs_from_headings(html: str) -> list[dict[str, Any]]:
     """Fallback when link-based extraction finds nothing (e.g. WizeHire SPA with titles in headings)."""
     soup = BeautifulSoup(html, "html.parser")
@@ -228,7 +286,7 @@ def extract_jobs_from_headings(html: str) -> list[dict[str, Any]]:
         lower = title.lower()
         if any(phrase in lower for phrase in skip_phrases):
             continue
-        if lower in ("apply", "apply now", "view", "other", "all departments"):
+        if lower in ("apply", "apply now", "view", "view job", "view details", "other", "all departments"):
             continue
         key = title[:80]
         if key in seen:
@@ -328,15 +386,35 @@ def collect_talent_snapshot(source_url: str) -> dict[str, Any]:
     playwright_fallback = False
     if use_js:
         try:
-            fetched = fetch_url_js(source_url)
+            # WizeHire: jobs load in batches. Scroll to very bottom in viewport steps so the next
+            # chunk loads; then wait for the batch before measuring. Repeat until no new content.
+            if "wizehire.com" in source_url.lower():
+                scroll_options = {
+                    "scroll_window": True,
+                    "scroll_by_viewport": True,
+                    "max_scrolls": 100,
+                    "scroll_wait_sec": 1.0,
+                    "scroll_batch_wait_sec": 4.0,
+                    "scroll_no_progress_limit": 5,
+                    "post_load_wait_ms": 3000,
+                }
+                fetched = fetch_url_js_exhaust(source_url, scroll_options)
+            else:
+                fetched = fetch_url_js(source_url)
         except (RuntimeError, Exception):
             fetched = fetch_url(source_url)
             playwright_fallback = True  # Playwright disabled or not installed; plain HTML usually gives 0 jobs
     else:
         fetched = fetch_url(source_url)
-    jobs = extract_jobs_from_html(fetched.text)
-    if not jobs and "wizehire.com" in source_url.lower():
-        jobs = extract_jobs_from_headings(fetched.text)
+    # WizeHire/Lark: job titles are in div.jss83 (e.g. "Hotel Housekeeper"); prefer that over link text
+    if "wizehire.com" in source_url.lower():
+        jobs = extract_jobs_from_wizehire_title_divs(fetched.text)
+        if not jobs:
+            jobs = extract_jobs_from_html(fetched.text)
+        if not jobs:
+            jobs = extract_jobs_from_headings(fetched.text)
+    else:
+        jobs = extract_jobs_from_html(fetched.text)
     out = {
         "provider": "generic",
         "source_url": fetched.url,

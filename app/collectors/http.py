@@ -98,6 +98,121 @@ def _find_button_fallback(page: Any, button_text: str):
     return None
 
 
+def scroll_page_to_exhaust(
+    page: Any,
+    max_scrolls: int = 100,
+    scroll_wait_sec: float = 1.5,
+    no_progress_limit: int = 3,
+    batch_wait_sec: float = 0,
+    scroll_by_viewport: bool = False,
+    scroll_container_selector: Optional[str] = None,
+) -> int:
+    """
+    Scroll the page (or a scrollable container) to the bottom repeatedly to trigger
+    infinite-scroll loading. Stops when no new content for no_progress_limit rounds.
+
+    If scroll_container_selector is set, scroll that element instead of the window
+    (use when the job list lives in a div with overflow:auto/scroll).
+    """
+    if scroll_container_selector:
+        # Scroll a specific container (e.g. WizeHire list in a scrollable div)
+        def get_height():
+            return page.evaluate(
+                """(sel) => {
+                    const el = document.querySelector(sel);
+                    return el ? el.scrollHeight : 0;
+                }""",
+                scroll_container_selector,
+            )
+
+        def at_bottom():
+            return page.evaluate(
+                """(sel) => {
+                    const el = document.querySelector(sel);
+                    if (!el) return true;
+                    return el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
+                }""",
+                scroll_container_selector,
+            )
+
+        def scroll_container_step():
+            page.evaluate(
+                """(sel) => {
+                    const el = document.querySelector(sel);
+                    if (el) el.scrollTop = el.scrollHeight;
+                }""",
+                scroll_container_selector,
+            )
+
+        def scroll_container_by_viewport():
+            page.evaluate(
+                """(sel) => {
+                    const el = document.querySelector(sel);
+                    if (!el) return;
+                    const step = el.clientHeight * 0.85;
+                    el.scrollTop = Math.min(el.scrollTop + step, el.scrollHeight);
+                }""",
+                scroll_container_selector,
+            )
+    else:
+        # Window scroll
+        def get_height():
+            return page.evaluate(
+                "() => Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)"
+            )
+
+        def at_bottom():
+            return page.evaluate(
+                "() => window.scrollY + window.innerHeight >= "
+                "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) - 2"
+            )
+
+        def scroll_container_step():
+            page.evaluate(
+                "() => window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight))"
+            )
+
+        def scroll_container_by_viewport():
+            page.evaluate(
+                "() => { const step = window.innerHeight * 0.85; window.scrollBy(0, step); }"
+            )
+
+    prev_height = -1
+    scrolls = 0
+    no_progress = 0
+    wait_after_bottom = batch_wait_sec if batch_wait_sec > 0 else scroll_wait_sec
+
+    for _ in range(max_scrolls):
+        try:
+            if scroll_by_viewport:
+                for _ in range(50):
+                    if at_bottom():
+                        break
+                    scroll_container_by_viewport()
+                    time.sleep(0.4)
+                scroll_container_step()
+                time.sleep(0.3)
+                time.sleep(wait_after_bottom)
+            else:
+                scroll_container_step()
+                time.sleep(scroll_wait_sec)
+        except Exception:
+            break
+        scrolls += 1
+        try:
+            new_height = get_height()
+        except Exception:
+            break
+        if new_height == prev_height:
+            no_progress += 1
+            if no_progress >= no_progress_limit or at_bottom():
+                break
+        else:
+            no_progress = 0
+        prev_height = new_height
+    return scrolls
+
+
 def exhaust_list_in_browser(page: Any, options: Dict[str, Any]) -> int:
     """
     Click 'Load more' (or equivalent) until the trigger is gone or max iterations.
@@ -202,6 +317,24 @@ def fetch_url_js_exhaust(url: str, load_more_options: Dict[str, Any]) -> FetchRe
         page.goto(url, wait_until="networkidle", timeout=60000)
         if post_wait_sec > 0:
             time.sleep(post_wait_sec)
+        # Infinite scroll: scroll to bottom repeatedly until failure to scroll (no new content)
+        if load_more_options.get("scroll_window"):
+            max_scrolls = load_more_options.get("max_scrolls", 100)
+            scroll_wait = load_more_options.get("scroll_wait_sec", 1.5)
+            no_progress_limit = load_more_options.get("scroll_no_progress_limit", 3)
+            batch_wait = load_more_options.get("scroll_batch_wait_sec", 0)
+            scroll_by_viewport = load_more_options.get("scroll_by_viewport", False)
+            scroll_container = load_more_options.get("scroll_container_selector")
+            scrolls = scroll_page_to_exhaust(
+                page,
+                max_scrolls=max_scrolls,
+                scroll_wait_sec=scroll_wait,
+                no_progress_limit=no_progress_limit,
+                batch_wait_sec=batch_wait,
+                scroll_by_viewport=scroll_by_viewport,
+                scroll_container_selector=scroll_container,
+            )
+            print(f"[scroll_exhaust] {url[:60]}... -> {scrolls} scroll(s)")
         clicks = exhaust_list_in_browser(page, load_more_options)
         if (load_more_options.get("click_selector") or load_more_options.get("button_text")) and clicks >= 0:
             print(f"[load_more] {url[:60]}... -> {clicks} click(s)")

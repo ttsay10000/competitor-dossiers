@@ -380,6 +380,8 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     press_items = [i for i in raw_press_items if isinstance(i, dict)]
     raw_canonical_press = (latest_press.structured_json or {}).get("canonical_items", []) if latest_press else []
     canonical_press = [i for i in raw_canonical_press if isinstance(i, dict)]
+    raw_press_groups = (latest_press.structured_json or {}).get("press_groups", []) if latest_press else []
+    press_groups_snapshot = [g for g in raw_press_groups if isinstance(g, dict) and g.get("articles")]
 
     takeaways = []
     if any(event.type == "asset.new_market" for event in events):
@@ -409,35 +411,68 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
             return t.title()
         return t
 
-    # Canonical press list (no date cap); exclude irrelevant and promo. Sorted by date published, newest first.
-    EXCLUDED_TOPICS = {"irrelevant", "promo_or_brand_marketing"}
+    # Build press_groups for template: use snapshot groups if present, else one group per canonical item (backward compat).
+    if press_groups_snapshot:
+        press_groups = []
+        for g in press_groups_snapshot:
+            articles = []
+            for art in g.get("articles") or []:
+                a = dict(art)
+                a["display_title"] = _press_display_title(a.get("title") or "")
+                articles.append(a)
+            press_groups.append({
+                "group_title": g.get("group_title") or "News",
+                "one_line_summary": g.get("one_line_summary") or "",
+                "articles": articles,
+            })
+    else:
+        press_groups = [
+            {
+                "group_title": _press_display_title(item.get("title") or ""),
+                "one_line_summary": (item.get("summary") or "").strip(),
+                "articles": [{
+                    **dict(item),
+                    "display_title": _press_display_title(item.get("title") or ""),
+                    "url": item.get("url") or item.get("link"),
+                    "outlet": item.get("outlet"),
+                }],
+            }
+            for item in canonical_press
+            if (item.get("topic") or "").strip().lower() not in {"irrelevant", "promo_or_brand_marketing"}
+        ]
+
+    # Flat list for sorting and Top news: from groups (all articles) or from canonical_press (old snapshot).
+    if press_groups_snapshot:
+        flat_for_sort = []
+        for g in press_groups_snapshot:
+            for art in g.get("articles") or []:
+                flat_for_sort.append(dict(art))
+    else:
+        flat_for_sort = [
+            item for item in canonical_press
+            if (item.get("topic") or "").strip().lower() not in {"irrelevant", "promo_or_brand_marketing"}
+        ]
     press_90d = []
-    for item in canonical_press:
-        topic = (item.get("topic") or "").strip().lower()
-        if topic in EXCLUDED_TOPICS:
-            continue
+    for item in flat_for_sort:
         dt = _parse_press_date(item.get("date"))
         display_date = dt.strftime("%Y-%m-%d") if dt else None
         out = dict(item)
-        # Always set date for display: parsed YYYY-MM-DD, or raw string if parse failed (e.g. ISO from pipeline).
         if display_date:
             out["date"] = display_date
-        elif item.get("date") and isinstance(item.get("date"), str) and item.get("date").strip():
-            out["date"] = item.get("date", "").strip()[:20]
-        raw_title = out.get("title") or ""
-        out["display_title"] = _press_display_title(raw_title)
-        out["_sort_dt"] = dt  # for sorting; removed before template
+        elif item.get("date") and isinstance(item.get("date"), str) and (item.get("date") or "").strip():
+            out["date"] = (item.get("date", "") or "").strip()[:20]
+        out["display_title"] = _press_display_title(out.get("title") or "")
+        out["_sort_dt"] = dt
         press_90d.append(out)
     press_90d.sort(key=lambda x: (x["_sort_dt"] is None, -(x["_sort_dt"].timestamp() if x["_sort_dt"] else 0)))
     for p in press_90d:
         p.pop("_sort_dt", None)
 
-    # Top news: up to 5 most newsworthy articles. Press releases (e.g. PR Newswire) and strategic topics rank highest; recency breaks ties.
+    # Top news: up to 5 most newsworthy articles. Use topic when present; else treat as other_business (new group-based shape).
     STRONG_BUSINESS_TOPICS = {
         "fundraising", "restructuring_or_layoffs", "executive_interview",
         "new_partnership", "new_hotel_opening", "other_business",
     }
-    # Tiers 5/4/3 treated equally (strategic topics); other_business slightly lower. Unlikely to have many in a week.
     TOPIC_NEWSWORTHINESS = {
         "fundraising": 5,
         "new_partnership": 5,
@@ -448,7 +483,7 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     }
     pool = [
         item for item in press_90d
-        if (item.get("topic") or "").lower() in STRONG_BUSINESS_TOPICS
+        if (item.get("topic") or "").strip().lower() in STRONG_BUSINESS_TOPICS or not item.get("topic")
     ]
     # When reporting baseline is set (e.g. after "Reset baseline"), only news on or after that date counts.
     if reporting_baseline_date:
@@ -459,8 +494,8 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     week_cutoff_pub = datetime.now(timezone.utc) - timedelta(days=7)
 
     def _newsworthiness_score(item: dict) -> tuple:
-        topic = (item.get("topic") or "").lower()
-        topic_score = TOPIC_NEWSWORTHINESS.get(topic, 0)
+        topic = (item.get("topic") or "").strip().lower()
+        topic_score = TOPIC_NEWSWORTHINESS.get(topic, 2)  # default 2 (other_business) when no topic (group-based shape)
         dt = _parse_press_date(item.get("date"))
         recency_score = 5 if (dt and dt >= week_cutoff_pub) else 0  # last 7 days boost
         score = topic_score + recency_score  # no source prioritization; all sources equal
@@ -611,6 +646,7 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         "jobs_by_function_property": jobs_by_function_property,
         "press_items": press_items,
         "press_90d": press_90d,
+        "press_groups": press_groups,
         "takeaways": takeaways,
         "recommendations": recommendations,
         "events_this_week": events_this_week_dicts,

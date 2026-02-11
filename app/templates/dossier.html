@@ -246,36 +246,32 @@
     <!-- 7. Press -->
     <div class="card">
       <strong>Press</strong>
-      <p class="meta">Business-focused news only; deduped, with links, sources, and 1-line summaries. Newest first.</p>
-      {% if press_90d|length %}
-        <ul style="margin: 0; padding-left: 20px;">
-          {% for item in press_90d %}
-          <li>
-            <span class="meta" style="font-weight: 500;">{{ item.get('date') or 'Date unknown' }}</span> — <a href="{{ item.get('url') or item.get('link') }}" target="_blank" rel="noopener">{{ item.get('display_title') or item.get('title') or 'Article' }}</a>
-            {% set press_url = item.get('url') or item.get('link') %}
-            {% if press_url %}
-            <div class="meta" style="font-size: 11px; word-break: break-all; margin-top: 2px;">{{ press_url }}</div>
-            {% endif %}
-            {% set secondary = item.get('secondary_urls') or [] %}
-            {% if secondary %}
-            <div class="meta" style="font-size: 11px; margin-top: 2px;">Also: {% for u in secondary %}<a href="{{ u }}" target="_blank" rel="noopener">{{ u }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</div>
-            {% endif %}
-            <div class="meta">
-              {% if item.get('topic') %}
-                <strong style="font-size: 11px; text-transform: uppercase;">{{ item.topic.replace('_', ' ') }}</strong>
+      <p class="meta">Business-focused news, grouped by topic. Links open the full article. Newest first.</p>
+      {% if press_groups|length %}
+        {% for group in press_groups %}
+        <div style="margin-bottom: 12px;">
+          <strong style="font-size: 13px;">{{ group.get('group_title') or 'News' }}</strong>
+          {% if group.get('one_line_summary') %}
+          <div class="meta" style="margin: 2px 0 6px 0;">{{ group.one_line_summary }}</div>
+          {% endif %}
+          <ul style="margin: 0; padding-left: 20px;">
+            {% for art in group.get('articles') or [] %}
+            <li>
+              <span class="meta" style="font-weight: 500;">{{ art.get('date') or 'Date unknown' }}</span>
+              {% if art.get('outlet') %}
+              <span class="meta"> · {{ art.outlet }}</span>
               {% endif %}
-              {% if item.get('outlet') %}
-                {% if item.get('topic') %} · {% endif %}
-                {{ item.outlet }}
+              {% set art_url = art.get('url') or art.get('link') %}
+              {% if art_url %}
+              <div class="meta" style="margin-top: 2px;"><a href="{{ art_url }}" target="_blank" rel="noopener">see full article</a> — {{ art.get('display_title') or art.get('title') or 'Article' }}</div>
+              {% else %}
+              <span>{{ art.get('display_title') or art.get('title') or 'Article' }}</span>
               {% endif %}
-              {% if item.get('summary') %}
-                {% if item.get('topic') or item.get('outlet') %} · {% endif %}
-                {{ item.summary }}
-              {% endif %}
-            </div>
-          </li>
-          {% endfor %}
-        </ul>
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endfor %}
       {% else %}
         <div class="meta">No business-relevant press.</div>
       {% endif %}

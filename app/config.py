@@ -18,7 +18,7 @@ class Settings:
         if url and ("postgresql://" in url or "postgresql+psycopg://" in url) and not url.startswith("postgresql+psycopg://"):
             url = url.replace("postgresql://", "postgresql+psycopg://", 1)
         self.database_url = url
-        self.playwright_enabled = os.getenv("PLAYWRIGHT_ENABLED", "false").lower() in {"1", "true", "yes"}
+        self.playwright_enabled = os.getenv("PLAYWRIGHT_ENABLED", "true").lower() in {"1", "true", "yes"}
         # OpenAI: set OPENAI_API_KEY in env (or .env). Used by executive summary, location cleanup, press summarization, asset LLM extraction.
         self.openai_api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
         self.version = os.getenv("APP_VERSION", "0.1.0")
@@ -31,11 +31,6 @@ class Settings:
         self.press_max_raw_items_per_competitor = int(os.getenv("PRESS_MAX_RAW_ITEMS_PER_COMPETITOR", "120") or "120")
         self.press_max_items_per_source = int(os.getenv("PRESS_MAX_ITEMS_PER_SOURCE", "30") or "30")
         self.press_max_articles_to_summarize = int(os.getenv("PRESS_MAX_ARTICLES_TO_SUMMARIZE", "40") or "40")
-        # Final press dedupe: use a stronger model for better instruction-following (compare title+summary, merge same story).
-        # Set PRESS_FINAL_DEDUPE_MODEL=gpt-4o-mini to reduce cost; default gpt-4o for reliability.
-        self.press_final_dedupe_model = (os.getenv("PRESS_FINAL_DEDUPE_MODEL", "gpt-4o") or "gpt-4o").strip()
-        if self.press_final_dedupe_model not in ("gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4"):
-            self.press_final_dedupe_model = "gpt-4o"
         # Seed/baseline mode: when true, the first run for each channel
         # will persist a baseline snapshot but skip creating events so that
         # subsequent scheduled runs only emit deltas vs this baseline.

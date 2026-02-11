@@ -27,19 +27,11 @@
 - Prefer false negatives to false positives.
 - LLM usage (optional later) only to polish summaries after rules gating.
 
-## Press deduping (same story = one row)
+## Press grouping (same story = one group, no dropping)
 
-We treat multiple articles as the **same story** when they refer to the same underlying event (same deal, announcement, expansion, etc.), not just similar wording. That way "Lark Hotels to Open Four New Properties in 2026", "Lark Hotels Adding Four New Spots In 2026", and "Four New Lark Hotels Set To Boost Hospitality In Massachusetts" (different headlines and dates) become one canonical item with one primary URL and `secondary_urls` for the rest.
+After classification and business filter, we **group** (not dedupe) articles by similarity: same story, same topic, or related coverage. The LLM sees title, date, and outlet per item and returns **groups** with a `group_title`, `one_line_summary`, and the list of article indices in that group. Every article is assigned to exactly one group; none are dropped. PR Newswire items are split out and appended as a single "Press releases" group.
 
-**How it works (two steps):**
-
-1. **Story keys (LLM)**  
-   For each item the LLM sees: headline, outlet, and **publication date**. It assigns a short canonical key (e.g. `lark four properties 2026`). Same event + same rough time window → same key. So we use general thrust and date, not just keyword matching.
-
-2. **Title-similarity merge**  
-   After grouping by story key, we merge any two clusters whose titles have high word overlap (Jaccard on non-stopwords). That catches cases where the LLM gave different keys to the same story.
-
-Result: one row per story (primary + `secondary_urls`). Code: `app/llm_structured.py` (`_assign_press_story_keys`, and the dedupe block in `enrich_press_items_with_llm`).
+Result: grouped topics with articles as sub-articles under each group; each article keeps its link ("see full article"). Code: `app/llm_structured.py` (`_group_press_into_clusters_llm`, `enrich_press_items_with_llm`).
 
 ## Scheduling
 - Daily: talent + press

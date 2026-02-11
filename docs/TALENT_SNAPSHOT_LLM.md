@@ -30,8 +30,9 @@ How job listings get **functional_area** and **is_senior** for the dossier “Ta
    - `is_senior`: boolean (C-level, VP, Head of, Director → true)
 
 4. **Post-processing**  
-   - `_normalize_functional_area()` maps the model’s string to a canonical area (exact match + a few aliases). **Any unrecognized value becomes `"Other"`.**  
-   - If the LLM (or normalization) returns `"Other"`, we run the **rule-based** `job_functional_area()` from `app/rules/talent_rules.py` (keyword match on title + dept). If that also fails to match, the job stays **Other**.
+   - `_normalize_functional_area()` maps the model’s string to a canonical area (exact match + aliases for common variants like "Sales", "Property operations", "HR", "Operations"). **Any unrecognized value becomes `"Other"`.**  
+   - If the LLM (or normalization) returns `"Other"`, we run the **rule-based** `job_functional_area()` from `app/rules/talent_rules.py` (keyword match on title + dept). If that also fails to match, the job stays **Other**.  
+   - Only the first 150 jobs are sent to the LLM; jobs beyond that get **rule-based** `functional_area` and `is_senior` so every job is classified and the dossier does not under-count categories.
 
 ## Canonical functional areas (LLM + display)
 
