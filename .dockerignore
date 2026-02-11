@@ -7,3 +7,6 @@ __pycache__
 .idea
 .env
 .env.*
+
+# Test/debug scripts: local and Cursor only; not deployed to Render.
+scripts

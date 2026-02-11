@@ -63,17 +63,6 @@ Defined in `app/llm_structured.TALENT_FUNCTIONAL_AREAS` and displayed in `app/ru
 
 ## Inspecting the underlying data
 
-Use the debug script to see the **exact payload** sent to the LLM and which jobs end up in Other after enrichment:
+To see the **exact payload** sent to the LLM and which jobs end up in Other after enrichment:
 
-```bash
-# From repo root, with .env (and optional OPENAI_API_KEY for live enrichment)
-python scripts/debug_talent_llm_input.py [competitor_name]
-```
-
-Example: `python scripts/debug_talent_llm_input.py Lark`
-
-- Prints the “Jobs:” block (index, title, dept, location) that is sent to the API.  
-- If `OPENAI_API_KEY` is set: runs `enrich_jobs_with_llm`, prints counts by `functional_area`, and lists each job classified as Other with its raw title/dept/location.  
-- If no API key: prints the same input payload and a rule-based-only bucketing so you can see what would be Other without the LLM.
-
-This shows how enrichment works and which titles/depts are missing or vague so you can adjust keywords or prompt/areas.
+see `app/llm_structured.py` (`enrich_jobs_with_llm` and the talent prompt building) and `app/rules/talent_rules.py`. The “Jobs:” block (index, title, dept, location) is built there; enrichment returns counts by `functional_area` and flags jobs that stay in Other. Adjust keywords or prompt/areas in those modules to fix classification.

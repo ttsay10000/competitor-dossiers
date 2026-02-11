@@ -52,21 +52,34 @@ The **press_groups** list is what the dossier uses. Runner flattens to `canonica
 
 ---
 
-## 2. Location cleaning (properties) — `app/executive_summary.py`
+## 2. Property-level state assignment (optional) — `app/llm_structured.py`
+
+- **Functions:** `assign_states_to_properties_for_dossier(...)`, `_bucket_properties_by_state_single_call` (and batched fallback), `research_and_assign_states_for_other_properties(...)`.
+- **Input:** Per-property list with `name`, `url`, `market`, `url_derived_location`, `details` (and `region` when present).
+- **What the LLM does:** Assigns a **US state** (or "Other") to each property using name, url, market, region, and url_derived_location.
+- **When it runs:** Not called from the dossier build by default; dossier uses URL-derived state then relies on aggregation (Section 3).
+- **Prompt rules:** Map US regions, cities, and area names to the correct state. Do not put US cities or regions into "Other". Only use "Other" for: Unspecified, career site, privacy, non-property URLs, or genuinely non-US/unclear.
+- **Prompt locations:** `app/llm_structured.py` — single-call ~249–254, batched ~337–344, research-for-Other ~420–428.
+
+---
+
+## 3. Location cleaning (aggregation) — `app/executive_summary.py`
 
 - **Function:** `clean_location_display_for_dossier(competitor_name, properties_by_location, asset_delta_by_city, other_sub_bullets_text=...)`
 - **Input:** Raw location rows (e.g. "Temecula: 5", "Central Oregon: 3") and optional "Other" sub-bullets (URLs). **No per-property list** — only aggregated "location: count" (and keys/deltas).
 - **What the LLM does:** Maps every input row to **one US state** (or "Other"), and **sums counts/keys** when merging. Returns JSON:
   - `properties_by_location`: `[{ "location": "California", "count": n, "keys": k }, ...]`
   - `asset_delta_by_city`: `[{ "location": "Texas", "added": a, "removed": r }, ...]`
-- **Prompt rules:** Output only US state names (or "Other"); no regions/cities in output; grand total of counts must match input total.
+- **Prompt rules:** Output only US state names (or "Other"); no regions/cities in output; do not put US cities or regions into "Other" — map them to the correct state (e.g. Central Oregon → Oregon, Emerald Coast → Florida); grand total of counts must match input total.
 - **Output:** Used in `build_dossier_context` to replace raw location breakdown so the dossier shows state-level breakdown. If the LLM returns only "Other" or total &lt; 50% of raw, the result is **rejected** and raw data is used (or totals don’t match and UI can show a note).
 
-**If location data doesn’t populate:** Rejection can happen for: no API key, JSON parse failure, only_other_or_under_half, no_state_row_in_output. Use `debug_return_parsed=True` to see `_rejected` and `_reason`.
+**If location data doesn’t populate:** **If regional properties all show under "Other":** The aggregation prompt instructs mapping regions/cities to states. If many properties have no state set (dossier only uses URL-derived state), they appear as "Unspecified" and are sent as "Other sub-bullets" (URLs); the LLM should infer state from URL paths. To reduce "Unspecified", run per-property state assignment (Section 2) before building the dossier, or ensure collectors set `market`/`region` so `infer_location_for_property` gets a region name to send to the aggregation LLM.
+
+**If location data doesn't populate:** Rejection can happen for: no API key, JSON parse failure, only_other_or_under_half, no_state_row_in_output. Use `debug_return_parsed=True` to see `_rejected` and `_reason`.
 
 ---
 
-## 3. Executive summary — `app/executive_summary.py`
+## 4. Executive summary — `app/executive_summary.py`
 
 - **Function:** `generate_executive_summary(context)`
 - **Input:** Context dict with events, top_news, asset deltas, etc. **Already filtered** to post-baseline / comparison data.
@@ -75,7 +88,7 @@ The **press_groups** list is what the dossier uses. Runner flattens to `canonica
 
 ---
 
-## 4. What to check when "LLM doesn’t clean properly" or "data doesn’t populate"
+## 5. What to check when "LLM doesn’t clean properly" or "data doesn’t populate"
 
 | Symptom | Likely step | What to check |
 |--------|-------------|----------------|
@@ -86,11 +99,12 @@ The **press_groups** list is what the dossier uses. Runner flattens to `canonica
 
 ---
 
-## 5. Prompt locations (file:line)
+## 6. Prompt locations (file:line)
 
 - **Classification:** `app/llm_structured.py` ~597–643 (system), 644–645 (user)  
 - **Group (press):** `_group_press_into_clusters_llm` in `app/llm_structured.py` (system + user)  
-- **Location cleaning:** `app/executive_summary.py` ~334–354 (system), ~357–360 (user)  
+- **Property state (per-property):** `app/llm_structured.py` — single-call ~249–254, batched ~337–344, research-Other ~420–428  
+- **Location cleaning (aggregation):** `app/executive_summary.py` ~334–356 (system), ~357–360 (user)  
 - **Executive summary:** `app/executive_summary.py` ~254–264 (system), 266 (user)
 
 These are the exact prompts that control cleaning and population; changing them will change what the dossier shows.

@@ -411,6 +411,12 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
             return t.title()
         return t
 
+    def _press_article_date_key(a: dict) -> str:
+        d = (a.get("date") or "").strip()
+        if d and d != "no date" and len(d) >= 10:
+            return d[:10]
+        return "0000-00-00"
+
     # Build press_groups for template: use snapshot groups if present, else one group per canonical item (backward compat).
     if press_groups_snapshot:
         press_groups = []
@@ -420,6 +426,7 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
                 a = dict(art)
                 a["display_title"] = _press_display_title(a.get("title") or "")
                 articles.append(a)
+            articles.sort(key=_press_article_date_key, reverse=True)
             press_groups.append({
                 "group_title": g.get("group_title") or "News",
                 "one_line_summary": g.get("one_line_summary") or "",

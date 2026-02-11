@@ -12,6 +12,14 @@ USER_AGENT_BROWSER = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/120.0.0.0 Safari/537.36"
 )
+# Chromium args for Docker/Render (no-sandbox, small /dev/shm, no GPU). Safe to use locally too.
+CHROMIUM_LAUNCH_ARGS = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-software-rasterizer",
+    "--disable-setuid-sandbox",
+]
 
 
 @dataclass
@@ -52,7 +60,7 @@ def fetch_url_js(url: str) -> FetchResult:
         raise RuntimeError("playwright is not installed")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=True, args=CHROMIUM_LAUNCH_ARGS)
         page = browser.new_page()
         page.goto(url, wait_until="networkidle", timeout=60000)
         text = page.content()
@@ -106,6 +114,7 @@ def scroll_page_to_exhaust(
     batch_wait_sec: float = 0,
     scroll_by_viewport: bool = False,
     scroll_container_selector: Optional[str] = None,
+    job_count_selector: Optional[str] = None,
 ) -> int:
     """
     Scroll the page (or a scrollable container) to the bottom repeatedly to trigger
@@ -113,6 +122,9 @@ def scroll_page_to_exhaust(
 
     If scroll_container_selector is set, scroll that element instead of the window
     (use when the job list lives in a div with overflow:auto/scroll).
+
+    If job_count_selector is set, uses DOM element count instead of height to detect
+    progress (more reliable for infinite-scroll job lists that load in batches).
     """
     if scroll_container_selector:
         # Scroll a specific container (e.g. WizeHire list in a scrollable div)
@@ -177,7 +189,21 @@ def scroll_page_to_exhaust(
                 "() => { const step = window.innerHeight * 0.85; window.scrollBy(0, step); }"
             )
 
-    prev_height = -1
+    def get_job_count() -> int:
+        if not job_count_selector:
+            return -1
+        try:
+            return page.evaluate(
+                """(sel) => {
+                    const els = document.querySelectorAll(sel);
+                    return els ? els.length : 0;
+                }""",
+                job_count_selector,
+            )
+        except Exception:
+            return -1
+
+    prev_metric = -1  # height or job count
     scrolls = 0
     no_progress = 0
     wait_after_bottom = batch_wait_sec if batch_wait_sec > 0 else scroll_wait_sec
@@ -200,16 +226,19 @@ def scroll_page_to_exhaust(
             break
         scrolls += 1
         try:
-            new_height = get_height()
+            if job_count_selector:
+                new_metric = get_job_count()
+            else:
+                new_metric = get_height()
         except Exception:
             break
-        if new_height == prev_height:
+        if new_metric == prev_metric:
             no_progress += 1
             if no_progress >= no_progress_limit or at_bottom():
                 break
         else:
             no_progress = 0
-        prev_height = new_height
+        prev_metric = new_metric
     return scrolls
 
 
@@ -312,7 +341,7 @@ def fetch_url_js_exhaust(url: str, load_more_options: Dict[str, Any]) -> FetchRe
     post_wait_sec = post_wait_ms / 1000.0
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=True, args=CHROMIUM_LAUNCH_ARGS)
         page = browser.new_page()
         page.goto(url, wait_until="networkidle", timeout=60000)
         if post_wait_sec > 0:
@@ -325,6 +354,7 @@ def fetch_url_js_exhaust(url: str, load_more_options: Dict[str, Any]) -> FetchRe
             batch_wait = load_more_options.get("scroll_batch_wait_sec", 0)
             scroll_by_viewport = load_more_options.get("scroll_by_viewport", False)
             scroll_container = load_more_options.get("scroll_container_selector")
+            job_count_sel = load_more_options.get("scroll_job_count_selector")
             scrolls = scroll_page_to_exhaust(
                 page,
                 max_scrolls=max_scrolls,
@@ -333,6 +363,7 @@ def fetch_url_js_exhaust(url: str, load_more_options: Dict[str, Any]) -> FetchRe
                 batch_wait_sec=batch_wait,
                 scroll_by_viewport=scroll_by_viewport,
                 scroll_container_selector=scroll_container,
+                job_count_selector=job_count_sel,
             )
             print(f"[scroll_exhaust] {url[:60]}... -> {scrolls} scroll(s)")
         clicks = exhaust_list_in_browser(page, load_more_options)

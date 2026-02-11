@@ -172,14 +172,14 @@ def enrich_properties_with_llm(
         system = """You are a data enricher for US real estate/hospitality property lists. Locations will be summarized by state only.
 Given the page text below and a list of properties (index, url, name, market), assign a state to each property using only information from the page text (e.g. cards, addresses, subheadings).
 Output a JSON array with one object per property. Each object must have: "index" (integer), "state" (full US state name only, e.g. "Texas" or "California"—no city in state field), "city" (optional, omit if unknown).
-Use only standard US state names. For anything that does not neatly fit in a specific US state—non-property pages (career site, privacy, legal), unclear location, or non-US—use state "Other". Return only the JSON array, no markdown."""
+Map US regions and cities to the correct state (e.g. Central Oregon → Oregon, Emerald Coast → Florida, Coachella Valley → California). Do NOT put US cities or regions into "Other". Only use "Other" for non-property pages (career site, privacy, legal), non-US, or genuinely unclear. Return only the JSON array, no markdown."""
         user = f"Page text:\n\n{page_text}\n\nProperties (assign state from page text above; use Other if not clearly in a US state):\n" + "\n".join(lines)
     else:
         # Infer from url/name/market only (no page context)
         system = """You are a data enricher for US real estate/hospitality property lists. Locations will be summarized by state only.
 Given a list of properties (index, url, name, market), output a JSON array with one object per property.
 Each object must have: "index" (integer), "state" (US state full name only, e.g. "Texas"—no city), "city" (optional, omit if unknown).
-Use only standard US state names. For anything not clearly in a specific US state (unclear, career site, privacy, non-property URL, etc.) use state "Other". Return only the JSON array, no markdown."""
+Map US regions and cities to the correct state (e.g. Central Oregon → Oregon, Emerald Coast → Florida, Coachella Valley → California). Do NOT put US cities or regions into "Other". Only use "Other" for career site, privacy, non-property URL, non-US, or genuinely unclear. Return only the JSON array, no markdown."""
         user = "Properties:\n" + "\n".join(lines)
 
     try:
@@ -240,17 +240,20 @@ def _bucket_properties_by_state_single_call(
         url = (p.get("url") or "").strip()[:200]
         name = (p.get("name") or "").strip()[:150]
         market = (p.get("market") or "").strip()[:100]
+        region = (p.get("region") or "").strip()[:100]
         url_derived = infer_location_for_property(p)
         details = (p.get("details") or "").strip()[:80]
-        lines.append(
-            f"{i}: name={name!r} url={url!r} market={market!r} url_derived_location={url_derived!r} details={details!r}"
-        )
+        parts = [f"{i}: name={name!r} url={url!r} market={market!r} url_derived_location={url_derived!r}"]
+        if region:
+            parts.append(f"region={region!r}")
+        parts.append(f"details={details!r}")
+        lines.append(" ".join(parts))
 
     system = """You are a data enricher for US real estate/hospitality property lists. Your job is to bucket properties by state.
-Given the full list of properties below (each line: index, name, url, market, url_derived_location, details), assign a US state to each.
+Given the full list of properties below (each line: index, name, url, market, url_derived_location, optional region, details), assign a US state to each.
 - Use full US state names only (e.g. "California", "Texas", "Florida"). No city in the state field.
-- url_derived_location may be a state name, a destination/city name (e.g. "Newport Beach", "Coachella Valley"), or "Unspecified"—use it to infer the correct state when possible.
-- For non-US, career site, privacy, or unclear, use state "Other".
+- Use name, market, region, and url_derived_location to infer state. url_derived_location may be a state name, a destination/city (e.g. "Newport Beach", "Coachella Valley"), or "Unspecified". Map US regions and cities to the correct state (e.g. Central Oregon, Bend → Oregon; Emerald Coast, Destin → Florida; Hudson Valley, Hamptons → New York; Lake Tahoe, Palm Springs → California; Poconos → Pennsylvania).
+- Do NOT put US cities or regions into "Other". Only use "Other" for: non-US, career site, privacy, non-property URLs, or genuinely unclear.
 Return a JSON array with one object per property in the same order: {"index": 0, "state": "California"} (city optional). Return only the JSON array, no markdown."""
 
     user = f"Competitor: {competitor_name}\n\nProperties (assign state from name, url, market, url_derived_location; bucket by state):\n" + "\n".join(lines)
@@ -328,17 +331,20 @@ def assign_states_to_properties_for_dossier(
             url = (p.get("url") or "").strip()[:200]
             name = (p.get("name") or "").strip()[:150]
             market = (p.get("market") or "").strip()[:100]
+            region = (p.get("region") or "").strip()[:100]
             url_derived = infer_location_for_property(p)
             details = (p.get("details") or "").strip()[:80]
-            lines.append(
-                f"{i}: name={name!r} url={url!r} market={market!r} url_derived_location={url_derived!r} details={details!r}"
-            )
+            parts = [f"{i}: name={name!r} url={url!r} market={market!r} url_derived_location={url_derived!r}"]
+            if region:
+                parts.append(f"region={region!r}")
+            parts.append(f"details={details!r}")
+            lines.append(" ".join(parts))
 
         system = """You are assigning a US state to each property for a real estate/hospitality competitor dashboard.
-Given property name, url, market, and url_derived_location (hint from URL parsing), assign the correct state for each.
+Given property name, url, market, optional region, and url_derived_location (hint from URL parsing), assign the correct state for each.
 - Use full US state names only (e.g. "California", "Texas", "Florida"). No city in the state field.
-- url_derived_location may be a state name, a destination/city name (e.g. "Newport Beach", "Coachella Valley"), or "Unspecified"—use it to infer the correct state when possible.
-- For non-US, career site, privacy, or unclear, use state "Other".
+- Use name, market, region, and url_derived_location to infer state. Map US regions and cities to the correct state (e.g. Central Oregon, Bend → Oregon; Emerald Coast, Destin → Florida; Hudson Valley, Hamptons → New York; Lake Tahoe, Palm Springs → California; Poconos → Pennsylvania).
+- Do NOT put US cities or regions into "Other". Only use "Other" for: non-US, career site, privacy, non-property URLs, or genuinely unclear.
 Output a JSON array with one object per line item: {"index": 0, "state": "California", "city": "optional city or omit"}.
 Return only the JSON array, no markdown."""
 
@@ -412,18 +418,21 @@ def research_and_assign_states_for_other_properties(
         name = (p.get("name") or "").strip()[:150]
         url = (p.get("url") or "").strip()[:200]
         market = (p.get("market") or "").strip()[:100]
+        region = (p.get("region") or "").strip()[:100]
         details = (p.get("details") or "").strip()[:150]
-        lines.append(
-            f"{local_i} (orig={orig_i}): name={name!r} url={url!r} market={market!r} details={details!r}"
-        )
+        parts = [f"{local_i} (orig={orig_i}): name={name!r} url={url!r} market={market!r}"]
+        if region:
+            parts.append(f"region={region!r}")
+        parts.append(f"details={details!r}")
+        lines.append(" ".join(parts))
 
-    system = """You are a location researcher for US real estate/hospitality properties. Some properties are tagged "Other" because their location could not be determined from URL or metadata. Your task is to infer the correct US state (or Washington DC) from the property name and any available context.
+    system = """You are a location researcher for US real estate/hospitality properties. Some properties are tagged "Other" because their location could not be determined from URL or metadata. Your task is to infer the correct US state (or Washington DC) from the property name, market, region, url, and any available context.
 
-Use your knowledge of US geography: neighborhood names (e.g. Dupont Circle -> Washington DC, Brooklyn -> New York), city names, landmarks, regions. Property names often include the neighborhood or city (e.g. "Placemakr Dupont Circle" is in Washington DC).
+Use your knowledge of US geography: neighborhood names (e.g. Dupont Circle -> Washington DC, Brooklyn -> New York), city names, landmarks, regions. Property names often include the neighborhood or city. Map US regions to states (e.g. Central Oregon, Bend -> Oregon; Emerald Coast, 30A -> Florida; Hudson Valley, Hamptons -> New York; Lake Tahoe, Coachella Valley -> California; Poconos -> Pennsylvania).
 
 Rules:
 - Use full US state names only (e.g. "California", "New York", "Texas"). For Washington DC use "Washington DC".
-- If you can confidently infer the state from the name or context, assign it. Otherwise keep "Other".
+- If you can confidently infer the state from the name, market, region, or URL path, assign it. Otherwise keep "Other". Do NOT leave as Other when the name or region clearly indicates a US location.
 - Return a JSON array with one object per property: {"index": <local_i>, "state": "StateName", "city": "optional city or omit"}.
 - Only include entries where you inferred a state different from Other.
 Return only the JSON array, no markdown."""
@@ -665,6 +674,76 @@ def _headline_looks_like_wrong_entity(competitor_name: str, title: str, outlet: 
     return False
 
 
+def _headline_looks_like_common_word_or_other_entity(competitor_name: str, title: str, outlet: str = "") -> bool:
+    """True if headline suggests 'lark' as common word (bird, adventure) or unrelated entity (restaurant, school, etc.). Lark-specific."""
+    if (competitor_name or "").strip().lower() not in ("lark", "lark hotels"):
+        return False
+    t = (title or "").lower().strip()
+    o = (outlet or "").lower().strip()
+    # Bird: Rusty Bush Lark, bird sighting, birdguides (title or outlet; "lark" must appear)
+    if "lark" not in t and "lark" not in o:
+        pass  # skip bird checks
+    elif "rusty bush lark" in t or ("rusty" in t and "bush" in t and "lark" in t) or ("lark" in t and "bird" in t) or "birdguides" in t or ("birdguides" in o and "lark" in t):
+        return True
+    # Bird sighting phrasing (e.g. "X seen for first time in N years")
+    if "lark" in t and "seen for first time" in t and ("year" in t or "years" in t):
+        return True
+    # "a lark" = adventure/caper (e.g. opium lark, delightful lark)
+    if " a lark" in t or " lark in " in t or "opium lark" in t or "delightfully dark lark" in t:
+        return True
+    # Unrelated proper names: Little Lark (restaurant), Meadow Lark (school), Lark Creek (shops)
+    if "little lark" in t or "meadow lark" in t or "lark creek" in t:
+        return True
+    # Theater company "The Lark" (not Lark Theater venue)
+    if "the lark takes wing" in t or "the lark review" in t:
+        return True
+    # TV show / entertainment: Lark Rise to Candleford (period drama), etc.
+    if "rise to candleford" in t or "lark rise to candleford" in t:
+        return True
+    return False
+
+
+def _headline_looks_like_tv_or_hobby(competitor_name: str, title: str, outlet: str = "") -> bool:
+    """True if headline is about TV/film/entertainment review or hobbyist/nature (e.g. birding) — not hospitality."""
+    if not title:
+        return False
+    t = (title or "").lower().strip()
+    o = (outlet or "").lower().strip()
+    # TV / film / culture review (e.g. "X review – tender, evocative tribute")
+    if " review" in t or " review –" in t or " review -" in t:
+        if any(w in t for w in ("tender", "evocative", "tribute", "drama", "tv ", "series", "episode")):
+            return True
+    # Lark-specific: TV show "Lark Rise to Candleford"
+    if (competitor_name or "").strip().lower() in ("lark", "lark hotels") and "rise to candleford" in t:
+        return True
+    # Hobbyist / nature: "X seen for first time in N years" (e.g. bird sightings) when company name in title — likely nature/hobby, not hotel
+    name_bits = [w for w in ((competitor_name or "").lower().split()) if len(w) > 1]
+    if name_bits and any(b in t for b in name_bits) and "seen for first time" in t and ("year" in t or "years" in t):
+        # Exclude hotel/hospitality phrasing so we don't drop "Hotel X reopening seen for first time in 10 years"
+        if not any(h in t for h in ("hotel", "hospitality", "reopen", "opening", "property")):
+            return True
+    return False
+
+
+def _headline_looks_like_sports_or_non_hospitality(competitor_name: str, title: str, outlet: str = "") -> bool:
+    """True if headline is about sports/athletics or a non-hotel sibling (e.g. restaurant) — not the hospitality company."""
+    if not title:
+        return False
+    t = (title or "").lower().strip()
+    o = (outlet or "").lower().strip()
+    # Sports: soccer, football, goalkeeper, coach, staff directory (athletics), gopoly, etc.
+    sports_signals = (
+        "goalkeeper", "soccer", "football", "basketball", "women's soccer", "men's soccer",
+        "athletics", "staff directory", "gopoly", "sports staff", "coach - ", " - coach",
+    )
+    if any(s in t for s in sports_signals) or any(s in o for s in ("gopoly", "athletics")):
+        return True
+    # Non-hotel sibling / restaurant: "lark sibling", "slab sandwich", etc. — not hotel press
+    if "lark sibling" in t or "slab sandwich" in t or ("sibling" in t and "sandwich" in t):
+        return True
+    return False
+
+
 def _classify_press_headlines_with_llm(
     competitor_name: str,
     items: List[dict],
@@ -686,19 +765,31 @@ def _classify_press_headlines_with_llm(
         return _classify_press_headlines_fallback(competitor_name, items)
 
     batch = items[:200]
-    # Fetch article body (body-only text from <article>/<main> paragraphs) for classification.
+    # Prefer fetching body for ambiguous headlines (company name present but no clear hospitality signal)
+    # so the LLM can use article content to decide relevance.
+    name_bits = [w for w in (competitor_name or "").lower().split() if len(w) > 1]
+    hospitality_hint = (
+        "hotel", "hotels", "hospitality", "opening", "openings", "opens", "partners", "partnership",
+        "evp", "cfo", "ceo", "appoints", "property", "properties", "mews", "olive", "sonder",
+    )
+    def _headline_ambiguous(it: dict) -> bool:
+        t = (it.get("title") or "").lower()
+        if not name_bits or not any(b in t for b in name_bits):
+            return False
+        return not any(h in t for h in hospitality_hint)
+    fetch_order = sorted(range(len(batch)), key=lambda i: (0 if _headline_ambiguous(batch[i]) else 1, i))
     bodies: List[Optional[str]] = [None] * len(batch)
     fetches_done = 0
-    for i, it in enumerate(batch):
+    for i in fetch_order:
         if fetches_done >= _CLASSIFY_BODY_MAX_FETCHES:
             break
+        it = batch[i]
         url = (it.get("url") or it.get("link") or "").strip()
         if not url or not url.startswith("http"):
             continue
         try:
             html = _fetch_article_html(url, timeout=_CLASSIFY_BODY_FETCH_TIMEOUT)
             if html:
-                # Body-only: paragraphs inside article/main, no header/ads/nav.
                 text = _html_to_article_text(html, max_chars=_CLASSIFY_BODY_MAX_CHARS)
                 if len(text.strip()) > 80:
                     bodies[i] = text.strip()[: _CLASSIFY_BODY_MAX_CHARS]
@@ -722,33 +813,38 @@ def _classify_press_headlines_with_llm(
 
     topics_str = ", ".join(PRESS_TOPICS)
     system = (
-        "Classify news for a hospitality/real estate company. Use body when provided, else title+outlet+url.\n"
+        "You classify news items for a hospitality/real estate COMPANY. "
+        "Your job is to decide: is this article ABOUT that company (relevant) or not (irrelevant)?\n\n"
+        "RELEVANT = The article is primarily about the TARGET COMPANY as a business: "
+        "its hotels, properties, openings, partnerships (e.g. Mews, olive), exec appointments (EVP, CFO), "
+        "press releases from the company, or hospitality/real-estate moves by that company. "
+        "When body text is provided, read it: if it clearly describes this company's hotels, openings, or leadership, mark relevant.\n\n"
+        "IRRELEVANT = The article is NOT about the target company. Set topic=irrelevant and is_about_company=false when:\n"
+        "(1) Wrong entity: A different person, place, or business that happens to share the name "
+        "(e.g. LARK Toys, Tessa Lark violinist, Lark Health/digital healthcare, Lark Theater, Lark Street corridor, Lark Davis crypto, LARK Distilling, Landmark Bancorp, obituaries).\n"
+        "(2) Common word 'lark': The word appears as the bird (e.g. Rusty Bush Lark, bird sightings), "
+        "or as the phrase 'a lark' meaning a fun adventure/caper (e.g. 'opium lark', 'a delightful lark'), "
+        "or as part of an unrelated business/place name (e.g. Little Lark restaurant, Meadow Lark school, The Lark theater company, Lark Creek shops).\n"
+        "(3) TV shows, film/theater reviews, hobbyists (e.g. birding, nature sightings), entertainment, or general culture — set irrelevant. Not hotel/hospitality.\n"
+        "(4) Headline mentions the name but the ARTICLE BODY is about something else. When body: is present, use it as the main signal: "
+        "if the body clearly describes a bird, a person, a school, a restaurant, a theater company, TV/film, hobbyist activity, or any non-hospitality subject, set irrelevant even if the headline is ambiguous.\n\n"
         f"Topics: {topics_str}\n\n"
-        "STEP 1 — Wrong entity? → topic=irrelevant, is_about_company=false. Skip Step 2.\n"
-        "Wrong entity = same-name person/place/other industry, OR article primarily about non-real-estate: music, artistry, theater, healthcare, etc. "
-        "If it reads like music/concerto/symphony, theater/arts venue, or healthcare/digital health (not hotels), set irrelevant—e.g. a city name in a music headline is not a hotel opening; "
-        "'Partners with Lark to Drive Digital Healthcare' is Lark Health, not Lark Hotels.\n"
-        "Wrong entity examples: theater (Lark Theater's artistic director), Lark: Tessa Lark/violin/symphony/symphony.org, Lark+healthcare/BIG CARiNG (Lark Health), Lark Davis, Lark Street, LARK Toys, obituaries, birds, LARK Distilling, Landmark Bancorp.\n"
-        "EXCEPTION: Exec hire (company appoints EVP/CFO/Executive Vice President) is NOT wrong entity → topic=other_business, is_about_company=true. "
-        "E.g. 'Lark appoints new EVP of commercial strategy' and 'Lark Appoints Lynsey Kreitzer as EVP' = same story, both other_business.\n\n"
-        "STEP 2 — Else assign one topic:\n"
-        "new_hotel_opening: opening/debut/expanding properties, takeover (e.g. Lark to take over Sonder), reopening. Not violin/symphony.\n"
-        "new_partnership: partnership/deal (hospitality). Not Lark+healthcare.\n"
-        "fundraising / restructuring_or_layoffs / executive_interview / promo_or_brand_marketing: standard meanings. "
-        "Appoints+EVP/CFO/commercial strategy = other_business, never restructuring_or_layoffs.\n"
+        "STEP 1 — Is this article about the target company? If NO → topic=irrelevant, is_about_company=false. Skip Step 2.\n"
+        "If YES (article is about the hospitality company's hotels, openings, partnerships, exec hires, or press), go to Step 2.\n"
+        "EXCEPTION: 'Company appoints EVP/CFO/Executive Vice President' is about the company → topic=other_business, is_about_company=true.\n\n"
+        "STEP 2 — Assign one topic: new_hotel_opening, new_partnership, fundraising, restructuring_or_layoffs, executive_interview, promo_or_brand_marketing, or other_business.\n"
         "other_business: exec appointments, key hires, strategy. Guides/roundups/listicles = promo_or_brand_marketing.\n\n"
-        "If the article is clearly about real estate, hotels, hospitality, or short-term rental, treat as relevant (do not set topic=irrelevant). "
-        "This includes when the target company is not named—e.g. hotel, furnished apartment, apartment collection, hotel conversion are industry-relevant. "
-        "Mentioning only a city or location (no business context) does NOT make it relevant—must be about the business (property, opening, partnership, conversion, etc.).\n\n"
         "Output: JSON array of objects with index (int), is_about_company (bool), topic (string), is_promo (bool). One per line."
     )
-    # When competitor is Lark, reinforce wrong-entity examples so headline-only classification is more accurate.
     company_note = f"Target company: {competitor_name}."
     if (competitor_name or "").strip().lower() in ("lark", "lark hotels"):
         company_note = (
-            "Target: Lark (Lark Hotels / Lark Hospitality). "
-            "Irrelevant: Tessa Lark, symphony, symphony.org, Lark+healthcare/BIG CARiNG, Lark Theater. "
-            "Not irrelevant: Lark appoints EVP / Lark Appoints [Name] as EVP → other_business. Relevant: take over property, openings, Mews/olive."
+            "Target company: Lark (Lark Hotels / Lark Hospitality) — the hotel/hospitality company only.\n"
+            "IRRELEVANT (set topic=irrelevant): LARK Toys, Tessa Lark/violin/symphony, Lark Health/BIG CARiNG, Lark Theater, Lark Street BID, Lark Davis crypto, LARK Distilling, Landmark Bancorp; "
+            "birds (Rusty Bush Lark, bird sightings), hobbyists/nature; TV shows (e.g. Lark Rise to Candleford), film/theater reviews, entertainment; "
+            "'a lark' = adventure (e.g. opium lark); Little Lark restaurant, Meadow Lark school, The Lark theater company, Lark Creek; obituaries; "
+            "any article whose body is about a different subject.\n"
+            "RELEVANT: Lark Hotels openings, Lark Hospitality, Lark partners with Mews/olive, Lark appoints EVP/CFO, take over property, press releases about Lark hotels."
         )
     user = (
         f"{company_note}\n\n"
@@ -771,15 +867,33 @@ def _classify_press_headlines_with_llm(
             return _classify_press_headlines_fallback(competitor_name, items)
         by_index = {int(item["index"]): item for item in data if isinstance(item, dict) and "index" in item}
         result: List[dict] = []
+        _topic_lower_to_canonical = {t.lower(): t for t in PRESS_TOPICS}
         for i, it in enumerate(items):
             out = dict(it)
             meta = by_index.get(i) or {}
             out["is_about_company"] = bool(meta.get("is_about_company"))
-            topic = (meta.get("topic") or "").strip()
-            out["topic"] = topic if topic in PRESS_TOPICS else "other_business"
+            topic_raw = (meta.get("topic") or "").strip()
+            # Normalize LLM topic case so "Irrelevant" / "irrelevant" both map to canonical "irrelevant"
+            out["topic"] = _topic_lower_to_canonical.get(topic_raw.lower(), "other_business")
             out["is_promo"] = bool(meta.get("is_promo"))
             # Override: wrong-entity (music, healthcare, theater) → irrelevant
             if _headline_looks_like_wrong_entity(competitor_name, out.get("title") or "", out.get("outlet") or out.get("source") or ""):
+                out["is_about_company"] = False
+                out["topic"] = "irrelevant"
+            # Override: explicit bird headline (Rusty Bush Lark) — Lark-specific
+            elif (competitor_name or "").strip().lower() in ("lark", "lark hotels") and "rusty bush lark" in ((out.get("title") or "") + " " + (out.get("outlet") or "") + " " + (out.get("source") or "")).lower():
+                out["is_about_company"] = False
+                out["topic"] = "irrelevant"
+            # Override: common-word/other entity (bird, "a lark", Little Lark restaurant, Meadow Lark, etc.) → irrelevant
+            elif _headline_looks_like_common_word_or_other_entity(competitor_name, out.get("title") or "", out.get("outlet") or out.get("source") or ""):
+                out["is_about_company"] = False
+                out["topic"] = "irrelevant"
+            # Override: sports/athletics or non-hotel sibling (e.g. restaurant) → irrelevant
+            elif _headline_looks_like_sports_or_non_hospitality(competitor_name, out.get("title") or "", out.get("outlet") or out.get("source") or ""):
+                out["is_about_company"] = False
+                out["topic"] = "irrelevant"
+            # Override: TV/film review or hobbyist/nature (e.g. bird sighting) → irrelevant
+            elif _headline_looks_like_tv_or_hobby(competitor_name, out.get("title") or "", out.get("outlet") or out.get("source") or ""):
                 out["is_about_company"] = False
                 out["topic"] = "irrelevant"
             # Override: exec appointment headlines → always other_business
@@ -871,6 +985,18 @@ def _classify_press_headlines_fallback(competitor_name: str, items: List[dict]) 
         if _headline_looks_like_wrong_entity(competitor_name, it.get("title") or "", it.get("outlet") or it.get("source") or ""):
             is_about = False
             topic = "irrelevant"
+        # Override: common-word/other entity (bird, "a lark", Little Lark, Meadow Lark, etc.) → irrelevant
+        elif _headline_looks_like_common_word_or_other_entity(competitor_name, it.get("title") or "", it.get("outlet") or it.get("source") or ""):
+            is_about = False
+            topic = "irrelevant"
+        # Override: sports/athletics or non-hotel sibling (e.g. restaurant) → irrelevant
+        elif _headline_looks_like_sports_or_non_hospitality(competitor_name, it.get("title") or "", it.get("outlet") or it.get("source") or ""):
+            is_about = False
+            topic = "irrelevant"
+        # Override: TV/film review or hobbyist/nature (e.g. bird sighting) → irrelevant
+        elif _headline_looks_like_tv_or_hobby(competitor_name, it.get("title") or "", it.get("outlet") or it.get("source") or ""):
+            is_about = False
+            topic = "irrelevant"
         # Override: exec appointment headline → always about company, other_business (never irrelevant or restructuring)
         elif _headline_looks_like_exec_appointment(competitor_name, it.get("title") or ""):
             is_about = True
@@ -905,6 +1031,8 @@ def _group_press_into_clusters_llm(competitor_name: str, items: List[dict]) -> L
         return []
     client = _openai_client()
     if not client:
+        print(f"[press] Group LLM: no API client, using single group for {len(items)} items", file=sys.stderr)
+        sys.stderr.flush()
         return _fallback_single_group(items)
 
     def _date_str(it: dict) -> str:
@@ -932,21 +1060,25 @@ def _group_press_into_clusters_llm(competitor_name: str, items: List[dict]) -> L
         lines.append(f"{i}: {date_s} | {outlet} | {title}")
 
     system = (
-        "You group press articles about a single company by similarity: same story, same topic, or related coverage. "
-        "Input: N items (index 0 to N-1). Each line is INDEX | DATE | OUTLET | TITLE.\n\n"
+        "You are given the full list of filtered press articles. Read every article TITLE and group them by the same story or event.\n\n"
+        "Input: N items (index 0 to N-1). Each line is INDEX | DATE | OUTLET | TITLE. Use only what you see in the TITLEs to decide grouping—same partnership, same hire, same opening = one group.\n\n"
+        "Your job: put articles that cover the SAME story into one group. Each group gets a short headline (group_title) and optional one-line summary. Examples of group_title style:\n"
+        "- Partnership/launch: \"Placemakr and Hilton launch partnership\" or \"Hilton and Placemakr launch Apartment Collection\"\n"
+        "- Executive hire: \"Placemakr hires new EVP [person name]\" when titles mention a specific hire\n"
+        "- Other: one clear headline that describes the story (e.g. \"New property opening in Phoenix\").\n\n"
         "Return a JSON object with one key: \"groups\". Value is an array of objects, each with:\n"
-        "  \"group_title\": short title for the cluster (e.g. \"Four new hotel openings in 2026\"),\n"
-        "  \"one_line_summary\": one sentence summarizing the group based on the article titles,\n"
-        "  \"article_indices\": array of 0-based indices of items in this group (each index 0..N-1 must appear in exactly one group).\n\n"
-        "Do NOT drop any item. Every index from 0 to N-1 must appear in exactly one article_indices array. "
-        "Group articles that cover the same event, same topic, or very similar news (e.g. same partnership, same openings). "
-        "Single articles that do not match others can form a group of one. Use title, date, and general topic to decide."
+        "  \"group_title\": short headline for this story (see examples above),\n"
+        "  \"one_line_summary\": one sentence summarizing the story based on the titles,\n"
+        "  \"article_indices\": array of 0-based indices of items in this group.\n\n"
+        "Rules: (1) Every index 0 to N-1 must appear in exactly one article_indices array. Do not drop any item. "
+        "(2) Group by story using only the article titles: same event/deal/hire/opening = same group; unrelated = separate groups (or group of one). "
+        "Return only valid JSON, no markdown or extra text."
     )
     user = (
         f"Target company: {competitor_name}.\n\n"
-        "Items (each line: INDEX | DATE | OUTLET | TITLE). Assign every index to exactly one group. Return JSON with \"groups\" array.\n\n"
+        "Below are ALL filtered articles (each line: INDEX | DATE | OUTLET | TITLE). Read every title and group by same story. Assign every index to exactly one group. Return JSON with \"groups\" array.\n\n"
         + "\n".join(lines)
-        + '\n\nReturn only valid JSON, e.g. {"groups": [{"group_title": "...", "one_line_summary": "...", "article_indices": [0,1]}, ...]}.'
+        + '\n\nReturn only valid JSON: {"groups": [{"group_title": "...", "one_line_summary": "...", "article_indices": [0,1]}, ...]}'
     )
 
     def _parse_group_response(content: str, n_items: int) -> Optional[List[dict]]:
@@ -955,6 +1087,13 @@ def _group_press_into_clusters_llm(competitor_name: str, items: List[dict]) -> L
         text = content.strip()
         if "```" in text:
             text = re.sub(r"^```\w*\n?", "", text).rstrip("`\n")
+        # If there is leading/trailing text, try to extract a JSON object
+        if not (text.startswith("{") and text.strip().endswith("}")):
+            match = re.search(r"\{[\s\S]*\"groups\"[\s\S]*\}", text)
+            if match:
+                text = match.group(0)
+        # Fix common LLM JSON mistakes: trailing commas before ] or }
+        text = re.sub(r",\s*([}\]])", r"\1", text)
         try:
             data = json.loads(text)
             groups_raw = data.get("groups") if isinstance(data, dict) else None
@@ -994,6 +1133,8 @@ def _group_press_into_clusters_llm(competitor_name: str, items: List[dict]) -> L
             return None
 
     try:
+        print(f"[press] Group LLM: calling API for {len(items)} items", file=sys.stderr)
+        sys.stderr.flush()
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -1002,23 +1143,37 @@ def _group_press_into_clusters_llm(competitor_name: str, items: List[dict]) -> L
         )
         content = (resp.choices[0].message.content or "").strip()
         if not content:
+            print(f"[press] Group LLM: empty response, using single group for {len(items)} items", file=sys.stderr)
+            sys.stderr.flush()
             return _fallback_single_group(items)
         parsed = _parse_group_response(content, len(items))
         if not parsed:
-            print(f"[press] Group LLM: could not parse response, using single group for {len(items)} items", file=sys.stderr)
+            snippet = (content[:500] + "..." if len(content) > 500 else content)
+            print(f"[press] Group LLM: could not parse response, using single group for {len(items)} items. Response snippet: {snippet!r}", file=sys.stderr)
+            sys.stderr.flush()
             return _fallback_single_group(items)
+        def _article_date_sort_key(art: dict) -> str:
+            d = (art.get("date") or "").strip()
+            if d and d != "no date" and len(d) >= 10:
+                return d[:10]
+            return "0000-00-00"
+
         out = []
         for g in parsed:
             arts = [items[i] for i in g["article_indices"]]
+            group_articles = [_to_article(it) for it in arts]
+            group_articles.sort(key=_article_date_sort_key, reverse=True)
             out.append({
                 "group_title": g["group_title"],
                 "one_line_summary": g["one_line_summary"],
-                "articles": [_to_article(it) for it in arts],
+                "articles": group_articles,
             })
         print(f"[press] Group LLM: {len(items)} items -> {len(out)} groups", file=sys.stderr)
+        sys.stderr.flush()
         return out
     except Exception as e:
         print(f"[press] Group LLM error: {e}", file=sys.stderr)
+        sys.stderr.flush()
         return _fallback_single_group(items)
 
 
@@ -1032,19 +1187,17 @@ def _fallback_single_group(items: List[dict]) -> List[dict]:
             return raw.strftime("%Y-%m-%d")
         s = (raw if isinstance(raw, str) else str(raw)).strip()
         return s[:10] if len(s) >= 10 else (s or "no date")
-    return [{
-        "group_title": "Press coverage",
-        "one_line_summary": "",
-        "articles": [
-            {
-                "title": (it.get("title") or "").strip() or "—",
-                "url": (it.get("url") or it.get("link") or "").strip(),
-                "date": _date_str(it),
-                "outlet": _press_outlet_from_item(it),
-            }
-            for it in items
-        ],
-    }]
+    articles = [
+        {
+            "title": (it.get("title") or "").strip() or "—",
+            "url": (it.get("url") or it.get("link") or "").strip(),
+            "date": _date_str(it),
+            "outlet": _press_outlet_from_item(it),
+        }
+        for it in items
+    ]
+    articles.sort(key=lambda a: (a.get("date") or "0000-00-00")[:10] if (a.get("date") or "").strip() and (a.get("date") or "").strip() != "no date" else "0000-00-00", reverse=True)
+    return [{"group_title": "Press coverage", "one_line_summary": "", "articles": articles}]
 
 
 # Phrases that often indicate a JS/consent/ad wall instead of article content.
@@ -1143,6 +1296,106 @@ def _normalize_domain(host: str) -> str:
     if h.startswith("www."):
         h = h[4:]
     return h
+
+
+def get_press_classification_for_inspection(
+    competitor_name: str,
+    items: List[dict],
+    company_domains: Optional[List[str]] = None,
+) -> List[dict]:
+    """
+    Classify press items and return each with topic, is_about_company, is_promo,
+    and _included (bool), _drop_reason (str or None). Use for local inspection/debug
+    to see full list and what is marked irrelevant or not. Does not run grouping.
+    """
+    if not items:
+        return []
+    if company_domains:
+        import urllib.parse
+        allowed_domains = {_normalize_domain(d) for d in company_domains if d}
+        filtered_items: List[dict] = []
+        for it in items:
+            provider = (it.get("provider") or "").strip().lower()
+            if provider == "press_endpoint":
+                filtered_items.append(it)
+                continue
+            url = (it.get("url") or it.get("link") or "").strip()
+            if not url:
+                filtered_items.append(it)
+                continue
+            try:
+                parsed = urllib.parse.urlparse(url)
+                host = (parsed.netloc or "").strip()
+                if not host or _normalize_domain(host) not in allowed_domains:
+                    filtered_items.append(it)
+                # else drop: on company domain
+            except Exception:
+                filtered_items.append(it)
+        items = filtered_items
+        if not items:
+            return []
+
+    classified = _classify_press_headlines_with_llm(competitor_name, items)
+
+    import re as _re
+    name_slug = _re.sub(r"[^a-z0-9]", "", (competitor_name or "").lower())
+
+    def _looks_like_own_marketing_page(url: str) -> bool:
+        u = (url or "").lower()
+        if not u or not name_slug or name_slug not in u:
+            return False
+        fragments = (
+            "/blog", "/blogs/", "/category", "/categories/", "/destinations", "/destination/",
+            "/itinerary", "/itineraries/", "/guide", "/guides/", "/owner", "/owners/", "/invest", "/awards",
+        )
+        return any(f in u for f in fragments)
+
+    def _looks_like_guide_title(title: str) -> bool:
+        t = (title or "").lower()
+        if not t:
+            return False
+        kw = (
+            "guide", "checklist", "how to ", "how-to ", "itinerary", "roundup", "review roundup",
+            "what ", "need to know", "roi ", "valuation", "worth?", "alternatives", "vs ", "best ",
+        )
+        return any(k in t for k in kw)
+
+    for it in classified:
+        url = (it.get("url") or it.get("link") or "").strip()
+        title = (it.get("title") or "").strip()
+        if _looks_like_own_marketing_page(url):
+            it["is_promo"] = True
+            it["topic"] = "promo_or_brand_marketing"
+            it["is_about_company"] = False
+        elif _looks_like_guide_title(title):
+            it["is_promo"] = True
+            it["topic"] = "promo_or_brand_marketing"
+            it["is_about_company"] = False
+
+    result: List[dict] = []
+    for it in classified:
+        out = dict(it)
+        provider = (out.get("provider") or "").strip().lower()
+        topic = (out.get("topic") or "").strip().lower()
+        drop_reason: Optional[str] = None
+        if provider == "prnewswire":
+            pass
+        elif provider == "google_news":
+            if topic == "irrelevant":
+                drop_reason = "irrelevant"
+            elif topic == "promo_or_brand_marketing":
+                drop_reason = "promo"
+        else:
+            if topic == "irrelevant":
+                drop_reason = "irrelevant"
+            elif out.get("is_promo") and topic == "promo_or_brand_marketing":
+                drop_reason = "promo"
+            elif not out.get("is_about_company"):
+                drop_reason = "not_about_company"
+        out["_included"] = drop_reason is None
+        out["_drop_reason"] = drop_reason
+        result.append(out)
+    return result
 
 
 def enrich_press_items_with_llm(
@@ -1309,9 +1562,8 @@ def enrich_press_items_with_llm(
             filtered.append(it)
             continue
         if provider == "google_news":
-            # Only drop clearly irrelevant; allow through so external coverage shows in dossier.
             topic = (it.get("topic") or "").strip().lower()
-            if topic in {"irrelevant"}:
+            if topic in {"irrelevant", "promo_or_brand_marketing"}:
                 continue
             filtered.append(it)
             continue
@@ -1358,10 +1610,12 @@ def enrich_press_items_with_llm(
     if rest:
         press_groups = _group_press_into_clusters_llm(competitor_name, rest)
     if pr_items:
+        pr_articles = [_item_to_article(it) for it in pr_items]
+        pr_articles.sort(key=lambda a: (a.get("date") or "0000-00-00")[:10] if (a.get("date") or "").strip() and (a.get("date") or "").strip() != "no date" else "0000-00-00", reverse=True)
         press_groups.append({
             "group_title": "Press releases",
             "one_line_summary": "Company press releases.",
-            "articles": [_item_to_article(it) for it in pr_items],
+            "articles": pr_articles,
         })
 
     print(

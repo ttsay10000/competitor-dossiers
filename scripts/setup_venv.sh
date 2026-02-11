@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create .venv and install dependencies so you can run Python scripts (e.g. final output).
+# Create .venv and install dependencies so you can run the app and CLI.
 # Run once from repo root:  ./scripts/setup_venv.sh
 
 set -e
@@ -16,4 +16,4 @@ echo "Creating .venv and installing requirements..."
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 echo "Done. Activate with:  source .venv/bin/activate"
-echo "Or run final output:  ./scripts/run_final_output.sh --local"
+echo "Or run the app:  ./scripts/run.sh serve"

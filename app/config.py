@@ -18,9 +18,12 @@ class Settings:
         if url and ("postgresql://" in url or "postgresql+psycopg://" in url) and not url.startswith("postgresql+psycopg://"):
             url = url.replace("postgresql://", "postgresql+psycopg://", 1)
         self.database_url = url
-        self.playwright_enabled = os.getenv("PLAYWRIGHT_ENABLED", "true").lower() in {"1", "true", "yes"}
+        # Treat unset or empty as enabled (Dockerfile sets ENV PLAYWRIGHT_ENABLED=true). Only "0"/"false"/"no" disable.
+        _pw = (os.getenv("PLAYWRIGHT_ENABLED") or "true").strip().lower()
+        self.playwright_enabled = _pw not in ("0", "false", "no")
         # OpenAI: set OPENAI_API_KEY in env (or .env). Used by executive summary, location cleanup, press summarization, asset LLM extraction.
-        self.openai_api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+        raw = (os.getenv("OPENAI_API_KEY") or "").strip().strip('"\'')
+        self.openai_api_key = raw.replace("\n", "").replace("\r", "").strip()
         self.version = os.getenv("APP_VERSION", "0.1.0")
         # Press: only user endpoints + PR Newswire + Google News (90d). BI / Yahoo / CNBC disabled for now.
         self.press_enable_business_insider = os.getenv("PRESS_ENABLE_BUSINESS_INSIDER", "false").lower() in {"1", "true", "yes"}

@@ -290,7 +290,7 @@ def infer_location_for_property(prop: dict) -> str:
             return f"{state} - {city}"
         return state
 
-    loc = (prop.get("market") or prop.get("location") or "").strip()
+    loc = (prop.get("market") or prop.get("location") or prop.get("region") or "").strip()
     if loc:
         return loc
 

@@ -45,6 +45,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    from .config import settings
+    print(f"[cli] PLAYWRIGHT_ENABLED={getattr(settings, 'playwright_enabled', False)}", flush=True)
+
     if not args.local:
         try:
             check_db_connection()

@@ -396,6 +396,7 @@ def collect_talent_snapshot(source_url: str) -> dict[str, Any]:
                     "scroll_wait_sec": 1.0,
                     "scroll_batch_wait_sec": 4.0,
                     "scroll_no_progress_limit": 5,
+                    "scroll_job_count_selector": 'div[class*="jss83"]',
                     "post_load_wait_ms": 3000,
                 }
                 fetched = fetch_url_js_exhaust(source_url, scroll_options)

@@ -156,16 +156,8 @@ pip install -r requirements.txt
 
 The app uses the **psycopg** (PostgreSQL) driver; it’s listed as `psycopg[binary]>=3.2` in `requirements.txt`. If you see `ModuleNotFoundError: No module named 'psycopg'`, you’re running the script in an environment where those deps aren’t installed—use the project’s virtualenv or run `pip install -r requirements.txt` in the environment you use.
 
-Then from repo root (with `.env` containing `DATABASE_URL`):
+To inspect payload and classification, see `app/llm_structured.py` (`enrich_jobs_with_llm`, talent prompt building) and `app/rules/talent_rules.py` (rule-based bucketing).
 
-```bash
-python scripts/debug_talent_llm_input.py [competitor_name]
-```
+The exact payload sent to the LLM (“Jobs:” + lines), rule-based classification counts, and (if `OPENAI_API_KEY` is set) post-enrichment counts and which jobs stayed in “Other”.
 
-This prints the **exact payload** sent to the LLM (“Jobs:” + lines), rule-based classification counts, and (if `OPENAI_API_KEY` is set) post-enrichment counts and which jobs stayed in “Other”.
 
-For a short sample of job dicts and the LLM user message only:
-
-```bash
-python scripts/sample_jobs_llm_payload.py [competitor_name]
-```

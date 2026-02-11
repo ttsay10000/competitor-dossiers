@@ -325,38 +325,39 @@ def clean_location_display_for_dossier(
             return f"{loc}: {count} ({keys} keys)"
         return f"{loc}: {count}"
 
-    # Send enough rows so large portfolios (e.g. AvantStay 2300+ properties across many cities) are fully represented.
-    max_location_rows = 150
-    raw_total = sum(r.get("count", 0) for r in properties_by_location)
-    counts_text = "; ".join(_loc_count_keys(r) for r in properties_by_location[:max_location_rows])
+    # Send the full summarized list (location bullets with count and keys) so the LLM can map every row.
+    # Cap at 2000 rows to stay within context; typically this is the full list.
+    max_location_rows = 2000
+    rows_sent = properties_by_location[:max_location_rows]
+    raw_total = sum(r.get("count", 0) for r in rows_sent)
+    raw_keys_total = sum(r.get("keys", 0) for r in rows_sent)
+    counts_text = "; ".join(_loc_count_keys(r) for r in rows_sent)
     deltas_text = "; ".join(f"{r['location']}: +{r['added']}/−{r['removed']}" for r in asset_delta_by_city[:25])
     if not counts_text and not deltas_text and not other_sub_bullets_text:
         return None
 
     system = """You are organizing property location data for a real estate/hospitality competitor dashboard.
 
-OUTPUT RULE: The output must show ONLY US state names (and at most one "Other" row). No regions, areas, or city names may appear in the output—every "location" in your response must be a single state (e.g. "California", "Texas") or "Other".
+INPUT: You receive the full summarized list of "Current counts by location (raw)" — each bullet is "Location: N" or "Location: N (K keys)". Map as many as you can to a US state; when you cannot confidently assign a location to a state, keep the original location label in your output (do not put it in Other).
 
-YOUR TWO TASKS:
-1. Map every input row to exactly one US state. Search each city, region, or area and assign it to the correct state. If a region spans multiple states (e.g. Lake Tahoe = CA/NV, Poconos = PA/NJ, Four Corners), pick the single state that is closest or most representative and assign the whole count to that state. Consolidate so the output has one row per state (plus at most one "Other" row).
-2. When you combine multiple input bullets into one state row, ADD the numbers: the output "count" for that state must be the sum of the "count" values from every input row you assigned to that state; the output "keys" for that state must be the sum of the "keys" values from those same rows. Do not drop or invent numbers.
+OUTPUT:
+- Prefer one row per US state (and at most one "Other" row for truly unclear/non-US/career/privacy).
+- If you cannot select a state for a location, output a row with the same location label and the same count and keys — keep the region that was there before.
+- When you merge multiple input bullets into one state row, ADD both numbers: "count" = sum of all counts you merged; "keys" = sum of all keys you merged. Property counts and key counts must both be summed when merging.
 
-Input you receive:
-1. "Current counts by location (raw)" — a semicolon-separated list of "Location: N" or "Location: N (K keys)". Locations may be state names, city names, or region/area names (e.g. Temecula, Newport Beach, Central Oregon, Emerald Coast, Lake Tahoe). Your job is to map every one to a single state and sum the numbers when you merge.
-2. Optionally "Other sub-bullets": lines with URLs. Use the URL path (e.g. temecula, central-oregon) to infer US state and add 1 property to that state for each line (unless genuinely unclear, then "Other").
-
-Rules:
-- Every input bullet must be assigned to exactly one state (or Other). No output row may be a region or area—only state names. Examples: Temecula, Paso Robles, Lake Arrowhead, Newport Beach, Coachella Valley, Palm Springs, Joshua Tree, Lake Tahoe, Malibu, Sonoma, Big Bear, San Diego → California. Central Oregon, Bend, Sunriver, Oregon Coast → Oregon. Hudson Valley, Hamptons, Catskills, Berkshires → New York. Austin, Hill Country, South Padre Island, Corpus Christi, Port Aransas → Texas. Coastal Charleston → South Carolina. Emerald Coast 30A, Key West, Fort Lauderdale, St Augustine, Marco Island, Fort Myers, Orlando, Pensacola, Destin → Florida. Poconos → Pennsylvania. Lake Norman → North Carolina. Whidbey Island → Washington. Use full US state names only.
-- For regions that span multiple states, choose the one state that is closest or most representative (e.g. Lake Tahoe → California; Poconos → Pennsylvania) and assign the full count to that state.
+RULES:
+- Map city/region names to state when you know them (e.g. Temecula, Coachella Valley, Newport Beach → California; Central Oregon, Bend → Oregon; Emerald Coast, Destin → Florida; Hudson Valley, Hamptons → New York; Poconos → Pennsylvania). Use full US state names only.
+- For regions that span multiple states, pick the single state that is closest or most representative (e.g. Lake Tahoe → California; Poconos → Pennsylvania).
 - Do NOT put US cities or regions into "Other". Only use "Other" for: Unspecified, career site, privacy, non-property URLs, or genuinely non-US/unclear.
-- When combining bullets into one state row: output "count" = sum of counts; output "keys" = sum of keys. The grand total of all output "count" values MUST equal the total property count in the user message.
+- If you are unsure about a location, keep it as its own row with the original location label and its count and keys unchanged.
+- Grand total of output "count" MUST equal the total property count in the user message. Sum "keys" correctly when merging.
 - For asset_delta_by_city: one row per state; "added" and "removed" are the sums of deltas you merged into that state.
 
 Return JSON only, no markdown: {"properties_by_location": [{"location": "...", "count": n, "keys": k}, ...], "asset_delta_by_city": [{"location": "...", "added": a, "removed": r}, ...]}.
-Each "location" in properties_by_location must be a US state name or "Other". Include "keys" (number, 0 if not provided). List states first (e.g. California, Colorado, Florida, ...), then "Other" last if needed."""
+Include "keys" (number, 0 if not provided) on every properties_by_location row. List states first, then any unchanged region labels, then "Other" last if needed."""
 
-    num_bullets = len(properties_by_location[:max_location_rows])
-    user = f"Competitor: {competitor_name}\n\nTotal property count (your output counts MUST sum to this): {raw_total}\nThere are {num_bullets} location bullets below; assign every one to a state and ensure the sum of your state counts equals {raw_total}.\n\nCurrent counts by location (raw):\n{counts_text or 'none'}\n\nChanges by location (raw):\n{deltas_text or 'none'}"
+    num_bullets = len(rows_sent)
+    user = f"Competitor: {competitor_name}\n\nTotal property count (your output counts MUST sum to this): {raw_total}\nTotal keys (sum of keys when merging): {raw_keys_total}\nThere are {num_bullets} location bullets below; assign every one to a state (or keep the original location if unsure) and ensure the sum of your output counts equals {raw_total}. When merging rows into one state, add both count and keys.\n\nCurrent counts by location (raw):\n{counts_text or 'none'}\n\nChanges by location (raw):\n{deltas_text or 'none'}"
     if other_sub_bullets_text and other_sub_bullets_text.strip():
         user += f"\n\nOther sub-bullets (use URL path to assign state when possible, then merge counts):\n{other_sub_bullets_text.strip()}"
 
@@ -413,18 +414,28 @@ Each "location" in properties_by_location must be a US state name or "Other". In
             for r in counts
             if isinstance(r, dict) and r.get("location") is not None
         ]
-        # Normalize: if LLM returned any region/area name instead of a state, map to state and re-aggregate so output is states only.
-        by_state: Dict[str, Dict[str, Any]] = {}
+        # Sum by exact location label from LLM (same label may appear multiple times). Keep original
+        # region labels when LLM could not map to a state — do not force them to "Other".
+        by_loc: Dict[str, Dict[str, Any]] = {}
         for r in counts:
-            loc = r.get("location", "")
-            state = _location_to_state_extended(loc) if loc not in _US_STATES and (loc or "").strip() != "Other" else (loc or "").strip()
+            loc = (r.get("location") or "").strip()
+            if not loc:
+                continue
             cnt = r.get("count", 0)
             keys = r.get("keys", 0)
-            if state not in by_state:
-                by_state[state] = {"location": state, "count": 0, "keys": 0}
-            by_state[state]["count"] += cnt
-            by_state[state]["keys"] += keys
-        counts = sorted(by_state.values(), key=lambda x: (1 if (x.get("location") or "").strip() == "Other" else 0, -x["count"], x["location"]))
+            if loc not in by_loc:
+                by_loc[loc] = {"location": loc, "count": 0, "keys": 0}
+            by_loc[loc]["count"] += cnt
+            by_loc[loc]["keys"] += keys
+        # Sort: US states first (by count desc), then "Other", then any other labels (unchanged regions).
+        def _sort_key(x: Dict[str, Any]) -> tuple:
+            loc = (x.get("location") or "").strip()
+            if loc in _US_STATES:
+                return (0, -x.get("count", 0), loc)
+            if loc == "Other":
+                return (1, -x.get("count", 0), loc)
+            return (2, -x.get("count", 0), loc)
+        counts = sorted(by_loc.values(), key=_sort_key)
         cleaned_total = sum(r.get("count", 0) for r in counts)
         location_totals_match = raw_total == cleaned_total
         # If LLM collapsed everything into a single "Other" or returned far fewer properties than raw, keep raw breakdown.
@@ -438,7 +449,7 @@ Each "location" in properties_by_location must be a US state name or "Other". In
         # If raw input had state names but LLM returned only a single "Other" row, reject (useless).
         raw_has_state = any(
             (r.get("location") or "").strip() in _US_STATES
-            for r in properties_by_location[:max_location_rows]
+            for r in rows_sent
         )
         only_other_row = len(counts) == 1 and (counts[0].get("location") or "").strip() == "Other"
         if raw_has_state and only_other_row:
