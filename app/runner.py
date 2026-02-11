@@ -860,45 +860,16 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                 filtered_items = filtered_items[:max_raw]
             print(f"[press] Step 5 — After 90d window + cap (PR Newswire always kept) (max_raw={max_raw}): {len(filtered_items)} items")
 
-            # 4) Load previous snapshot; only run enrichment when there are new items (LLM applies to new articles only).
+            # 4) Load previous snapshot for diff/events and for fallback when enrichment returns no groups.
+            # We always run full cleaning + grouping on the full pull so late articles join the right groups and new topics appear.
             latest = load_latest_snapshot(session, competitor.id, "press")
             previous_structured = (latest.structured_json or {}) if latest else {}
             previous_items = previous_structured.get("items") or []
             previous_canonical = previous_structured.get("canonical_items") or []
-            previous_urls = {(it.get("url") or it.get("link") or "").strip() for it in previous_items if (it.get("url") or it.get("link") or "").strip()}
-            new_items = [it for it in filtered_items if (it.get("url") or it.get("link") or "").strip() not in previous_urls]
-
-            # Snapshot has valid LLM groupings if it has at least one group with articles (used for dossier "Press" section).
             existing_groups = previous_structured.get("press_groups") or []
-            has_valid_press_groups = any(
-                isinstance(g, dict) and (g.get("articles") or [])
-                for g in existing_groups
-            )
 
-            if not new_items and has_valid_press_groups:
-                # No new URLs and we already have groupings — skip to avoid redundant LLM.
-                print(f"[press] {competitor.name}: no new items since last pull — skipping Steps 6–9 (enrich/dedupe/persist).")
-                log_event(
-                    "snapshot_unchanged",
-                    competitor=competitor.name,
-                    channel="press",
-                    url=None,
-                )
-                log_run(
-                    session,
-                    competitor.id,
-                    "press",
-                    "skipped",
-                    message="no_new_press_items",
-                    extra={"endpoints": [ep.url for ep in endpoints], "filtered_items": len(filtered_items)},
-                )
-                continue
-
-            # Run enrichment when: we have new items, or we have items but no valid groupings (backfill so dossier shows LLM groupings).
-            if not new_items:
-                print(f"[press] {competitor.name}: no new items but snapshot missing LLM groupings — re-running enrichment to backfill press_groups.")
-            else:
-                print(f"[press] Step 6 — Enriching (LLM for {len(new_items)} new item(s) only; merge with previous canonical)...")
+            # Always run enrichment on the full pull: classify + group all qualifying articles. No skip by "no new items."
+            print(f"[press] Step 6 — Enriching full pull ({len(filtered_items)} items): classify + group (late articles join groups; new topics become new groups).")
 
             def _normalize_domain(host: str) -> str:
                 if not host:
@@ -924,14 +895,25 @@ def run_press(competitor_name: Optional[str] = None) -> None:
             }
             structured = build_press_structured(snapshot_like)
             structured["sources"] = source_meta
+            items_for_enrich = structured.get("items") or []
             press_groups = enrich_press_items_with_llm(
                 competitor.name,
-                structured.get("items") or [],
+                items_for_enrich,
                 max_articles_to_summarize=settings.press_max_articles_to_summarize,
                 company_domains=company_domains,
                 previous_items=previous_items if previous_items else None,
                 previous_canonical=previous_canonical if previous_canonical else None,
             )
+            # If enrichment returned no groups but we had items (e.g. all dropped by company-domain filter),
+            # preserve previous groupings so the dossier still displays grouped press for this competitor.
+            if not press_groups and items_for_enrich and existing_groups:
+                has_any_articles = any(
+                    isinstance(g, dict) and (g.get("articles") or [])
+                    for g in existing_groups
+                )
+                if has_any_articles:
+                    press_groups = existing_groups
+                    print(f"[press] {competitor.name}: enrichment returned 0 groups; keeping previous {len(press_groups)} groups for dossier display.")
             structured["press_groups"] = press_groups
             # Flatten groups to canonical_items for Top news, diff, and backward compatibility.
             canonical = []

@@ -13,6 +13,7 @@ This doc traces **where grouped press data goes** after the LLM groups it, and *
 - Google News (90d) → `collect_google_news_items(press_search_name, ...)`.
 - PR Newswire (90d) → `collect_prnewswire_items(press_search_name, ...)`.
 - Items are filtered by 90-day window and capped per source; PR Newswire is always kept.
+- **Every refresh** runs the full pipeline on this full pull (no skip when "no new URLs"). All qualifying articles go through the same cleaning and grouping so late articles join the right groups and new topics appear as new groups.
 
 **Output:** `raw_items` / `filtered_items` — list of dicts with `title`, `url`/`link`, `date`, `outlet`/`source`, `provider`, etc.
 

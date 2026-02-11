@@ -66,16 +66,14 @@ The **press_groups** list is what the dossier uses. Runner flattens to `canonica
 ## 3. Location cleaning (aggregation) — `app/executive_summary.py`
 
 - **Function:** `clean_location_display_for_dossier(competitor_name, properties_by_location, asset_delta_by_city, other_sub_bullets_text=...)`
-- **Input:** Raw location rows (e.g. "Temecula: 5", "Central Oregon: 3") and optional "Other" sub-bullets (URLs). **No per-property list** — only aggregated "location: count" (and keys/deltas).
-- **What the LLM does:** Maps every input row to **one US state** (or "Other"), and **sums counts/keys** when merging. Returns JSON:
+- **Input:** **Only the list of summarized bullets** — e.g. "Temecula: 5 (12 keys)", "Central Oregon: 3", "Other: 2". No per-property data (no URLs, no names). Plus asset_delta_by_city. `other_sub_bullets_text` is not sent (kept for API compatibility only).
+- **What the LLM does:** Reviews whether the list is already grouped by state. If not, adds totals and maps regions to the closest US state (or keeps a row separate if it doesn't map neatly). Returns JSON:
   - `properties_by_location`: `[{ "location": "California", "count": n, "keys": k }, ...]`
   - `asset_delta_by_city`: `[{ "location": "Texas", "added": a, "removed": r }, ...]`
-- **Prompt rules:** Output only US state names (or "Other"); no regions/cities in output; do not put US cities or regions into "Other" — map them to the correct state (e.g. Central Oregon → Oregon, Emerald Coast → Florida); grand total of counts must match input total.
+- **Prompt rules:** Region → pick closest state; if region doesn't map neatly, keep separate. Use "Other" only for Unspecified/non-US/career/privacy. Grand total of counts must match input total.
 - **Output:** Used in `build_dossier_context` to replace raw location breakdown so the dossier shows state-level breakdown. If the LLM returns only "Other" or total &lt; 50% of raw, the result is **rejected** and raw data is used (or totals don’t match and UI can show a note).
 
-**If location data doesn’t populate:** **If regional properties all show under "Other":** The aggregation prompt instructs mapping regions/cities to states. If many properties have no state set (dossier only uses URL-derived state), they appear as "Unspecified" and are sent as "Other sub-bullets" (URLs); the LLM should infer state from URL paths. To reduce "Unspecified", run per-property state assignment (Section 2) before building the dossier, or ensure collectors set `market`/`region` so `infer_location_for_property` gets a region name to send to the aggregation LLM.
-
-**If location data doesn't populate:** Rejection can happen for: no API key, JSON parse failure, only_other_or_under_half, no_state_row_in_output. Use `debug_return_parsed=True` to see `_rejected` and `_reason`.
+**If location data doesn’t populate:****If location data doesn't populate:** Rejection can happen for: no API key, JSON parse failure, only_other_or_under_half, no_state_row_in_output. Use `debug_return_parsed=True` to see `_rejected` and `_reason`.
 
 ---
 

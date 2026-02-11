@@ -427,10 +427,20 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
             return d[:10]
         return "0000-00-00"
 
-    # Company domains: primary_domain + netlocs from press snapshot sources (e.g. press_endpoint) so we exclude all company-site articles.
+    # Company domains: primary_domain + all source endpoint URLs. Exclude any article whose URL is on the competitor's site.
     _company_domains_norm: set[str] = set()
     if getattr(competitor, "primary_domain", None):
         _company_domains_norm.add(_normalize_domain(competitor.primary_domain))
+    for ep in getattr(competitor, "source_endpoints", []) or []:
+        u = (getattr(ep, "url", None) or (ep.get("url") if isinstance(ep, dict) else None) or "").strip()
+        if u:
+            try:
+                netloc = (urllib.parse.urlparse(u).netloc or "").strip()
+                if netloc:
+                    _company_domains_norm.add(_normalize_domain(netloc))
+            except Exception:
+                pass
+    # Fallback: snapshot sources if endpoints not loaded (e.g. minimal query)
     for src in (latest_press.structured_json or {}).get("sources") or []:
         if isinstance(src, dict) and (src.get("type") == "press_endpoint" or "url" in src):
             u = (src.get("url") or "").strip()
@@ -450,11 +460,18 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
             host = (urllib.parse.urlparse(url).netloc or "").strip()
             if not host:
                 return True  # Relative/path-only URL → from company page scrape → exclude
-            return _normalize_domain(host) in _company_domains_norm
+            host_norm = _normalize_domain(host)
+            if host_norm in _company_domains_norm:
+                return True
+            # Subdomain match: e.g. press.larkhospitality.com when domain is larkhospitality.com
+            for dom in _company_domains_norm:
+                if dom and (host_norm == dom or host_norm.endswith("." + dom)):
+                    return True
+            return False
         except Exception:
             return False
 
-    # Build press_groups for template: use snapshot groups if present, else one group per canonical item (backward compat).
+    # Build press_groups for template: use snapshot LLM groupings when present so every competitor's Press section shows grouped press (group_title, one_line_summary, articles). Fallback: one group per canonical item for old snapshots.
     # Filter out articles on competitor's own domain; sort groups by latest article date (most recent first); tag each group with that date.
     if press_groups_snapshot:
         press_groups = []
@@ -657,19 +674,14 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
             for p in other_props
         ]
 
-    # One LLM step: send only the list (location - count) and Other sub-bullets; LLM buckets by state. No per-property data.
-    # Pre-aggregate "State - City" rows (e.g. Vermont - Burlington, Vermont - Stowe) into one row per state with summed count/keys
-    # so the LLM receives state-level rows and we get e.g. "Vermont – 2 properties (62 keys)".
+    # One LLM step: send only the summarized bullets (location: count, keys). No per-property data.
+    # LLM reviews if grouped by state; if not, adds totals and maps regions to closest state (or keeps separate).
+    # Pre-aggregate "State - City" rows into one row per state so the LLM receives state-level rows.
     properties_by_location_for_llm = aggregate_state_and_state_city_rows(properties_by_location)
-    other_sub_bullets_text = None
-    if other_properties_display:
-        other_sub_bullets_text = "\n".join(
-            f"{d.get('url', '')} — {d.get('raw_location', 'Other')}" for d in other_properties_display
-        )
     cleaned = None
     if not skip_property_llm:
         loc_key = _location_clean_cache_key(
-            competitor.name, properties_by_location_for_llm, asset_delta_by_city, other_sub_bullets_text
+            competitor.name, properties_by_location_for_llm, asset_delta_by_city, None
         )
         if loc_key in _LOCATION_CLEAN_CACHE:
             cleaned = _LOCATION_CLEAN_CACHE[loc_key]
@@ -678,7 +690,7 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
                 competitor.name,
                 properties_by_location_for_llm,
                 asset_delta_by_city,
-                other_sub_bullets_text=other_sub_bullets_text,
+                other_sub_bullets_text=None,
             )
             if cleaned and len(_LOCATION_CLEAN_CACHE) >= _LOCATION_CLEAN_CACHE_MAX:
                 _LOCATION_CLEAN_CACHE.clear()

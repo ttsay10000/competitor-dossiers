@@ -678,6 +678,16 @@ def _headline_looks_like_wrong_entity(competitor_name: str, title: str, outlet: 
     # Place: Lark Street (Albany, NY corridor) — community events, street festivals, not Lark Hotels
     if "lark" in name_lower and "lark street" in combined:
         return True
+    # Community/street events on Lark Street: "community event on lark", Santa Speedo Sprint, etc.
+    if "lark" in name_lower and ("lark" in t or "lark street" in t) and any(
+        p in combined
+        for p in (
+            "community event on lark",
+            "event on lark street",
+            "santa speedo sprint",
+        )
+    ):
+        return True
     return False
 
 
@@ -698,8 +708,8 @@ def _headline_looks_like_common_word_or_other_entity(competitor_name: str, title
     # "a lark" = adventure/caper (e.g. opium lark, delightful lark)
     if " a lark" in t or " lark in " in t or "opium lark" in t or "delightfully dark lark" in t:
         return True
-    # Unrelated proper names: Little Lark (restaurant), Meadow Lark (school), Lark Creek (shops)
-    if "little lark" in t or "meadow lark" in t or "lark creek" in t:
+    # Unrelated proper names: Little Lark (restaurant), Meadow Lark (school), Lark Creek (shops), Lark Street (Albany)
+    if "little lark" in t or "meadow lark" in t or "lark creek" in t or "lark street" in (t + " " + o):
         return True
     # Theater company "The Lark" (not Lark Theater venue)
     if "the lark takes wing" in t or "the lark review" in t:
@@ -1562,8 +1572,12 @@ def enrich_press_items_with_llm(
                 if not host:
                     # Relative or path-only URL: in this pipeline it comes from scraping the company's own page → drop.
                     continue
-                if _normalize_domain(host) in company_domains_normalized:
+                host_norm = _normalize_domain(host)
+                if host_norm in company_domains_normalized:
                     continue  # drop: on competitor's own domain (including company press page)
+                # Subdomain match: e.g. press.larkhospitality.com when domain is larkhospitality.com
+                if any(d and (host_norm == d or host_norm.endswith("." + d)) for d in company_domains_normalized):
+                    continue
             except Exception:
                 pass
             filtered_items.append(it)

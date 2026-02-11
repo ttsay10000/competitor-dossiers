@@ -8,5 +8,7 @@ __pycache__
 .env
 .env.*
 
-# Test/debug scripts: local and Cursor only; not deployed to Render.
+# Test/debug scripts and docs: local and CI only; not deployed to Render.
 scripts
+tests
+docs

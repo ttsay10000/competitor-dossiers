@@ -330,9 +330,11 @@ def clean_location_display_for_dossier(
     debug_return_parsed: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
-    Use the LLM to bucket the existing list (location - count) by state. Input is only the
-    list text and optional Other sub-bullets (URLs with path hints like temecula, central-oregon);
-    no per-property data. Returns state-only properties_by_location and asset_delta_by_city.
+    Use the LLM to consolidate the property list by state. Input is ONLY the list of
+    summarized bullets (location: count, keys). No per-property data. The LLM reviews
+    whether rows are grouped by state; if not, it adds totals and maps regions to the
+    closest state (or keeps a region as its own row if it does not map neatly to any state).
+    Returns state-level properties_by_location and asset_delta_by_city.
     """
     from .config import get_openai_client
     client = get_openai_client()
@@ -349,41 +351,38 @@ def clean_location_display_for_dossier(
             return f"{loc}: {count} ({keys} keys)"
         return f"{loc}: {count}"
 
-    # Send the full summarized list (location bullets with count and keys) so the LLM can map every row.
-    # Cap at 2000 rows to stay within context; typically this is the full list.
+    # Send ONLY the summarized bullets (location, count, keys). No per-property data.
     max_location_rows = 2000
     rows_sent = properties_by_location[:max_location_rows]
     raw_total = sum(r.get("count", 0) for r in rows_sent)
     raw_keys_total = sum(r.get("keys", 0) for r in rows_sent)
     counts_text = "; ".join(_loc_count_keys(r) for r in rows_sent)
     deltas_text = "; ".join(f"{r['location']}: +{r['added']}/−{r['removed']}" for r in asset_delta_by_city[:25])
-    if not counts_text and not deltas_text and not other_sub_bullets_text:
+    if not counts_text and not deltas_text:
         return None
 
-    system = """You are organizing property location data for a real estate/hospitality competitor dashboard.
+    system = """You are consolidating property location data for a real estate/hospitality dashboard.
 
-INPUT: You receive the full summarized list of "Current counts by location (raw)" — each bullet is "Location: N" or "Location: N (K keys)". Map as many as you can to a US state; when you cannot confidently assign a location to a state, keep the original location label in your output (do not put it in Other).
+INPUT: You receive ONLY a list of summarized bullets: "Location: N" or "Location: N (K keys)". There is no per-property data—just these raw numbers by location and key counts.
 
-OUTPUT:
-- Prefer one row per US state (and at most one "Other" row for truly unclear/non-US/career/privacy).
-- If you cannot select a state for a location, output a row with the same location label and the same count and keys — keep the region that was there before.
-- When you merge multiple input bullets into one state row, ADD both numbers: "count" = sum of all counts you merged; "keys" = sum of all keys you merged. Property counts and key counts must both be summed when merging.
+YOUR JOB:
+1. Review whether the list is already grouped by US state. If it is, you may return it with minimal changes (e.g. normalize state names).
+2. If not grouped by state: merge rows by state—add the totals together (count and keys) when you combine bullets into one state.
+3. For a region, city, or area: map it to the closest or most representative US state (e.g. Central Oregon → Oregon; Emerald Coast → Florida; Lake Tahoe → California; Poconos → Pennsylvania).
+4. If a region or geographical element does not map neatly to any single state, keep it as its own row with the same label and totals unchanged.
+5. Use "Other" only for: Unspecified, career site, privacy, non-property URLs, or genuinely non-US/unclear. Do not put US cities or regions into "Other".
 
 RULES:
-- Map city/region names to state when you know them (e.g. Temecula, Coachella Valley, Newport Beach → California; Central Oregon, Bend → Oregon; Emerald Coast, Destin → Florida; Hudson Valley, Hamptons → New York; Poconos → Pennsylvania). Use full US state names only.
-- For regions that span multiple states, pick the single state that is closest or most representative (e.g. Lake Tahoe → California; Poconos → Pennsylvania).
-- Do NOT put US cities or regions into "Other". Only use "Other" for: Unspecified, career site, privacy, non-property URLs, or genuinely non-US/unclear.
-- If you are unsure about a location, keep it as its own row with the original location label and its count and keys unchanged.
-- Grand total of output "count" MUST equal the total property count in the user message. Sum "keys" correctly when merging.
+- Use full US state names only. When merging, sum both "count" and "keys".
+- Grand total of output "count" MUST equal the input total; sum "keys" correctly when merging.
 - For asset_delta_by_city: one row per state; "added" and "removed" are the sums of deltas you merged into that state.
+- List states first, then any unchanged region labels, then "Other" last if needed.
 
 Return JSON only, no markdown: {"properties_by_location": [{"location": "...", "count": n, "keys": k}, ...], "asset_delta_by_city": [{"location": "...", "added": a, "removed": r}, ...]}.
-Include "keys" (number, 0 if not provided) on every properties_by_location row. List states first, then any unchanged region labels, then "Other" last if needed."""
+Include "keys" (number, 0 if not provided) on every properties_by_location row."""
 
     num_bullets = len(rows_sent)
-    user = f"Competitor: {competitor_name}\n\nTotal property count (your output counts MUST sum to this): {raw_total}\nTotal keys (sum of keys when merging): {raw_keys_total}\nThere are {num_bullets} location bullets below; assign every one to a state (or keep the original location if unsure) and ensure the sum of your output counts equals {raw_total}. When merging rows into one state, add both count and keys.\n\nCurrent counts by location (raw):\n{counts_text or 'none'}\n\nChanges by location (raw):\n{deltas_text or 'none'}"
-    if other_sub_bullets_text and other_sub_bullets_text.strip():
-        user += f"\n\nOther sub-bullets (use URL path to assign state when possible, then merge counts):\n{other_sub_bullets_text.strip()}"
+    user = f"Competitor: {competitor_name}\n\nTotal property count (your output counts MUST sum to this): {raw_total}\nTotal keys (sum when merging): {raw_keys_total}\n\nThere are {num_bullets} location bullets below. Review if they are grouped by state; if not, add totals together and map regions to the closest state (or keep separate if they don't map neatly).\n\nCurrent counts by location (raw):\n{counts_text or 'none'}\n\nChanges by location (raw):\n{deltas_text or 'none'}"
 
     try:
         resp = client.chat.completions.create(

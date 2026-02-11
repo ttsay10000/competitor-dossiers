@@ -33,6 +33,8 @@ After classification and business filter, we **group** (not dedupe) articles by 
 
 Result: grouped topics with articles as sub-articles under each group; each article keeps its link ("see full article"). Code: `app/llm_structured.py` (`_group_press_into_clusters_llm`, `enrich_press_items_with_llm`).
 
+**Refresh behavior:** Every press refresh runs the **full** pipeline on the full pull (no skip when URL set is unchanged). All qualifying articles are re-classified and re-grouped each run, so late articles about the same topic join the right group and new topics appear as new groups.
+
 ## Scheduling
 - Daily: talent + press
 - 2–3x/week: asset
