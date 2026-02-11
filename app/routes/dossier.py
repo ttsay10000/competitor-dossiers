@@ -14,10 +14,11 @@ from ..diff.asset_diff import diff_properties, delta_by_city, infer_location_for
 from ..diff.talent_diff import diff_jobs
 from ..executive_summary import (
     generate_executive_summary,
+    format_executive_summary_for_display,
     clean_location_display_for_dossier,
     aggregate_state_and_state_city_rows,
 )
-from ..llm_structured import _assign_state_from_url, _normalize_domain
+from ..llm_structured import _assign_state_from_url, _normalize_domain, summarize_top_news_llm
 from ..rules.talent_rules import job_functional_area, FUNCTIONAL_AREA_DISPLAY_ORDER, PROPERTY_OPERATIONS_LABEL
 
 router = APIRouter()
@@ -163,26 +164,28 @@ def format_dossier_preview_text(context: dict) -> str:
     if top_news:
         for item in top_news:
             date_str = item.get("date") or ""
-            title = item.get("title") or "Article"
+            bullet = item.get("bullet") or item.get("title") or "—"
+            parts = [f"  {date_str} — {bullet}" if date_str else f"  {bullet}"]
             url = item.get("url") or item.get("link") or ""
+            if url:
+                parts.append(f"    URL: {url}")
             group_title = item.get("group_title") or ""
-            topic = (item.get("topic") or "").replace("_", " ")
-            outlet = item.get("outlet") or ""
-            raw_summary = item.get("summary") or ""
-            summary = raw_summary[:120] + ("…" if len(raw_summary) > 120 else "") if raw_summary else ""
-            parts = [f"  {date_str} — {title}", f"    URL: {url}"]
             if group_title:
                 parts.append(f"    Group: {group_title}")
+            topic = (item.get("topic") or "").replace("_", " ")
             if topic:
                 parts.append(f"    Topic: {topic}")
+            outlet = item.get("outlet") or ""
             if outlet:
                 parts.append(f"    Outlet: {outlet}")
-            if summary:
+            raw_summary = item.get("summary") or ""
+            if raw_summary:
+                summary = raw_summary[:120] + ("…" if len(raw_summary) > 120 else "")
                 parts.append(f"    Summary: {summary}")
             lines.append("\n".join(parts))
             lines.append("")
     else:
-        lines.append("  No press items in snapshot, or none passed relevance filter.")
+        lines.append("  No top news summary.")
         lines.append("")
     lines.append("--- Properties by location ---")
     total = context.get("total_properties") or 0
@@ -264,7 +267,6 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     if competitor is None:
         return {"error": "Competitor not found."}
 
-    last_refreshed = get_last_refreshed(session)
     latest_asset = (
         session.query(Snapshot)
         .filter(Snapshot.competitor_id == competitor_id, Snapshot.channel == "asset")
@@ -425,13 +427,30 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
             return d[:10]
         return "0000-00-00"
 
+    # Company domains: primary_domain + netlocs from press snapshot sources (e.g. press_endpoint) so we exclude all company-site articles.
+    _company_domains_norm: set[str] = set()
+    if getattr(competitor, "primary_domain", None):
+        _company_domains_norm.add(_normalize_domain(competitor.primary_domain))
+    for src in (latest_press.structured_json or {}).get("sources") or []:
+        if isinstance(src, dict) and (src.get("type") == "press_endpoint" or "url" in src):
+            u = (src.get("url") or "").strip()
+            if u:
+                try:
+                    netloc = (urllib.parse.urlparse(u).netloc or "").strip()
+                    if netloc:
+                        _company_domains_norm.add(_normalize_domain(netloc))
+                except Exception:
+                    pass
+
     def _is_url_on_competitor_domain(url: str) -> bool:
-        """True if URL's host matches competitor's primary_domain (exclude competitor-site articles from output)."""
-        if not url or not getattr(competitor, "primary_domain", None):
+        """True if URL is on the competitor's own site (or has no host, e.g. relative) — exclude from output."""
+        if not url:
             return False
         try:
             host = (urllib.parse.urlparse(url).netloc or "").strip()
-            return host and _normalize_domain(host) == _normalize_domain(competitor.primary_domain)
+            if not host:
+                return True  # Relative/path-only URL → from company page scrape → exclude
+            return _normalize_domain(host) in _company_domains_norm
         except Exception:
             return False
 
@@ -519,43 +538,10 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     for p in press_90d:
         p.pop("_sort_dt", None)
 
-    # Top news: from most recent groupings whose latest article date is within 7 days since last refresh.
-    # Each bullet = group topic (or news article) with latest date attached; link to latest article in group.
-    ref_dt = _utc_dt(last_refreshed) if last_refreshed else datetime.now(timezone.utc)
-    week_cutoff_date = (ref_dt - timedelta(days=7)).date()
-
-    def _group_date_parsed(g: dict):
-        gd = (g.get("group_latest_date") or "").strip()
-        if not gd or len(gd) < 10:
-            return None
-        try:
-            return datetime.strptime(gd[:10], "%Y-%m-%d").date()
-        except ValueError:
-            return None
-
-    recent_groups = []
-    for g in press_groups:
-        gdate = _group_date_parsed(g)
-        if gdate is not None and gdate >= week_cutoff_date:
-            recent_groups.append(g)
-    # Already sorted by group_latest_date desc; take up to 5
-    recent_groups = recent_groups[:5]
-
-    top_news = []
-    for g in recent_groups:
-        articles = g.get("articles") or []
-        latest_art = articles[0] if articles else {}
-        url = latest_art.get("url") or latest_art.get("link") or ""
-        title = (latest_art.get("title") or latest_art.get("display_title") or "").strip() or (g.get("group_title") or "Article")
-        group_title = (g.get("group_title") or "").strip() or "News"
-        top_news.append({
-            "group_title": group_title,
-            "title": title,
-            "url": url,
-            "date": g.get("group_latest_date"),
-            "outlet": latest_art.get("outlet"),
-            "summary": g.get("one_line_summary"),
-        })
+    # Top news: LLM summarizes the most interesting business news from final press groupings (past ~30 days).
+    # Reads each group topic + recent press; outputs 3-5 key bullets with relevant dates.
+    top_news_raw = summarize_top_news_llm(competitor.name, press_groups, days=30)
+    top_news = (top_news_raw or [])
 
     # Properties by location (state/city) for high-level week-over-week tracking.
     # Aggregate count and total keys per location (keys parsed from property details).
@@ -862,27 +848,17 @@ def dossier_executive_summary(competitor_id: int):
         return {"summary": None, "error": context["error"]}
     cache_key = _exec_summary_cache_key(competitor_id, context)
     if cache_key in _EXEC_SUMMARY_CACHE:
-        return {"summary": _EXEC_SUMMARY_CACHE[cache_key]}
+        cached = _EXEC_SUMMARY_CACHE[cache_key]
+        return {"summary": cached, "summary_display": format_executive_summary_for_display(cached)}
     summary = generate_executive_summary(context)
     if summary and len(_EXEC_SUMMARY_CACHE) >= _EXEC_SUMMARY_CACHE_MAX:
         _EXEC_SUMMARY_CACHE.clear()
     if summary:
         _EXEC_SUMMARY_CACHE[cache_key] = summary
-    return {"summary": summary}
-
-
-@router.post("/dossier/set-baseline-all-and-refresh", status_code=303)
-def set_baseline_all_and_refresh(request: Request):
-    """
-    Set every competitor's comparison baseline to now, then run all collectors. Use to
-    establish a baseline so the next view (or next refresh) shows only changes after
-    this point. The run's new snapshots/events will appear as changes since baseline.
-    """
-    from ..runner import run as run_all_channels, advance_baseline_after_full_refresh
-
-    advance_baseline_after_full_refresh()
-    run_all_channels()
-    return RedirectResponse(url="/competitors?refreshed=1", status_code=303)
+    return {
+        "summary": summary,
+        "summary_display": format_executive_summary_for_display(summary) if summary else None,
+    }
 
 
 @router.post("/dossier/force-refresh-and-reset-baseline", status_code=303)
@@ -942,7 +918,7 @@ def dossier(request: Request, competitor_id: int):
 
 
 @router.post("/dossier/{competitor_id}/refresh", status_code=303)
-def dossier_refresh(request: Request, competitor_id: int):
+async def dossier_refresh(request: Request, competitor_id: int):
     """
     Run all collectors (asset, talent, press, etc.) for all competitors—same as the cron job.
     After the run, advances every competitor's comparison baseline to now so the executive
@@ -954,12 +930,13 @@ def dossier_refresh(request: Request, competitor_id: int):
     """
     from ..runner import run as run_all_channels, advance_baseline_after_full_refresh, load_latest_snapshot
 
+    form = await request.form()
     with get_session() as session:
         competitor = session.get(Competitor, competitor_id)
         if competitor is None:
             return RedirectResponse(url="/", status_code=303)
         # Force full refresh: clear latest press snapshot so run does not skip on hash.
-        if request.form.get("force"):
+        if form.get("force"):
             latest_press = load_latest_snapshot(session, competitor_id, "press")
             if latest_press:
                 session.delete(latest_press)

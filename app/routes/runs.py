@@ -18,7 +18,13 @@ def _extra_str(extra: Any) -> str:
 
 
 @router.get("/runs")
-def runs(request: Request, competitor_id: Optional[int] = None, channel: Optional[str] = None, status: Optional[str] = None):
+def runs(
+    request: Request,
+    competitor_id: Optional[int] = None,
+    channel: Optional[str] = None,
+    status: Optional[str] = None,
+    started: Optional[int] = None,
+):
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         competitor_names = {c.id: c.name for c in competitors}
@@ -44,6 +50,9 @@ def runs(request: Request, competitor_id: Optional[int] = None, channel: Optiona
         ]
         last_refreshed = get_last_refreshed(session)
         nav_competitors = competitor_options
+        run_started_name = None
+        if started and competitor_id and competitor_id in competitor_names:
+            run_started_name = competitor_names[competitor_id]
 
     return request.app.state.templates.TemplateResponse(
         "runs.html",
@@ -57,5 +66,6 @@ def runs(request: Request, competitor_id: Optional[int] = None, channel: Optiona
             "selected_channel": channel,
             "selected_status": status,
             "last_refreshed": last_refreshed,
+            "run_started_name": run_started_name,
         },
     )

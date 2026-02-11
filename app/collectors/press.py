@@ -1,6 +1,7 @@
 import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from urllib.parse import urljoin
 from typing import Any, Optional, Tuple
 
 import feedparser
@@ -110,8 +111,9 @@ def _find_date_for_link(link) -> Optional[str]:
     return None
 
 
-def extract_press_from_html(html: str) -> list[dict[str, Any]]:
-    """Extract press links from HTML. Tries to parse publication date from container (e.g. <time>, or date text); never uses fetch/pull time."""
+def extract_press_from_html(html: str, base_url: Optional[str] = None) -> list[dict[str, Any]]:
+    """Extract press links from HTML. Tries to parse publication date from container (e.g. <time>, or date text); never uses fetch/pull time.
+    If base_url is provided, relative hrefs are resolved to absolute URLs so downstream company-domain filtering works."""
     soup = BeautifulSoup(html, "html.parser")
     items = []
     for link in soup.find_all("a"):
@@ -123,8 +125,9 @@ def extract_press_from_html(html: str) -> list[dict[str, Any]]:
             continue
         if "press" not in href and "blog" not in href and "news" not in href:
             continue
+        url = href if href.startswith("http") else (urljoin(base_url or "", href) if base_url else href)
         date_val = _find_date_for_link(link)
-        items.append({"title": title, "url": href, "date": date_val, "source": None})
+        items.append({"title": title, "url": url, "date": date_val, "source": None})
     return items
 
 
@@ -139,7 +142,7 @@ def collect_press_snapshot(source_url: str) -> dict[str, Any]:
         }
 
     fetched = fetch_url(source_url)
-    items = extract_press_from_html(fetched.text)
+    items = extract_press_from_html(fetched.text, base_url=fetched.url or source_url)
     return {
         "source_url": fetched.url,
         "raw_content": fetched.text,

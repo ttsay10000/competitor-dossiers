@@ -868,7 +868,15 @@ def run_press(competitor_name: Optional[str] = None) -> None:
             previous_urls = {(it.get("url") or it.get("link") or "").strip() for it in previous_items if (it.get("url") or it.get("link") or "").strip()}
             new_items = [it for it in filtered_items if (it.get("url") or it.get("link") or "").strip() not in previous_urls]
 
-            if not new_items:
+            # Snapshot has valid LLM groupings if it has at least one group with articles (used for dossier "Press" section).
+            existing_groups = previous_structured.get("press_groups") or []
+            has_valid_press_groups = any(
+                isinstance(g, dict) and (g.get("articles") or [])
+                for g in existing_groups
+            )
+
+            if not new_items and has_valid_press_groups:
+                # No new URLs and we already have groupings — skip to avoid redundant LLM.
                 print(f"[press] {competitor.name}: no new items since last pull — skipping Steps 6–9 (enrich/dedupe/persist).")
                 log_event(
                     "snapshot_unchanged",
@@ -886,7 +894,11 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                 )
                 continue
 
-            print(f"[press] Step 6 — Enriching (LLM for {len(new_items)} new item(s) only; merge with previous canonical)...")
+            # Run enrichment when: we have new items, or we have items but no valid groupings (backfill so dossier shows LLM groupings).
+            if not new_items:
+                print(f"[press] {competitor.name}: no new items but snapshot missing LLM groupings — re-running enrichment to backfill press_groups.")
+            else:
+                print(f"[press] Step 6 — Enriching (LLM for {len(new_items)} new item(s) only; merge with previous canonical)...")
 
             def _normalize_domain(host: str) -> str:
                 if not host:

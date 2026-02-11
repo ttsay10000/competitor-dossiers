@@ -42,10 +42,10 @@
     <!-- 0. AI-generated executive summary (recent changes in bullets); loaded async so page opens fast -->
     <div class="card" style="background: var(--card-bg, #f8f9fa); border-left: 4px solid var(--accent, #0d6efd);">
       <strong>Executive summary</strong>
-      <p class="meta" style="margin: 2px 0 8px 0;">AI-generated executive summary focused on what has changed recently across talent, markets, assets, and news.</p>
+      <p class="meta" style="margin: 2px 0 12px 0;">AI-generated executive summary focused on what has changed recently across talent, markets, assets, and news.</p>
       <div id="executive-summary-content">
         {% if executive_summary %}
-          <div style="margin: 0; font-size: 15px; line-height: 1.6; white-space: pre-line;">{{ executive_summary }}</div>
+          <div class="exec-summary-body" style="margin: 0; font-size: 15px; line-height: 1.75; white-space: pre-line;">{{ executive_summary | exec_summary_display }}</div>
         {% elif executive_summary_lazy %}
           <p class="meta" style="margin: 0;">Loading executive summary…</p>
         {% else %}
@@ -60,10 +60,15 @@
         fetch('/dossier/{{ competitor.id }}/executive-summary')
           .then(function(r) { return r.json(); })
           .then(function(data) {
-            if (data.summary) {
+            if (data.summary_display || data.summary) {
               var div = document.createElement('div');
-              div.style.cssText = 'margin: 0; font-size: 15px; line-height: 1.6; white-space: pre-line;';
-              div.textContent = data.summary;
+              div.className = 'exec-summary-body';
+              div.style.cssText = 'margin: 0; font-size: 15px; line-height: 1.75; white-space: pre-line;';
+              if (data.summary_display) {
+                div.innerHTML = data.summary_display;
+              } else {
+                div.textContent = data.summary;
+              }
               el.innerHTML = '';
               el.appendChild(div);
             } else if (data.error && data.error !== 'OPENAI_API_KEY not set') {
@@ -79,28 +84,21 @@
     </script>
     {% endif %}
 
-    <!-- 3. Top news: groupings with latest article within 7 days since last refresh -->
+    <!-- 3. Top news: LLM summary of most interesting business news from press groupings (past ~30 days) -->
     <div class="card">
       <strong>Top news</strong>
-      <p class="meta">Groupings whose most recent article is within the last 7 days since last refresh. Each bullet is the group topic or article, with the latest article date; link goes to the most recent article.</p>
+      <p class="meta">AI summary of the most relevant business news from grouped press and recent press releases (past 30 days).</p>
       {% if top_news|length %}
         <ul style="margin: 0; padding-left: 20px;">
           {% for item in top_news %}
           <li>
             {% if item.get('date') %}<span class="meta" style="font-weight: 500;">{{ item.date }}</span> — {% endif %}
-            <a href="{{ item.get('url') or item.get('link') }}" target="_blank" rel="noopener">{{ item.get('group_title') or item.get('title') or 'Article' }}</a>
-            {% if item.get('outlet') or item.get('summary') %}
-            <div class="meta">
-              {% if item.get('outlet') %}{{ item.outlet }}{% endif %}
-              {% if item.get('outlet') and item.get('summary') %} · {% endif %}
-              {% if item.get('summary') %}{{ item.summary }}{% endif %}
-            </div>
-            {% endif %}
+            {{ item.get('bullet') or item.get('title') or '—' }}
           </li>
           {% endfor %}
         </ul>
       {% else %}
-        <div class="meta">No groupings with an article in the last 7 days since last refresh.</div>
+        <div class="meta">No top news summary (no recent press groups or summary unavailable).</div>
       {% endif %}
     </div>
 

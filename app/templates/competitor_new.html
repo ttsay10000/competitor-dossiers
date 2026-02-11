@@ -2,6 +2,12 @@
 {% block content %}
   <h1>Add Competitor</h1>
 
+  {% if error_message %}
+  <div class="card" role="alert" style="border-left: 6px solid #b84a2b;">
+    <p style="margin: 0; color: var(--text);">{{ error_message }}</p>
+  </div>
+  {% endif %}
+
   <div class="card">
     <p class="meta">
       Create a new competitor and provide the key URLs we’ll use to pull data.
@@ -74,13 +80,24 @@
       </div>
 
       <div style="margin-top: 20px;">
-        <button type="submit">Save competitor</button>
+        <button type="submit" id="submit-btn">Save competitor</button>
+        <span id="submit-status" class="meta" style="margin-left: 12px;"></span>
       </div>
     </form>
   </div>
 
   <script>
     (function() {
+      var form = document.getElementById("competitor-form");
+      var submitBtn = document.getElementById("submit-btn");
+      var statusEl = document.getElementById("submit-status");
+      if (form && submitBtn) {
+        form.addEventListener("submit", function() {
+          submitBtn.disabled = true;
+          submitBtn.textContent = "Saving…";
+          if (statusEl) statusEl.textContent = "Uploading…";
+        });
+      }
       function addRow(containerId, name, placeholder, roleLabel) {
         roleLabel = roleLabel || "Secondary";
         var container = document.getElementById(containerId);

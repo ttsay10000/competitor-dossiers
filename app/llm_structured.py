@@ -1069,16 +1069,19 @@ def _group_press_into_clusters_llm(competitor_name: str, items: List[dict]) -> L
     system = (
         "You are given the full list of filtered press articles. Read every article TITLE and group them by the same story or event.\n\n"
         "Input: N items (index 0 to N-1). Each line is INDEX | DATE | OUTLET | TITLE. Use only what you see in the TITLEs to decide grouping—same partnership, same hire, same opening = one group.\n\n"
-        "Your job: put articles that cover the SAME story into one group. Each group gets a short headline (group_title) and optional one-line summary. "
+        "Your job: put articles that cover the SAME story into one group. Each group gets a short headline (group_title) and a brief summary (one_line_summary). "
         "The TARGET COMPANY name is provided below—use it in group_title when relevant (e.g. \"Placemakr and Hilton launch partnership\", \"AvantStay expands in Austin\", \"Lark Hotels partnership with Mews\"). "
         "Examples of group_title style for any hospitality company:\n"
         "- Partnership/launch: \"[Company] and [Partner] launch partnership\" or \"[Company] expands in [market]\"\n"
         "- Executive hire: \"[Company] hires new EVP [name]\" or \"[Company] appoints [role]\" when titles mention a specific hire\n"
         "- Openings/expansion: \"[Company] opens property in [city]\" or \"New [Company] locations\"\n"
         "- Other: one clear headline that describes the story (e.g. \"New property opening in Phoenix\").\n\n"
+        "For one_line_summary: write a short but informative summary (1–2 sentences) based on the article titles. Include key details: what happened, who was involved, and any outcome or context (e.g. market, role, partner name). "
+        "Avoid one-word or fragment summaries; aim for 15–40 words so a reader understands the story without opening the articles. "
+        "Example: \"Placemakr and Hilton announced a partnership to bring Hilton’s hotel brands to Placemakr’s extended-stay properties; coverage highlighted the expansion of the company’s distribution.\"\n\n"
         "Return a JSON object with one key: \"groups\". Value is an array of objects, each with:\n"
         "  \"group_title\": short headline for this story (see examples above),\n"
-        "  \"one_line_summary\": one sentence summarizing the story based on the titles,\n"
+        "  \"one_line_summary\": 1–2 sentence summary with key details from the titles (15–40 words),\n"
         "  \"article_indices\": array of 0-based indices of items in this group.\n\n"
         "Rules: (1) Every index 0 to N-1 must appear in exactly one article_indices array. Do not drop any item. "
         "(2) Group by story using only the article titles: same event/deal/hire/opening = same group; unrelated = separate groups (or group of one). "
@@ -1211,6 +1214,116 @@ def _fallback_single_group(items: List[dict]) -> List[dict]:
     ]
     articles.sort(key=lambda a: (a.get("date") or "0000-00-00")[:10] if (a.get("date") or "").strip() and (a.get("date") or "").strip() != "no date" else "0000-00-00", reverse=True)
     return [{"group_title": "Press coverage", "one_line_summary": "", "articles": articles}]
+
+
+def summarize_top_news_llm(competitor_name: str, press_groups: List[dict], *, days: int = 30) -> Optional[List[dict]]:
+    """
+    After groupings are final: have the LLM read each group (topic + summaries + recent press)
+    and output 3-5 key bullets of the most interesting news from a business perspective,
+    with relevant dates, from the past `days` (default 30).
+
+    press_groups: list of { group_title, one_line_summary, group_latest_date, articles: [{ title, date, outlet }] }.
+    Returns list of { "bullet": str, "date": "YYYY-MM-DD" } or None on no client/parse failure.
+    """
+    from datetime import datetime, timedelta, timezone
+    if not press_groups:
+        return []
+    client = _openai_client()
+    if not client:
+        return None
+
+    now = datetime.now(timezone.utc)
+    cutoff_date = (now - timedelta(days=days)).date()
+
+    def _parse_group_date(g: dict):
+        gd = (g.get("group_latest_date") or "").strip()
+        if not gd or len(gd) < 10:
+            return None
+        try:
+            return datetime.strptime(gd[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return None
+
+    # Only include groups with at least one article in the past ~30 days
+    recent_groups = []
+    for g in press_groups:
+        gdate = _parse_group_date(g)
+        if gdate is not None and gdate >= cutoff_date:
+            recent_groups.append(g)
+    if not recent_groups:
+        return []
+
+    lines = []
+    for g in recent_groups[:25]:  # cap to avoid huge context
+        title = (g.get("group_title") or "News").strip()
+        summary = (g.get("one_line_summary") or "").strip()
+        gdate = g.get("group_latest_date") or ""
+        arts = g.get("articles") or []
+        art_bits = []
+        for a in arts[:5]:
+            t = (a.get("title") or a.get("display_title") or "").strip() or "—"
+            d = (a.get("date") or "").strip()[:10] if (a.get("date") or "").strip() else "no date"
+            art_bits.append(f"  - {d} | {t}")
+        block = f"Group: {title}\n  Date: {gdate}\n  Summary: {summary}\n" + "\n".join(art_bits)
+        lines.append(block)
+
+    system = (
+        "You are a business analyst summarizing competitor press for an executive dashboard.\n\n"
+        "You receive the final grouped press: each block has a group topic (headline), a one-line summary, "
+        "the latest article date, and recent article titles with dates. Include both grouped stories and "
+        "recent press releases (e.g. PR Newswire).\n\n"
+        "Output 3-5 key bullets of the most interesting news from a business perspective (partnerships, "
+        "expansion, funding, leadership, openings, strategy). Each bullet should be one clear sentence. "
+        "Include the relevant date when the news happened (use the article/group date).\n\n"
+        "Return a JSON object with one key: \"bullets\". Value is an array of objects, each with:\n"
+        "  \"bullet\": one sentence summarizing the news (business-focused),\n"
+        "  \"date\": \"YYYY-MM-DD\" (the relevant date for that news).\n\n"
+        "Rules: Only use information from the input. Prefer most recent and most business-relevant. "
+        "Return only valid JSON, no markdown or extra text."
+    )
+    user = (
+        f"Company: {competitor_name}\n\n"
+        "Below are press groups from the past ~30 days. Summarize the most interesting business news as 3-5 bullets with dates.\n\n"
+        + "\n\n".join(lines)
+        + '\n\nReturn only valid JSON: {"bullets": [{"bullet": "...", "date": "YYYY-MM-DD"}, ...]}'
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            max_tokens=600,
+            temperature=0.3,
+        )
+        choice = resp.choices[0] if resp.choices else None
+        if not choice or not choice.message or not choice.message.content:
+            return None
+        text = choice.message.content.strip()
+        if "```" in text:
+            text = re.sub(r"^```\w*\n?", "", text).rstrip("`\n")
+        if not (text.startswith("{") and text.strip().endswith("}")):
+            match = re.search(r"\{[\s\S]*\"bullets\"[\s\S]*\}", text)
+            if match:
+                text = match.group(0)
+        text = re.sub(r",\s*([}\]])", r"\1", text)
+        data = json.loads(text)
+        bullets_raw = data.get("bullets") if isinstance(data, dict) else None
+        if not isinstance(bullets_raw, list):
+            return None
+        result = []
+        for b in bullets_raw[:5]:
+            if not isinstance(b, dict):
+                continue
+            bullet = (b.get("bullet") or b.get("text") or "").strip()
+            date_val = (b.get("date") or "").strip()[:10]
+            if bullet:
+                result.append({"bullet": bullet, "date": date_val if len(date_val) >= 10 else None})
+        return result if result else None
+    except Exception:
+        return None
 
 
 # Phrases that often indicate a JS/consent/ad wall instead of article content.
@@ -1447,7 +1560,7 @@ def enrich_press_items_with_llm(
                 parsed = urllib.parse.urlparse(url)
                 host = (parsed.netloc or "").strip()
                 if not host:
-                    filtered_items.append(it)
+                    # Relative or path-only URL: in this pipeline it comes from scraping the company's own page → drop.
                     continue
                 if _normalize_domain(host) in company_domains_normalized:
                     continue  # drop: on competitor's own domain (including company press page)

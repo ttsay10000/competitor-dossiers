@@ -189,11 +189,23 @@ def _build_context_text(context: Dict[str, Any]) -> str:
     else:
         parts.append("Removed properties: 0.")
 
-    # 2. New roles posted / roles removed
+    # 2. New roles posted / roles removed + current role mix (for significance)
     jobs_added = context.get("jobs_added_since_baseline") or 0
     jobs_removed = context.get("jobs_removed_since_baseline") or 0
-    parts.append(f"New roles posted: {jobs_added}.")
-    parts.append(f"Roles removed: {jobs_removed}.")
+    parts.append(f"New roles posted since baseline: {jobs_added}.")
+    parts.append(f"Roles removed since baseline: {jobs_removed}.")
+    jobs_bf = context.get("jobs_by_function") or []
+    jobs_prop = context.get("jobs_by_function_property") or []
+    if jobs_bf or jobs_prop:
+        role_parts = []
+        for row in (jobs_bf + jobs_prop)[:12]:
+            fn = row.get("function") or "Other"
+            total = row.get("total") or 0
+            senior = row.get("senior") or 0
+            s = f"{fn}: {total}" + (f" ({senior} senior)" if senior else "")
+            role_parts.append(s)
+        if role_parts:
+            parts.append("Current open roles by function (use to interpret significance of new/removed counts): " + "; ".join(role_parts))
 
     # 3. Recent news: feed top_news + press_90d so LLM sees full picture (new markets, expansion coverage)
     top_news = context.get("top_news") or []
@@ -202,7 +214,7 @@ def _build_context_text(context: Dict[str, Any]) -> str:
     if news_pool:
         lines = []
         for n in news_pool[:MAX_NEWS_FOR_SUMMARY]:
-            title = (n.get("title") or n.get("display_title") or "Untitled")[:100]
+            title = (n.get("bullet") or n.get("title") or n.get("display_title") or "Untitled")[:100]
             date_str = n.get("date")
             group = n.get("group_title")
             lines.append(f"({date_str}) {title}" + (f" [{group}]" if group else ""))
@@ -232,22 +244,29 @@ def generate_executive_summary(context: Dict[str, Any]) -> Optional[str]:
     context_text = _build_context_text(context)
     competitor_name = context.get("competitor", {}).get("name", "Competitor")
 
-    system = """You are an executive briefing analyst. Output a structured summary with these exact section bullets, then a landing paragraph.
+    system = """You are an executive briefing analyst. Output a structured summary with clear sections and spacing. Interpret the significance of hiring and job changes, not just counts.
 
-OUTPUT FORMAT (follow this structure exactly):
+OUTPUT FORMAT (follow this structure exactly; use a blank line between each numbered section for readability):
 
 1. New properties: XX properties in YY areas — list the areas (e.g. California; Texas; Florida). If 0, say "0 properties."
-2. Removed properties: XX properties in YY areas — list the areas. If 0, say "0 properties."
-3. New roles posted: XXXX (the number given).
-4. Roles removed: YYYY (the number given).
-5. Recent news articles: derive 1–3 bullet points from the "Recent news" items provided. Focus on expansion, new markets, partnerships, funding, strategy. If no news, say "No notable press since baseline."
 
-Then add a blank line and a landing summary paragraph (1–3 sentences): what this all means and any new strategic shifts that may be happening. Tone: calm and executive.
+2. Removed properties: XX properties in YY areas — list the areas. If 0, say "0 properties."
+
+3. Talent / hiring: State the counts (new roles posted, roles removed). Then in 1–2 sentences explain what it likely means: e.g. net growth in headcount, focus areas (engineering vs property ops), senior vs junior mix, or possible restructuring if many removals. Use the "Current open roles by function" data when provided to interpret where they are hiring (e.g. "Heavy hiring in Engineering and Sales suggests product scaling and go-to-market push").
+
+4. Recent news: Derive 1–3 bullet points from the "Recent news" items. Focus on expansion, new markets, partnerships, funding, strategy, executive appointments. If no news, say "No notable press since baseline."
+
+Then add a blank line, then this exact section header on its own line:
+Key takeaways
+
+Under "Key takeaways", list 2–4 short bullet points (each starting with "- ") that an executive would care about most: strategic shifts, risks, opportunities, or recommended follow-ups.
+
+Then add one more blank line and a final summary paragraph (2–4 sentences): bottom-line meaning, any new strategic shifts, and what to watch. Tone: calm and executive.
 
 Rules:
 - Use the exact numbers and areas from the data provided. Do not invent counts.
-- For news bullets, pull from the article titles/summaries; prioritize new market entry, expansion, partnerships, fundraising.
-- Format: each bullet starting with "- ". No sub-bullets. The landing paragraph has no bullet prefix."""
+- For talent, always comment on significance (what the new/removed role counts imply), not just repeat the numbers.
+- Format: each bullet with "- ". No sub-bullets. Use blank lines between sections. The line "Key takeaways" must appear exactly as written (no bold/asterisks in your output)."""
 
     user = f"Competitor: {competitor_name}\n\nData:\n{context_text}"
 
@@ -258,7 +277,7 @@ Rules:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            max_tokens=600,
+            max_tokens=900,
             temperature=0.3,
         )
         choice = resp.choices[0] if resp.choices else None
@@ -271,17 +290,35 @@ Rules:
 
 
 def _strip_subbullets(text: str) -> str:
-    """Keep only top-level bullets (lines starting with '- ' or '* ' at column 0). Remove sub-bullets and indented lines."""
+    """Keep only top-level bullets (lines starting with '- ' or '* ' at column 0). Remove sub-bullets; preserve blank lines for spacing."""
     lines = []
     for line in text.splitlines():
         s = line.rstrip()
         if not s:
+            lines.append("")  # preserve blank lines for section spacing
             continue
         # Sub-bullet: indented then bullet (e.g. "  - " or "    * ")
         if len(s) > 2 and s[0] in " \t" and (s.lstrip().startswith("- ") or s.lstrip().startswith("* ")):
             continue
         lines.append(s)
     return "\n".join(lines)
+
+
+def format_executive_summary_for_display(text: Optional[str]) -> Optional[str]:
+    """
+    Escape summary text and bold the standalone "Key takeaways" line for HTML display.
+    Returns None if text is None; otherwise returns HTML-safe string with that one line as <strong>.
+    """
+    if not text or not isinstance(text, str):
+        return text
+    import html
+    out = []
+    for line in text.splitlines():
+        if line.strip() == "Key takeaways":
+            out.append("<strong>Key takeaways</strong>")
+        else:
+            out.append(html.escape(line))
+    return "\n".join(out)
 
 
 def clean_location_display_for_dossier(

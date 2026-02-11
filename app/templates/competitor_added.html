@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="card" role="alert" style="border-left: 6px solid var(--accent);">
+    <h2 style="margin: 0 0 4px 0;">Competitor added successfully</h2>
+    <p class="meta" style="margin: 0;">Summary of what was saved for <strong>{{ competitor.name }}</strong>. This competitor is now in the list and has a dossier page; data will appear there after you run collection (see next steps below).</p>
+  </div>
+
+  <div class="card">
+    <h3>Data uploaded</h3>
+    <div class="row" style="margin-bottom: 12px;">
+      <div>
+        <span class="card-section-title">Name</span>
+        <p style="margin: 0;">{{ competitor.name }}</p>
+      </div>
+      <div>
+        <span class="card-section-title">Primary domain</span>
+        <p style="margin: 0;" class="{% if not competitor.primary_domain %}muted{% endif %}">{{ competitor.primary_domain or "—" }}</p>
+      </div>
+    </div>
+
+    {% if talent_urls %}
+    <span class="card-section-title">Talent (job listings)</span>
+    <ul class="url-list meta" style="margin: 4px 0 12px 0; padding-left: 20px;">
+      {% for url in talent_urls %}
+      <li><a href="{{ url }}" target="_blank" rel="noopener">{{ url }}</a></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+
+    {% if asset_urls %}
+    <span class="card-section-title">Asset / locations</span>
+    <ul class="url-list meta" style="margin: 4px 0 12px 0; padding-left: 20px;">
+      {% for url in asset_urls %}
+      <li><a href="{{ url }}" target="_blank" rel="noopener">{{ url }}</a></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+
+    {% if press_urls %}
+    <span class="card-section-title">Press / news</span>
+    <ul class="url-list meta" style="margin: 4px 0 12px 0; padding-left: 20px;">
+      {% for url in press_urls %}
+      <li><a href="{{ url }}" target="_blank" rel="noopener">{{ url }}</a></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+
+    {% if not talent_urls and not asset_urls and not press_urls %}
+    <p class="meta">No source URLs were added. You can add talent, asset, and press URLs from the competitor edit page.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>Next steps: populate this competitor</h3>
+    <p class="meta" style="margin: 0 0 12px 0;">
+      The competitor is saved but has no data yet. Data collection (talent, asset, press) runs separately—either now or later.
+    </p>
+    <div style="margin: 16px 0;">
+      <form method="post" action="/competitors/{{ competitor.id }}/run-now" style="display: inline-block;">
+        <button type="submit">Populate this competitor now</button>
+      </form>
+      <span class="meta" style="margin-left: 8px;">Starts collection in the background; check <a href="/runs">Runs</a> for status.</span>
+    </div>
+    <ol style="margin: 0 0 16px 1.25rem; padding: 0;">
+      <li style="margin-bottom: 8px;">Use <strong>Populate this competitor now</strong> above, or run a full refresh from <a href="/runs">Runs</a> or <strong>Force refresh &amp; reset baseline</strong> on <a href="/competitors">Dossiers</a>.</li>
+      <li style="margin-bottom: 8px;"><strong>Check run status</strong> on the <a href="/runs">Runs</a> page. Each channel (talent, asset, press) should show success before the dossier is useful.</li>
+      <li style="margin-bottom: 8px;"><strong>Open the dossier</strong> once runs have completed: <a href="/dossier/{{ competitor.id }}">View dossier for {{ competitor.name }}</a>.</li>
+      <li>To add or change source URLs (e.g. another job board or press feed), use <a href="/competitors/{{ competitor.id }}">Edit competitor</a>.</li>
+    </ol>
+    <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px;">
+      <a href="/dossier/{{ competitor.id }}"><button>View dossier</button></a>
+      <a href="/competitors/{{ competitor.id }}"><button class="secondary">Edit competitor</button></a>
+      <a href="/runs"><button class="secondary">Runs</button></a>
+      <a href="/competitors"><button class="secondary">Back to Dossiers</button></a>
+    </div>
+  </div>
+{% endblock %}

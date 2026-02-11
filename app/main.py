@@ -2,11 +2,14 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from markupsafe import Markup
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
 from .routes import competitors, feed, runs, dossier
+from .executive_summary import format_executive_summary_for_display
 
 app = FastAPI(title="Competitor Signals")
 
@@ -32,6 +35,17 @@ def _log_playwright_status():
 _app_dir = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(_app_dir / "templates"))
 templates.env.globals["utcnow"] = lambda: datetime.now(timezone.utc)
+
+
+def _exec_summary_display_filter(text):
+    """Bold the 'Key takeaways' line for executive summary HTML; returns Markup so safe to render."""
+    if not text:
+        return ""
+    out = format_executive_summary_for_display(text)
+    return Markup(out) if out else ""
+
+
+templates.env.filters["exec_summary_display"] = _exec_summary_display_filter
 app.state.templates = templates
 
 app.include_router(competitors.router)

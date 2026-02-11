@@ -2,6 +2,12 @@
 {% block content %}
   <h1>Run Status</h1>
 
+  {% if run_started_name %}
+  <div class="card" role="status" style="border-left: 6px solid var(--accent);">
+    <p style="margin: 0;">Data collection started for <strong>{{ run_started_name }}</strong>. New run entries will appear below as talent, asset, and press jobs finish.</p>
+  </div>
+  {% endif %}
+
   <div class="card">
     <form method="get" action="/runs">
       <div class="row">
