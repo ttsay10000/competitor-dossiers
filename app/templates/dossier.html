@@ -118,6 +118,9 @@
         {% if total_properties and total_properties > 0 %}
           <p style="margin: 0 0 8px 0;"><strong>Total: {{ total_properties }} propert{{ 'ies' if total_properties != 1 else 'y' }}</strong></p>
         {% endif %}
+        {% if properties_by_location|length and total_properties and not location_totals_match %}
+          <p class="meta" style="margin: 0 0 8px 0;">Note: Location breakdown (by state) does not sum to total—some locations may have been truncated before grouping.</p>
+        {% endif %}
         {% if properties_by_location|length %}
           <ul style="margin: 0; padding-left: 20px;">
             {% for row in properties_by_location %}
@@ -162,9 +165,13 @@
             var total = data.total_properties || 0;
             var rows = data.properties_by_location || [];
             var otherList = data.other_properties_display || [];
+            var totalsMatch = data.location_totals_match !== false;
             var html = '';
             if (total > 0) {
               html += '<p style="margin: 0 0 8px 0;"><strong>Total: ' + total + ' propert' + (total !== 1 ? 'ies' : 'y') + '</strong></p>';
+            }
+            if (rows.length && total > 0 && !totalsMatch) {
+              html += '<p class="meta" style="margin: 0 0 8px 0;">Note: Location breakdown (by state) does not sum to total—some locations may have been truncated before grouping.</p>';
             }
             if (rows.length) {
               html += '<ul style="margin: 0; padding-left: 20px;">';
@@ -248,6 +255,10 @@
             {% set press_url = item.get('url') or item.get('link') %}
             {% if press_url %}
             <div class="meta" style="font-size: 11px; word-break: break-all; margin-top: 2px;">{{ press_url }}</div>
+            {% endif %}
+            {% set secondary = item.get('secondary_urls') or [] %}
+            {% if secondary %}
+            <div class="meta" style="font-size: 11px; margin-top: 2px;">Also: {% for u in secondary %}<a href="{{ u }}" target="_blank" rel="noopener">{{ u }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</div>
             {% endif %}
             <div class="meta">
               {% if item.get('topic') %}

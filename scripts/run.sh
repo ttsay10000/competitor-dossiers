@@ -56,15 +56,19 @@ case "$CMD" in
     exec "$PYTHON" -m app.seed
     ;;
   talent|asset|press|homepage|public_records|all)
-    if [ -n "${2:-}" ]; then
-      exec "$PYTHON" -m app.cli --channel "$CMD" --competitor "$2"
-    else
-      exec "$PYTHON" -m app.cli --channel "$CMD"
+    EXTRA=""
+    if [ "${2:-}" = "--force" ]; then
+      EXTRA="--force"
+    elif [ -n "${2:-}" ]; then
+      EXTRA="--competitor $2"
+      [ "${3:-}" = "--force" ] && EXTRA="$EXTRA --force"
     fi
+    exec "$PYTHON" -m app.cli --channel "$CMD" $EXTRA
     ;;
   *)
-    echo "Usage: $0 [talent|asset|press|homepage|public_records|all|seed|serve|migrate] [competitor_name]"
+    echo "Usage: $0 [talent|asset|press|homepage|public_records|all|seed|serve|migrate] [competitor_name|--force]"
     echo "  default: all (run all channels)"
+    echo "  --force: clear latest snapshots so run does not skip (enrichment re-runs). E.g. ./scripts/run.sh press --force"
     exit 1
     ;;
 esac

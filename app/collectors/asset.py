@@ -383,14 +383,11 @@ def _extract_properties_via_llm_from_blocks(
     Final dossier display uses only a summary per location (State - N properties (M keys)), not per-property subbullets.
     """
     try:
-        from ..config import settings
-        if not settings.openai_api_key:
+        from ..config import get_openai_client
+        client = get_openai_client()
+        if not client:
             return _lark_blocks_to_properties_without_llm(blocks)
     except Exception:
-        return _lark_blocks_to_properties_without_llm(blocks)
-    try:
-        from openai import OpenAI
-    except ImportError:
         return _lark_blocks_to_properties_without_llm(blocks)
 
     parsed = urlparse(page_url)
@@ -400,7 +397,7 @@ def _extract_properties_via_llm_from_blocks(
         "You are given property blocks from a hotel/portfolio page. Each block has Property name, Location (e.g. City, ST), and Details (Keys, F&B Outlets, Brand, etc.). "
         "Locations will be summarized by state only. Return a JSON array with one object per block, in the same order. Each object must have: "
         '"index" (integer, 0-based), "state" (full US state name only, e.g. "Massachusetts"—no city in state), "city" (optional, e.g. "Cambridge", omit if unknown), '
-        '"details" (string for display, e.g. "67 keys, 2 F&B outlets, Brand: Lark Hotels"). '
+        '"details" (string for display; MUST include the key count when the block shows Keys, e.g. "67 keys, 2 F&B outlets, Brand: Lark Hotels" or "Keys: 67, 2 F&B outlets"—the number before \"keys\" is required for totals). '
         "Use only information from the blocks. Use standard US state names. For anything that does not neatly fit in a specific US state (missing location, career site, non-property link, unclear) use state \"Other\" and omit city. "
         "Return only the JSON array, no markdown."
     )
@@ -412,7 +409,6 @@ def _extract_properties_via_llm_from_blocks(
         user = f"Extract state, city, and details for each property (indices {start} to {start + len(batch) - 1}):\n\n{text}"
 
         try:
-            client = OpenAI(api_key=settings.openai_api_key)
             resp = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -427,6 +423,13 @@ def _extract_properties_via_llm_from_blocks(
                 out.extend(_lark_blocks_to_properties_without_llm(batch))
                 continue
             by_index = {int(item["index"]): item for item in raw if isinstance(item, dict) and "index" in item}
+            # If LLM returned fewer items than blocks, we still output one per block (use block data for missing indices).
+            if len(by_index) < len(batch):
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Lark LLM extraction returned %d items for %d blocks (indices %d–%d); using block fallback for missing.",
+                    len(by_index), len(batch), start, start + len(batch) - 1,
+                )
             for i, b in enumerate(batch):
                 name = (b.get("name") or "").strip()
                 if not name:
@@ -485,14 +488,11 @@ def _extract_properties_via_llm(html: str, page_url: str) -> List[dict[str, Any]
     Returns list of dicts with "name" and optionally "url" (absolute). Requires OPENAI_API_KEY.
     """
     try:
-        from ..config import settings
-        if not settings.openai_api_key:
+        from ..config import get_openai_client
+        client = get_openai_client()
+        if not client:
             return []
     except Exception:
-        return []
-    try:
-        from openai import OpenAI
-    except ImportError:
         return []
 
     text = _html_to_text_for_llm(html)
@@ -511,7 +511,6 @@ def _extract_properties_via_llm(html: str, page_url: str) -> List[dict[str, Any]
     user = f"Page base URL: {base_url}\n\nExtract all properties from this page text:\n\n{text}"
 
     try:
-        client = OpenAI(api_key=settings.openai_api_key)
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -868,8 +867,8 @@ def collect_asset_snapshot(
 
     def _fetch_without_browser() -> dict[str, Any]:
         """Sitemap first, then HTML; used when JS/Playwright is not available (e.g. Render cron).
-        If opts.llm_extract is True and OPENAI_API_KEY is set, HTML is parsed via LLM to extract
-        properties from card-style content (e.g. Lark portfolio)."""
+        When llm_extract is True, tries Lark-style block extraction first so we get the initial
+        batch (~6 properties) from the first HTML; then falls back to generic LLM or link extraction."""
         sitemap_snapshot = fetch_from_sitemap()
         if sitemap_snapshot and sitemap_snapshot.get("properties"):
             return {**sitemap_snapshot, "note": "sitemap_first"}
@@ -879,6 +878,39 @@ def collect_asset_snapshot(
                 f"Asset fetch failed: {fetched.url} returned HTTP {fetched.status_code}. "
                 "Refusing to parse or persist; check Runs for this error."
             )
+        parsed = urlparse(source_url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else source_url
+
+        # Try Lark-style h2/ul blocks first (works on initial HTML without Load more; gives ~6 properties).
+        lark_blocks = _extract_lark_style_blocks(fetched.text, base_url)
+        if lark_blocks and opts.get("llm_extract"):
+            properties = _extract_properties_via_llm_from_blocks(lark_blocks, source_url)
+            properties = _merge_link_properties_into(properties, fetched.text, threshold=999)
+            normalized = normalize_properties(properties)
+            if not normalized and properties:
+                normalized = normalize_properties(_lark_blocks_to_properties_without_llm(lark_blocks))
+            if normalized:
+                return {
+                    "source_url": fetched.url,
+                    "raw_content": fetched.text,
+                    "raw_hash": fetched.raw_hash,
+                    "properties": normalized,
+                    "note": "html_lark_blocks",
+                }
+            # else fall through to generic LLM/link path
+        elif lark_blocks and not opts.get("llm_extract"):
+            properties = _lark_blocks_to_properties_without_llm(lark_blocks)
+            properties = _merge_link_properties_into(properties, fetched.text, threshold=999)
+            normalized = normalize_properties(properties)
+            if normalized:
+                return {
+                    "source_url": fetched.url,
+                    "raw_content": fetched.text,
+                    "raw_hash": fetched.raw_hash,
+                    "properties": normalized,
+                    "note": "html_lark_blocks",
+                }
+
         if opts.get("llm_extract"):
             properties = _extract_properties_via_llm(fetched.text, source_url)
             if not properties:

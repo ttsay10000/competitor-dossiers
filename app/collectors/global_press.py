@@ -11,7 +11,7 @@ from typing import Any, List, Optional
 from urllib.parse import quote_plus, urljoin
 
 import feedparser
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from .http import fetch_url, USER_AGENT_BROWSER
 
@@ -34,6 +34,76 @@ def _within_window(dt: Optional[datetime], cutoff: datetime) -> bool:
         # When we cannot parse a date, keep the item but rely on per-source caps.
         return True
     return dt >= cutoff
+
+
+def _date_from_article_html(html: str) -> Optional[datetime]:
+    """
+    Extract publication date from article page HTML.
+    PR Newswire uses <meta name='date' content="2025-02-24T09:00:00-05:00"/> and JSON-LD datePublished.
+    Also checks article:published_time, og:published_time, and loose ISO in first 15k chars.
+    """
+    if not html or len(html) < 100:
+        return None
+    # PR Newswire: <meta name='date' content="2025-02-24T09:00:00-05:00"/>
+    meta_name_date = re.search(
+        r'<meta[^>]+\bname\s*=\s*["\']date["\'][^>]+\bcontent\s*=\s*["\']([^"\']+)["\']',
+        html,
+        re.IGNORECASE,
+    )
+    if not meta_name_date:
+        meta_name_date = re.search(
+            r'<meta[^>]+\bcontent\s*=\s*["\']([^"\']+)["\'][^>]+\bname\s*=\s*["\']date["\']',
+            html,
+            re.IGNORECASE,
+        )
+    if meta_name_date:
+        parsed = _parse_iso_date(meta_name_date.group(1).strip())
+        if parsed:
+            return parsed
+    # Meta: <meta property="article:published_time" content="2024-01-15T12:00:00+00:00" />
+    meta_match = re.search(
+        r'<meta[^>]+property=["\']article:published_time["\'][^>]+content=["\']([^"\']+)["\']',
+        html,
+        re.IGNORECASE,
+    )
+    if not meta_match:
+        meta_match = re.search(
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']article:published_time["\']',
+            html,
+            re.IGNORECASE,
+        )
+    if meta_match:
+        parsed = _parse_iso_date(meta_match.group(1).strip())
+        if parsed:
+            return parsed
+    # og:published_time (some PR Newswire / CMS use this)
+    og_match = re.search(
+        r'<meta[^>]+property=["\']og:published_time["\'][^>]+content=["\']([^"\']+)["\']',
+        html,
+        re.IGNORECASE,
+    )
+    if not og_match:
+        og_match = re.search(
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:published_time["\']',
+            html,
+            re.IGNORECASE,
+        )
+    if og_match:
+        parsed = _parse_iso_date(og_match.group(1).strip())
+        if parsed:
+            return parsed
+    # JSON-LD: "datePublished": "2024-01-15T..."
+    for m in re.finditer(r'"datePublished"\s*:\s*"([^"]+)"', html):
+        parsed = _parse_iso_date(m.group(1).strip())
+        if parsed:
+            return parsed
+    # Loose ISO date in first 15k chars (fallback for odd CMS output)
+    iso_match = re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?", html[:15000])
+    if iso_match:
+        parsed = _parse_iso_date(iso_match.group(0))
+        if parsed:
+            return parsed
+    return None
 
 
 def collect_business_insider_items(
@@ -297,6 +367,66 @@ def collect_yahoo_finance_items(
     return results
 
 
+def _html_to_article_body_text(html: str, max_chars: int = 15000) -> str:
+    """
+    Extract main article body text from HTML for phrase checks.
+    Prefer text from <p> paragraphs inside article/main so we skip leading metadata
+    (title, date, byline, share links); fall back to full root text if few paragraphs.
+    """
+    if not html or len(html) < 100:
+        return ""
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup.find_all(["script", "style", "noscript"]):
+        tag.decompose()
+    root = soup.find("article") or soup.find("main")
+    if not root:
+        root = soup.find("body") or soup
+    # Prefer paragraph content so metadata isn't mistaken for body (e.g. "Lark" in title only).
+    paragraphs = root.find_all("p")
+    if paragraphs:
+        body_from_p = "\n\n".join(p.get_text(separator=" ", strip=True) for p in paragraphs if p.get_text(strip=True))
+        if len(body_from_p.strip()) >= 100:
+            text = re.sub(r"\n{3,}", "\n\n", body_from_p)
+            return text[:max_chars] if len(text) > max_chars else text
+    text = root.get_text(separator="\n", strip=True)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text[:max_chars] if len(text) > max_chars else text
+
+
+def _article_body_mentions_phrases(
+    article_url: str,
+    phrases: List[str],
+    timeout: int = 15,
+    max_body_chars: int = 15000,
+) -> bool:
+    """
+    Fetch article page and return True if the body text (article/main/body) contains
+    any of the given phrases (case-insensitive). Used to require e.g. "Lark Hotels"
+    or "Lark Hospitality" in the article body, not just the title.
+    """
+    if not article_url or not phrases:
+        return False
+    phrases = [p.strip() for p in phrases if p and p.strip()]
+    if not phrases:
+        return False
+    try:
+        resp = fetch_url(
+            article_url,
+            timeout=timeout,
+            headers={"User-Agent": USER_AGENT_BROWSER},
+        )
+        if resp.status_code != 200 or not resp.text:
+            return False
+        body_text = _html_to_article_body_text(resp.text, max_chars=max_body_chars)
+        body_lower = body_text.lower()
+        for phrase in phrases:
+            if phrase.lower() in body_lower:
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def _fetch_google_news_rss(
     quoted_phrase: str,
     when_days: int,
@@ -344,36 +474,50 @@ def _fetch_google_news_rss(
             dt = _parse_iso_date(entry.published)
         if dt and dt < cutoff:
             continue
+        # Actual publication name (e.g. "Hotel Management", "Skift") so enricher can distinguish outlets for dedupe.
+        outlet = ""
+        src = entry.get("source")
+        if hasattr(src, "get") and isinstance(src, dict):
+            outlet = (src.get("title") or "").strip()
+        elif isinstance(src, str):
+            outlet = src.strip()
+        # Feed snippet helps LLM judge similarity without fetching the article (Google News RSS often includes summary).
+        snippet = ""
+        raw_summary = entry.get("summary") or entry.get("description")
+        if raw_summary and isinstance(raw_summary, str):
+            snippet = (BeautifulSoup(raw_summary, "html.parser").get_text(separator=" ", strip=True))[:500]
         seen_urls.add(link)
-        results.append(
-            {
-                "title": title,
-                "url": link,
-                "date": dt.isoformat() if dt else None,
-                "source": "Google News",
-                "provider": "google_news",
-            }
-        )
+        item = {
+            "title": title,
+            "url": link,
+            "date": dt.isoformat() if dt else None,
+            "source": "Google News",
+            "provider": "google_news",
+        }
+        if outlet:
+            item["outlet"] = outlet
+        if snippet:
+            item["snippet"] = snippet
+        results.append(item)
     return results
 
 
 def collect_google_news_items(
     company_name: str,
     max_items: int = 40,
-    window_days: int = 120,
+    window_days: int = 90,
 ) -> List[dict]:
     """
     Fetch Google News articles that contain the company name as an exact phrase
     (quoted search). Date on each item is publication date only (from RSS
     published/published_parsed; never fetch time).
 
-    Uses when:Nd (days) in the query; Google News RSS accepts days but returns empty for when:Nm (months).
+    Uses when:Nd (days) in the query (e.g. when:90d); Google News RSS accepts days but returns empty for when:Nm (months).
     We also enforce the window in code by dropping entries older than cutoff.
     For multi-word names (e.g. "Lark Hotels") we fetch both the full phrase and
-    the first word ("Lark") and merge so we get headlines that use either
-    (e.g. "Lark appoints...", "Lark Hotels to open..."). Downstream LLM
-    classification filters irrelevant matches. Company blog links are filtered
-    out by the pipeline (company_domains).
+    the first word ("Lark") and merge so we get headlines that use either.
+    Partnership phrase is also fetched. Company blog links are filtered out by the
+    pipeline (company_domains). Downstream LLM (first/final dedupe) filters irrelevant items.
     """
     company_name = (company_name or "").strip()
     if not company_name:
@@ -418,7 +562,7 @@ def collect_prnewswire_items(
     """
     Fetch PR Newswire press releases for the company by searching with company name.
     Date on each item is the release publication date (from card text; never upload/fetch time).
-    Used as the second-priority news source (after user-provided company news links).
+    Treated on par with Google News and user-provided company news links; enrichment/dedupe run after merge.
     """
     company_name = (company_name or "").strip()
     if not company_name:
@@ -426,7 +570,7 @@ def collect_prnewswire_items(
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
     query = quote_plus(company_name)
-    # Try max 100 results per page; PR Newswire may cap server-side.
+    # Request 100 results per page; pull all links that appear (up to max_items=100).
     search_url = (
         f"https://www.prnewswire.com/search/all/?keyword={query}&pagesize=100"
     )
@@ -493,8 +637,90 @@ def collect_prnewswire_items(
             return "Press release"
         return slug.replace("-", " ").strip()[:300]
 
+    # Multiple date patterns: abbreviated month, full month, ISO.
+    _date_re_abbrev = re.compile(
+        r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s*\d{4}",
+        re.IGNORECASE,
+    )
+    _date_re_full_month = re.compile(
+        r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s*\d{4}",
+        re.IGNORECASE,
+    )
+    _date_re_iso = re.compile(r"\d{4}-\d{2}-\d{2}(?:T[0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)?")
+
+    def _date_from_card(link) -> Optional[datetime]:
+        """Look for publication date in the link's card/container: <time datetime>, 'Mon DD, YYYY', full month, or ISO. Also check siblings (date is often in a sibling element)."""
+        def _date_from_node(n):
+            if n is None:
+                return None
+            time_tag = n.find("time", datetime=True) if isinstance(n, Tag) else None
+            if time_tag:
+                dt_val = (time_tag.get("datetime") or "").strip()
+                if dt_val:
+                    parsed = _parse_iso_date(dt_val)
+                    if parsed:
+                        return parsed
+            text = (n.get_text(" ", strip=True) if hasattr(n, "get_text") else "") or ""
+            if text:
+                m = _date_re_abbrev.search(text)
+                if m:
+                    try:
+                        dt = datetime.strptime(m.group(0), "%b %d, %Y")
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        return dt
+                    except Exception:
+                        pass
+                m = _date_re_full_month.search(text)
+                if m:
+                    try:
+                        s = m.group(0).replace(",", "").strip()
+                        dt = datetime.strptime(s, "%B %d %Y")
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        return dt
+                    except Exception:
+                        pass
+                m = _date_re_iso.search(text)
+                if m:
+                    parsed = _parse_iso_date(m.group(0))
+                    if parsed:
+                        return parsed
+            return None
+
+        # Check link and its ancestors.
+        node = link
+        for _ in range(8):
+            if node is None:
+                break
+            dt = _date_from_node(node)
+            if dt is not None:
+                return dt
+            # Check siblings (date often in next/prev sibling in list layouts).
+            for sib in (getattr(node, "previous_sibling", None), getattr(node, "next_sibling", None)):
+                if sib is not None and isinstance(sib, Tag):
+                    dt = _date_from_node(sib)
+                    if dt is not None:
+                        return dt
+            node = node.parent if hasattr(node, "parent") else None
+        return None
+
     # Rescue: include article if body contains partnership/collaboration phrasing re company (e.g. "The Code" hotel with Avantstay).
     _rescue_fetches_left = 10  # cap to avoid rate limits
+    _date_fetches_left = 25  # cap for fetching article page only to extract date (PR Newswire often has date only on article page)
+
+    def _date_from_article_url(article_url: str) -> Optional[datetime]:
+        nonlocal _date_fetches_left
+        if _date_fetches_left <= 0:
+            return None
+        _date_fetches_left -= 1
+        try:
+            resp = fetch_url(article_url, timeout=15, headers={"User-Agent": USER_AGENT_BROWSER})
+            if resp.status_code == 200 and resp.text:
+                return _date_from_article_html(resp.text)
+        except Exception:
+            pass
+        return None
 
     def _article_mentions_partnership_with_company(article_url: str, company: str) -> bool:
         nonlocal _rescue_fetches_left
@@ -548,19 +774,27 @@ def collect_prnewswire_items(
                 title = (parent.get_text() or "").strip()[:200]
             if not title or len(title) < 10:
                 continue
-        date_match = re.search(
-            r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s*\d{4}",
-            title,
-            re.IGNORECASE,
-        )
-        dt: Optional[datetime] = None
-        if date_match:
-            try:
-                dt = datetime.strptime(date_match.group(0), "%b %d, %Y")
-                if dt and dt < cutoff:
-                    continue
-            except Exception:
-                pass
+        # Date: prefer card/container (e.g. <time> or date text in card), then title.
+        dt: Optional[datetime] = _date_from_card(a)
+        if dt is None:
+            date_match = re.search(
+                r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s*\d{4}",
+                title,
+                re.IGNORECASE,
+            )
+            if date_match:
+                try:
+                    dt = datetime.strptime(date_match.group(0), "%b %d, %Y")
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                except Exception:
+                    pass
+        if dt is None and href:
+            dt = _date_from_article_url(href)
+        if dt and dt < cutoff:
+            continue
+        # Strip leading "Mon DD, YYYY: " from title for display when present.
+        if re.search(r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s*\d{4}", title, re.IGNORECASE):
             title = re.sub(r"^[A-Za-z]{3}\s+\d{1,2},\s*\d{4}[^:]*:\s*", "", title).strip()
         if not _title_mentions_company(title, href):
             if not _article_mentions_partnership_with_company(href, company_name):
@@ -581,6 +815,35 @@ def collect_prnewswire_items(
     # 2) Fallback: PR Newswire injects result links via JS but often embeds URLs in the HTML (e.g. in script/data).
     #    Extract relative paths /news-releases/...html and build items so we get articles without Playwright.
     #    Slug is lowercase and ends with -<id>; strip the ID and title-case for display.
+    def _date_near_match(html: str, start: int, end: int) -> Optional[datetime]:
+        """Look for a date pattern in a window of raw HTML around a matched path."""
+        lo = max(0, start - 350)
+        hi = min(len(html), end + 150)
+        window = html[lo:hi]
+        match = _date_re_abbrev.search(window)
+        if match:
+            try:
+                dt = datetime.strptime(match.group(0), "%b %d, %Y")
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+            except Exception:
+                pass
+        match = _date_re_full_month.search(window)
+        if match:
+            try:
+                s = match.group(0).replace(",", "").strip()
+                dt = datetime.strptime(s, "%B %d %Y")
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+            except Exception:
+                pass
+        match = _date_re_iso.search(window)
+        if match:
+            return _parse_iso_date(match.group(0))
+        return None
+
     if len(results) < 2 and html_content:
         path_pattern = re.compile(r"/news-releases/([^\s\"'<>?]+\.html)")
         for m in path_pattern.finditer(html_content):
@@ -594,12 +857,15 @@ def collect_prnewswire_items(
             if not _title_mentions_company(title, href):
                 if not _article_mentions_partnership_with_company(href, company_name):
                     continue
+            dt_fb = _date_near_match(html_content, m.start(), m.end())
+            if dt_fb is None and _date_fetches_left > 0:
+                dt_fb = _date_from_article_url(href)
             seen_urls.add(href)
             results.append(
                 {
                     "title": title[:300],
                     "url": href,
-                    "date": None,
+                    "date": dt_fb.isoformat() if dt_fb else None,
                     "source": "PR Newswire",
                     "provider": "prnewswire",
                 }

@@ -27,4 +27,8 @@ app.mount("/static", StaticFiles(directory=str(_app_dir / "static")), name="stat
 def health():
     from .config import settings
 
-    return {"status": "ok", "version": settings.version}
+    return {
+        "status": "ok",
+        "version": settings.version,
+        "playwright_enabled": getattr(settings, "playwright_enabled", False),
+    }

@@ -109,12 +109,18 @@ def main() -> None:
     # 2b) Pipeline on same HTML (blocks -> properties -> normalize) to see if we lose count here
     print("=== 2b. Pipeline on same HTML (blocks -> LLM/fallback -> merge -> normalize) ===")
     pipeline_count = 0
+    props_from_blocks_count = 0
     if blocks:
         props_from_blocks = _extract_properties_via_llm_from_blocks(blocks, LARK_PORTFOLIO_URL)
+        props_from_blocks_count = len(props_from_blocks)
         merged = _merge_link_properties_into(props_from_blocks, html, threshold=999)
         normalized = normalize_properties(merged)
         pipeline_count = len(normalized)
-        print(f"  From {len(blocks)} blocks -> {len(props_from_blocks)} from LLM/fallback -> {len(merged)} after merge -> {len(normalized)} after normalize")
+        print(f"  From {len(blocks)} blocks -> {props_from_blocks_count} from LLM/fallback -> {len(merged)} after merge -> {len(normalized)} after normalize")
+        if props_from_blocks_count < len(blocks):
+            print(f"  >>> LLM/fallback returned FEWER items ({props_from_blocks_count}) than blocks ({len(blocks)}); check for API truncation or prompt.")
+        if pipeline_count < props_from_blocks_count:
+            print(f"  >>> normalize_properties reduced count ({props_from_blocks_count} -> {pipeline_count}); check name/URL dedup or junk filtering.")
         if pipeline_count == 0 and len(blocks) > 0:
             fallback = _lark_blocks_to_properties_without_llm(blocks)
             norm_fallback = normalize_properties(fallback)
@@ -165,7 +171,11 @@ def main() -> None:
                 print(f"  ... and {count - 5} more")
     print()
 
-    # Summary
+    # Summary and expected counts
+    print("=== Expected output (Lark portfolio) ===")
+    print("  With Playwright + Load more: ~69 blocks -> ~69 from LLM -> ~69 after normalize (full list).")
+    print("  Without Playwright:         ~6 blocks (first batch only) -> ~6 properties.")
+    print()
     print("=== Summary ===")
     print(f"  Blocks: {len(blocks)} | Pipeline on same HTML: {pipeline_count} | Step 4 (full fetch): {count} | Links: {len(link_props)}")
     if count >= 60:
@@ -174,7 +184,7 @@ def main() -> None:
         print("  -> Pipeline on same HTML has ~69 but step 4 got 0: step 4 uses a second fetch (likely no Playwright or timeout).")
     elif pipeline_count == 0 and len(blocks) > 0:
         print("  -> Blocks present but pipeline on same HTML returned 0: check normalize_properties or LLM/fallback.")
-    elif count > 0:
+    elif count > 0 and count < 60:
         print("  -> Fewer than expected; try PLAYWRIGHT_ENABLED=true for full list")
     elif len(blocks) <= 10 and not use_playwright:
         print("  -> Plain HTTP only gets first batch (~6 in initial HTML); use PLAYWRIGHT_ENABLED=true + playwright install to get ~69")

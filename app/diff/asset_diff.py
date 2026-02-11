@@ -131,6 +131,13 @@ _DESTINATION_SLUG_TO_STATE = {
     "naples": "Florida",
     "south-florida": "Florida",
     "gulf-shores": "Florida",  # AL; often grouped with FL beach
+    "key-west": "Florida",
+    "marco-island": "Florida",
+    "fort-myers": "Florida",
+    "fort-myers-beach": "Florida",
+    "st-augustine": "Florida",
+    "emerald-coast": "Florida",
+    "30a": "Florida",
     # Hawaii
     "maui": "Hawaii",
     "oahu": "Hawaii",
@@ -206,6 +213,9 @@ _DESTINATION_SLUG_TO_STATE = {
     "hudson-valley": "New York",
     "catskills": "New York",
     "adirondacks": "New York",
+    "berkshires": "Massachusetts",  # MA/NY; pick MA as primary
+    # Pennsylvania (multi-state regions: pick one nearest state)
+    "poconos": "Pennsylvania",
     # Massachusetts
     "cape-cod": "Massachusetts",
     "boston": "Massachusetts",

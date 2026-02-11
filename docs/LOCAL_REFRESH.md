@@ -112,6 +112,28 @@ Add a line (adjust the path):
 To disable:  
 `launchctl unload ~/Library/LaunchAgents/com.competitor-dossiers.refresh.plist`
 
+## How to confirm Playwright runs every time
+
+Playwright is required for **Lark** (and **AvantStay** talent) so “Load more” and JS-rendered pages are fully fetched. It must be enabled in the **process** that runs the collectors.
+
+| Trigger | Where it runs | How to ensure Playwright is on |
+|--------|----------------|---------------------------------|
+| **Refresh data** (dossier) | Same process as the web app | Web server must have `PLAYWRIGHT_ENABLED=true` in its environment when it starts. |
+| **Reset baseline & refresh** (dossier) | Same process as the web app | Same as above. |
+| **Set baseline for all & refresh** (competitors page) | Same process as the web app | Same as above. |
+| **CLI / scripts** (e.g. `./scripts/run.sh asset`, `./scripts/refresh.sh`) | Separate process | `run.sh` and `refresh.sh` default `PLAYWRIGHT_ENABLED=true`; or set it in `.env` (they source `.env`). |
+| **Each push (Render)** | Web service + Cron each have their own env | In Render Dashboard: set **`PLAYWRIGHT_ENABLED=true`** for **both** the **Web Service** and the **Cron** job (or in an env group they use). The Docker image already includes Playwright + Chromium. |
+
+**Local (web server):**
+
+- Start the server with `./scripts/run.sh serve` — it sources `.env` and defaults `PLAYWRIGHT_ENABLED=true`, so UI refresh/reset/set-baseline all use Playwright.
+- Or put `PLAYWRIGHT_ENABLED=true` in `.env` and start the app any way; the app reads env at startup.
+
+**Confirm:**
+
+- **GET /health** returns `playwright_enabled: true` when the running process has Playwright enabled.  
+  Example: `curl -s https://competitor-dossiers.onrender.com/health` or `curl -s http://127.0.0.1:8000/health` — check that `"playwright_enabled": true`.
+
 ## Summary
 
 | Goal              | Command / approach                    |

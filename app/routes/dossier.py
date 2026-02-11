@@ -5,11 +5,16 @@ from typing import Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
+from sqlalchemy import or_
 
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, Snapshot, Capability
 from ..diff.asset_diff import diff_properties, delta_by_city, infer_location_for_property, is_location_treated_as_other, parse_keys_from_details
-from ..executive_summary import generate_executive_summary, clean_location_display_for_dossier
+from ..executive_summary import (
+    generate_executive_summary,
+    clean_location_display_for_dossier,
+    aggregate_state_and_state_city_rows,
+)
 from ..llm_structured import _assign_state_from_url
 from ..rules.talent_rules import job_functional_area, FUNCTIONAL_AREA_DISPLAY_ORDER, PROPERTY_OPERATIONS_LABEL
 
@@ -21,6 +26,8 @@ _EXEC_SUMMARY_CACHE: dict[tuple, str] = {}
 _EXEC_SUMMARY_CACHE_MAX = 50
 _LOCATION_CLEAN_CACHE: dict[tuple, dict] = {}
 _LOCATION_CLEAN_CACHE_MAX = 100
+# Bump when prompt or aggregation logic changes so cached results are invalidated and new LLM runs.
+_LOCATION_CLEAN_CACHE_VERSION = 2
 
 
 def _exec_summary_cache_key(competitor_id: int, context: dict) -> tuple:
@@ -37,7 +44,7 @@ def _location_clean_cache_key(name: str, props: list, deltas: list, other_bullet
     props_sig = tuple((r.get("location"), r.get("count"), r.get("keys", 0)) for r in (props or [])[:100])
     deltas_sig = tuple((r.get("location"), r.get("added"), r.get("removed")) for r in (deltas or [])[:50])
     other_sig = (other_bullets or "")[:500]
-    return (name, props_sig, deltas_sig, other_sig)
+    return (_LOCATION_CLEAN_CACHE_VERSION, name, props_sig, deltas_sig, other_sig)
 
 
 def clear_dossier_caches_for_competitor(competitor_id: int) -> None:
@@ -132,6 +139,117 @@ def build_recommendations(events: list) -> list[dict]:
     return out
 
 
+def format_dossier_preview_text(context: dict) -> str:
+    """Format dossier context as plain text matching what the site displays (for terminal debug)."""
+    if context.get("error"):
+        return f"[Error] {context['error']}"
+    name = (context.get("competitor") or {}).get("name") or "Unknown"
+    lines = [
+        "",
+        "=" * 60,
+        f"  SITE PREVIEW: {name}",
+        "=" * 60,
+        "",
+        "--- Executive summary ---",
+        "(On site: AI summary or 'Loading…' / 'Set OPENAI_API_KEY…')",
+        "",
+        "--- Top news (up to 5) ---",
+    ]
+    top_news = context.get("top_news") or []
+    if top_news:
+        for item in top_news:
+            date_str = item.get("date") or ""
+            title = item.get("title") or "Article"
+            url = item.get("url") or item.get("link") or ""
+            topic = (item.get("topic") or "").replace("_", " ")
+            outlet = item.get("outlet") or ""
+            raw_summary = item.get("summary") or ""
+            summary = raw_summary[:120] + ("…" if len(raw_summary) > 120 else "") if raw_summary else ""
+            parts = [f"  {date_str} — {title}", f"    URL: {url}"]
+            if topic:
+                parts.append(f"    Topic: {topic}")
+            if outlet:
+                parts.append(f"    Outlet: {outlet}")
+            if summary:
+                parts.append(f"    Summary: {summary}")
+            lines.append("\n".join(parts))
+            lines.append("")
+    else:
+        lines.append("  No press items in snapshot, or none passed relevance filter.")
+        lines.append("")
+    lines.append("--- Properties by location ---")
+    total = context.get("total_properties") or 0
+    if total:
+        lines.append(f"  Total: {total} propert{'ies' if total != 1 else 'y'}")
+    props = context.get("properties_by_location") or []
+    if props:
+        for row in props:
+            loc = row.get("location") or ""
+            count = row.get("count") or 0
+            keys = row.get("keys") or 0
+            keys_str = f" ({keys} keys)" if keys else ""
+            lines.append(f"  · {loc}: {count} propert{'ies' if count != 1 else 'y'}{keys_str}")
+        other_display = context.get("other_properties_display") or []
+        if other_display and any((r.get("location") or "").strip() == "Other" for r in props):
+            for op in other_display:
+                lines.append(f"      - {op.get('name') or 'Unnamed'} — {op.get('raw_location') or op.get('market') or op.get('url') or '—'}")
+    else:
+        lines.append("  No property data yet. Run the asset collector to populate.")
+    lines.append("")
+    lines.append("--- Talent snapshot ---")
+    talent_jobs = context.get("talent_jobs") or []
+    jobs_bf = context.get("jobs_by_function") or []
+    jobs_prop = context.get("jobs_by_function_property") or []
+    if talent_jobs:
+        lines.append(f"  Total roles: {len(talent_jobs)}")
+        lines.append("  Business & strategy:")
+        if jobs_bf:
+            for row in jobs_bf:
+                s = f" ({row.get('senior')} senior)" if row.get("senior") else ""
+                lines.append(f"    · {row.get('function')}: {row.get('total')} role{'s' if (row.get('total') or 0) != 1 else ''}{s}")
+        else:
+            lines.append("    No business/strategy roles in this snapshot.")
+        lines.append("  Property operations:")
+        if jobs_prop:
+            for row in jobs_prop:
+                s = f" ({row.get('senior')} senior)" if row.get("senior") else ""
+                lines.append(f"    · {row.get('function')}: {row.get('total')} role{'s' if (row.get('total') or 0) != 1 else ''}{s}")
+        else:
+            lines.append("    No property operations roles in this snapshot.")
+    else:
+        lines.append("  No talent data yet. Run the talent collector to populate.")
+    lines.append("")
+    lines.append("--- Press (90d, business-focused) ---")
+    press_90d = context.get("press_90d") or []
+    if press_90d:
+        lines.append(f"  Total items: {len(press_90d)}")
+        for item in press_90d[:5]:
+            date_str = item.get("date") or "Date unknown"
+            title = item.get("display_title") or item.get("title") or "Article"
+            lines.append(f"  · {date_str} — {title}")
+        if len(press_90d) > 5:
+            lines.append(f"  … and {len(press_90d) - 5} more")
+    else:
+        lines.append("  No business-relevant press.")
+    lines.append("")
+    lines.append("--- Recent events (90 days) ---")
+    events = context.get("events") or []
+    if events:
+        lines.append(f"  Total events: {len(events)}")
+        for e in events[:5]:
+            title = e.get("title") or "Event"
+            when = e.get("occurred_at_str") or e.get("detected_at_str") or ""
+            cat = e.get("category") or ""
+            typ = e.get("type") or ""
+            lines.append(f"  · {when} — {title} [{cat} / {typ}]")
+        if len(events) > 5:
+            lines.append(f"  … and {len(events) - 5} more")
+    else:
+        lines.append("  No recent events.")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def build_dossier_context(session, competitor_id: int, *, skip_property_llm: bool = False) -> dict:
     """Build dossier context. When skip_property_llm=True, use URL-derived locations only (no LLM) for fast load."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=90)
@@ -168,9 +286,17 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         .first()
     )
 
+    # Include events that are "recent" by either detection or occurrence (90 days).
+    # This ensures events that occurred within 90 days are shown even if they were detected earlier.
     events = (
         session.query(Event)
-        .filter(Event.competitor_id == competitor_id, Event.detected_at >= cutoff)
+        .filter(
+            Event.competitor_id == competitor_id,
+            or_(
+                Event.detected_at >= cutoff,
+                (Event.occurred_at.isnot(None)) & (Event.occurred_at >= cutoff),
+            ),
+        )
         .order_by(Event.detected_at.desc())
         .all()
     )
@@ -194,7 +320,13 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
                     reporting_baseline_date = d
     if reporting_baseline_date:
         baseline_cutoff = datetime.strptime(reporting_baseline_date, "%Y-%m-%d")
-        events = [e for e in events if e.detected_at.date() >= baseline_cutoff.date()]
+        baseline_date = baseline_cutoff.date()
+        events = [
+            e
+            for e in events
+            if e.detected_at.date() >= baseline_date
+            or (e.occurred_at is not None and _utc_dt(e.occurred_at) and _utc_dt(e.occurred_at).date() >= baseline_date)
+        ]
     # Order events by date published (occurred_at) when available, else detected_at, newest first.
     # Use timestamp to avoid naive/aware comparison errors.
     def _event_sort_key(e):
@@ -287,8 +419,11 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         dt = _parse_press_date(item.get("date"))
         display_date = dt.strftime("%Y-%m-%d") if dt else None
         out = dict(item)
+        # Always set date for display: parsed YYYY-MM-DD, or raw string if parse failed (e.g. ISO from pipeline).
         if display_date:
             out["date"] = display_date
+        elif item.get("date") and isinstance(item.get("date"), str) and item.get("date").strip():
+            out["date"] = item.get("date", "").strip()[:20]
         raw_title = out.get("title") or ""
         out["display_title"] = _press_display_title(raw_title)
         out["_sort_dt"] = dt  # for sorting; removed before template
@@ -326,13 +461,9 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     def _newsworthiness_score(item: dict) -> tuple:
         topic = (item.get("topic") or "").lower()
         topic_score = TOPIC_NEWSWORTHINESS.get(topic, 0)
-        url = (item.get("url") or item.get("link") or "").lower()
-        outlet = (item.get("outlet") or "").lower()
-        is_press_release = "prnewswire" in url or "prnewswire" in outlet
-        source_score = 10 if is_press_release else 0  # press releases = highest priority
         dt = _parse_press_date(item.get("date"))
         recency_score = 5 if (dt and dt >= week_cutoff_pub) else 0  # last 7 days boost
-        score = source_score + topic_score + recency_score
+        score = topic_score + recency_score  # no source prioritization; all sources equal
         # Use timestamp for sort to avoid mixing naive/aware datetimes (TypeError on some pages)
         ts = dt.timestamp() if dt else 0.0
         return (score, ts)
@@ -430,6 +561,9 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         ]
 
     # One LLM step: send only the list (location - count) and Other sub-bullets; LLM buckets by state. No per-property data.
+    # Pre-aggregate "State - City" rows (e.g. Vermont - Burlington, Vermont - Stowe) into one row per state with summed count/keys
+    # so the LLM receives state-level rows and we get e.g. "Vermont – 2 properties (62 keys)".
+    properties_by_location_for_llm = aggregate_state_and_state_city_rows(properties_by_location)
     other_sub_bullets_text = None
     if other_properties_display:
         other_sub_bullets_text = "\n".join(
@@ -438,14 +572,14 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     cleaned = None
     if not skip_property_llm:
         loc_key = _location_clean_cache_key(
-            competitor.name, properties_by_location, asset_delta_by_city, other_sub_bullets_text
+            competitor.name, properties_by_location_for_llm, asset_delta_by_city, other_sub_bullets_text
         )
         if loc_key in _LOCATION_CLEAN_CACHE:
             cleaned = _LOCATION_CLEAN_CACHE[loc_key]
         else:
             cleaned = clean_location_display_for_dossier(
                 competitor.name,
-                properties_by_location,
+                properties_by_location_for_llm,
                 asset_delta_by_city,
                 other_sub_bullets_text=other_sub_bullets_text,
             )
@@ -453,14 +587,19 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
                 _LOCATION_CLEAN_CACHE.clear()
             if cleaned:
                 _LOCATION_CLEAN_CACHE[loc_key] = cleaned
+    location_totals_match = True
     if cleaned:
-        properties_by_location = cleaned.get("properties_by_location") or properties_by_location
+        properties_by_location = cleaned.get("properties_by_location") or properties_by_location_for_llm
         asset_delta_by_city = cleaned.get("asset_delta_by_city") or asset_delta_by_city
-        # Use same cleaned list for single-bullet display (one line per location: "Location - N properties (M keys)")
-        properties_by_location_with_list = [
-            {"location": r["location"], "count": r["count"], "keys": r.get("keys", 0)}
-            for r in properties_by_location
-        ]
+        location_totals_match = cleaned.get("location_totals_match", True)
+    else:
+        # No LLM or rejected: still use state-aggregated rows so display is one row per state (e.g. Vermont – 2 properties (62 keys))
+        properties_by_location = properties_by_location_for_llm
+    # Use same list for single-bullet display (one line per location: "Location – N properties (M keys)")
+    properties_by_location_with_list = [
+        {"location": r["location"], "count": r["count"], "keys": r.get("keys", 0)}
+        for r in properties_by_location
+    ]
 
     context = {
         "competitor": {"id": competitor.id, "name": competitor.name},
@@ -479,6 +618,7 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         "properties_by_location": properties_by_location,
         "properties_by_location_with_list": properties_by_location_with_list,
         "total_properties": total_properties,
+        "location_totals_match": location_totals_match,
         "asset_baseline_date": asset_baseline_date,
         "asset_added_since_baseline": asset_added_since_baseline,
         "asset_removed_since_baseline": asset_removed_since_baseline,
@@ -502,7 +642,13 @@ def build_summary_context(session, competitor_id: int, days: int = 7) -> dict:
 
     events = (
         session.query(Event)
-        .filter(Event.competitor_id == competitor_id, Event.detected_at >= cutoff)
+        .filter(
+            Event.competitor_id == competitor_id,
+            or_(
+                Event.detected_at >= cutoff,
+                (Event.occurred_at.isnot(None)) & (Event.occurred_at >= cutoff),
+            ),
+        )
         .order_by(Event.detected_at.desc())
         .all()
     )
@@ -556,6 +702,7 @@ def dossier_properties_by_location(competitor_id: int):
         "total_properties": context.get("total_properties", 0),
         "properties_by_location": context.get("properties_by_location") or [],
         "other_properties_display": context.get("other_properties_display") or [],
+        "location_totals_match": context.get("location_totals_match", True),
     }
 
 

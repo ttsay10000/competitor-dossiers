@@ -7,13 +7,7 @@ from urllib.parse import urlparse
 from .collectors.talent import collect_talent_snapshot, build_structured_json as build_talent_structured
 from .collectors.asset import collect_asset_snapshot, build_structured_json as build_asset_structured
 from .collectors.press import collect_press_snapshot, build_structured_json as build_press_structured
-from .collectors.global_press import (
-    collect_business_insider_items,
-    collect_cnbc_items,
-    collect_yahoo_finance_items,
-    collect_google_news_items,
-    collect_prnewswire_items,
-)
+from .collectors.global_press import collect_google_news_items, collect_prnewswire_items
 from .collectors.homepage import collect_homepage_snapshot, build_structured_json as build_homepage_structured
 from .collectors.public_records import collect_public_records_snapshot, build_structured_json as build_public_records_structured
 from .config import settings
@@ -23,7 +17,6 @@ from .diff.asset_diff import diff_properties, extract_markets
 from .llm_structured import enrich_properties_with_llm, enrich_jobs_with_llm, enrich_press_items_with_llm
 from .diff.press_diff import diff_items
 from .models import Competitor, SourceEndpoint, Snapshot, Event, Capability, RunLog
-from .tickers import get_competitor_ticker
 from .rules.talent_rules import (
     assign_job_flags,
     build_capability_event,
@@ -53,6 +46,24 @@ def load_latest_snapshot(session, competitor_id: int, channel: str) -> Optional[
         .order_by(Snapshot.captured_at.desc())
         .first()
     )
+
+
+def clear_latest_snapshots(session, channel: Optional[str] = None) -> int:
+    """
+    Delete the latest snapshot per competitor for the given channel (or all channels if channel is None).
+    Use before a run so snapshot_unchanged is not triggered and enrichment re-runs.
+    Returns number of snapshots deleted.
+    """
+    competitors = session.query(Competitor).all()
+    deleted = 0
+    channels = [channel] if channel else list(RUNNER_CHANNELS)
+    for c in competitors:
+        for ch in channels:
+            latest = load_latest_snapshot(session, c.id, ch)
+            if latest:
+                session.delete(latest)
+                deleted += 1
+    return deleted
 
 
 def capability_seen(session, competitor_id: int, capability: str) -> bool:
@@ -147,25 +158,33 @@ DEDUPE_WINDOWS_DAYS = {
 
 
 def _parse_press_date(value: Any) -> Optional[datetime]:
-    """Best-effort parse for press item dates (RSS or ISO strings)."""
+    """Best-effort parse for press item dates (RSS or ISO strings). Always returns UTC-aware or None."""
     if value is None:
         return None
+    dt: Optional[datetime] = None
     if isinstance(value, datetime):
-        return value
-    if isinstance(value, (int, float)):
+        dt = value
+    elif isinstance(value, (int, float)):
         try:
-            return datetime.fromtimestamp(value / 1000.0, tz=timezone.utc)
+            dt = datetime.fromtimestamp(value / 1000.0, tz=timezone.utc)
         except Exception:
             return None
-    if isinstance(value, str):
+    elif isinstance(value, str):
         val = value.strip()
         if not val:
             return None
         try:
-            return datetime.fromisoformat(val.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
         except Exception:
             return None
-    return None
+    if dt is None:
+        return None
+    # Normalize to UTC-aware so comparisons with cutoff (aware) never raise TypeError
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt
 
 
 def _build_press_raw_hash(items: list[dict]) -> str:
@@ -276,6 +295,11 @@ def run_talent(competitor_name: Optional[str] = None) -> None:
             if not endpoints_ordered:
                 continue
 
+            print(
+                f"\n[{datetime.now(timezone.utc).isoformat()}] === TALENT: {competitor.name} "
+                f"({len(endpoints_ordered)} endpoint(s)) ==="
+            )
+
             snapshot = None
             endpoint_used = None
             structured = None
@@ -283,8 +307,7 @@ def run_talent(competitor_name: Optional[str] = None) -> None:
 
             for endpoint in endpoints_ordered:
                 print(
-                    f"[{datetime.now(timezone.utc).isoformat()}] talent run: "
-                    f"{competitor.name} {endpoint.url} ({endpoint.confidence})"
+                    f"[talent] Step 0 — Trying endpoint: {endpoint.url} ({endpoint.confidence})"
                 )
                 try:
                     snapshot = collect_talent_snapshot(endpoint.url)
@@ -314,9 +337,15 @@ def run_talent(competitor_name: Optional[str] = None) -> None:
                         extra={"url": endpoint.url},
                     )
                     continue
+                raw_jobs = snapshot.get("jobs") or []
+                provider = snapshot.get("provider") or "unknown"
+                print(f"[talent] Step 1 — Collect: {len(raw_jobs)} jobs (provider: {provider})")
                 structured = build_talent_structured(snapshot)
+                before_enrich = len(structured.get("jobs") or [])
                 structured["jobs"] = enrich_jobs_with_llm(structured.get("jobs") or [])
                 current_jobs = structured.get("jobs") or []
+                after_enrich = len(current_jobs)
+                print(f"[talent] Step 2 — build_structured: {before_enrich} → enrich_jobs_with_llm: {after_enrich} jobs")
                 if current_jobs:
                     endpoint_used = endpoint
                     break
@@ -390,6 +419,7 @@ def run_talent(competitor_name: Optional[str] = None) -> None:
             seed_mode = getattr(settings, "seed_mode", False)
             is_first_snapshot = latest is None
             if seed_mode and is_first_snapshot:
+                print(f"[talent] Step 3 — Seed baseline. Total jobs: {len(current_jobs)}")
                 log_run(
                     session,
                     competitor.id,
@@ -402,6 +432,11 @@ def run_talent(competitor_name: Optional[str] = None) -> None:
 
             diff = diff_jobs(previous_jobs, current_jobs)
             added_jobs = diff["added"]
+            removed_jobs = diff.get("removed", [])
+            print(
+                f"[talent] Step 3 — Persist. Diff: +{len(added_jobs)} added, -{len(removed_jobs)} removed. "
+                f"Total jobs: {len(current_jobs)}"
+            )
             previous_counts = compute_capability_counts(previous_jobs)
             current_counts = compute_capability_counts(current_jobs)
 
@@ -452,6 +487,7 @@ def run_talent(competitor_name: Optional[str] = None) -> None:
                     ):
                         create_event(session, competitor.id, event)
 
+            print(f"[talent] Step 4 — Done. Total jobs: {len(current_jobs)}")
             log_run(
                 session,
                 competitor.id,
@@ -476,6 +512,11 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
             if not endpoints_ordered:
                 continue
 
+            print(
+                f"\n[{datetime.now(timezone.utc).isoformat()}] === ASSET: {competitor.name} "
+                f"({len(endpoints_ordered)} endpoint(s)) ==="
+            )
+
             snapshot = None
             endpoint_used = None
             structured = None
@@ -483,8 +524,7 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
 
             for endpoint in endpoints_ordered:
                 print(
-                    f"[{datetime.now(timezone.utc).isoformat()}] asset run: "
-                    f"{competitor.name} {endpoint.url} ({endpoint.confidence})"
+                    f"[asset] Step 0 — Trying endpoint: {endpoint.url} ({endpoint.confidence})"
                 )
                 # Lark-style sources need Playwright + load_more for full portfolio; without it we get partial HTML only.
                 opts = getattr(endpoint, "extra_options", None) or {}
@@ -526,12 +566,18 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
                         extra={"url": endpoint.url},
                     )
                     continue
+                raw_count = len(snapshot.get("properties") or [])
+                note = snapshot.get("note") or "unknown"
+                print(f"[asset] Step 1 — Collect: {raw_count} properties (strategy: {note})")
                 structured = build_asset_structured(snapshot)
+                before_enrich = len(structured.get("properties") or [])
                 structured["properties"] = enrich_properties_with_llm(
                     structured.get("properties") or [],
                     raw_content=snapshot.get("raw_content"),
                 )
                 current_props = structured.get("properties") or []
+                after_enrich = len(current_props)
+                print(f"[asset] Step 2 — build_structured: {before_enrich} → enrich_properties_with_llm: {after_enrich} properties")
                 if current_props:
                     endpoint_used = endpoint
                     break
@@ -566,6 +612,7 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
             seed_mode = getattr(settings, "seed_mode", False)
             is_first_snapshot = latest is None
             if seed_mode and is_first_snapshot:
+                print(f"[asset] Step 3 — Seed baseline. Total properties: {len(current_props)}")
                 log_run(
                     session,
                     competitor.id,
@@ -578,6 +625,11 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
 
             diff = diff_properties(previous_props, current_props)
             added_props = diff["added"]
+            removed_props = diff["removed"]
+            print(
+                f"[asset] Step 3 — Persist. Diff: +{len(added_props)} added, -{len(removed_props)} removed. "
+                f"Total properties: {len(current_props)}"
+            )
             previous_markets = extract_markets(previous_props)
             current_markets = extract_markets(current_props)
 
@@ -629,6 +681,7 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
                             ):
                                 create_event(session, competitor.id, event)
 
+            print(f"[asset] Step 4 — Done. Total properties: {len(current_props)}")
             log_run(
                 session,
                 competitor.id,
@@ -654,8 +707,8 @@ def run_press(competitor_name: Optional[str] = None) -> None:
             ]
 
             print(
-                f"[{datetime.now(timezone.utc).isoformat()}] press run: {competitor.name} "
-                f"({len(endpoints)} endpoint(s))"
+                f"\n[{datetime.now(timezone.utc).isoformat()}] === PRESS: {competitor.name} "
+                f"({len(endpoints)} user endpoint(s)) ==="
             )
 
             # Optional press search name for external sources (Google News, PR Newswire, etc.).
@@ -714,29 +767,35 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                     )
                 source_meta.append({"type": "press_endpoint", "url": endpoint.url})
 
-            max_per_source = settings.press_max_items_per_source
-            window_days = 120
+            endpoint_count = sum(1 for it in raw_items if (it.get("provider") or "").strip() == "press_endpoint")
+            print(f"[press] Step 1 — User press endpoints: {endpoint_count} items")
 
-            # 2) Google News: 120-day window, quoted competitor name (and first-word + partnership fallbacks). Run 2nd so items survive the raw cap.
+            max_per_source = settings.press_max_items_per_source
+            # Only user press endpoints, PR Newswire, and Google News (90-day window).
+            window_days = 90
+
+            # 2) Google News: 90-day window, quoted competitor name (and first-word + partnership fallbacks).
+            gn_items = []
             if getattr(settings, "press_enable_google_news", True) and press_search_name:
                 try:
                     gn_items = collect_google_news_items(
                         press_search_name,
-                        max_items=min(50, max_per_source * 2),  # request enough to fill a fair share before cap
+                        max_items=min(50, max_per_source * 2),
                         window_days=window_days,
                     )
                     raw_items.extend(gn_items)
                     if gn_items:
                         source_meta.append({"type": "google_news"})
-                    elif press_search_name:
+                    print(f"[press] Step 2 — Google News (90d): {len(gn_items)} items")
+                    if not gn_items and press_search_name:
                         print(
-                            f"[press] Google News returned 0 items for {press_search_name!r} "
-                            "(RSS may omit articles that don't use the exact quoted phrase; first-word and partnership fallbacks are used)"
+                            f"[press]   (0 items for {press_search_name!r}; RSS may omit if exact phrase not in headline)"
                         )
                 except Exception as e:
-                    print(f"[press] Google News failed for {press_search_name!r}: {e}")
+                    print(f"[press] Step 2 — Google News failed: {e}")
 
-            # 3) PR Newswire (company name search, max 100). User may also add a PRN URL as press endpoint.
+            # 3) PR Newswire (company name search). 90-day window to match Google News.
+            prn_items = []
             try:
                 prn_items = collect_prnewswire_items(
                     press_search_name,
@@ -746,58 +805,19 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                 raw_items.extend(prn_items)
                 if prn_items:
                     source_meta.append({"type": "prnewswire"})
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[press] Step 3 — PR Newswire failed: {e}")
+            print(f"[press] Step 3 — PR Newswire (90d): {len(prn_items)} items")
 
-            # 4) Secondary backups: Business Insider, Yahoo Finance, CNBC.
-            if settings.press_enable_business_insider:
-                try:
-                    bi_items = collect_business_insider_items(
-                        press_search_name,
-                        max_items=max_per_source,
-                        window_days=window_days,
-                    )
-                    raw_items.extend(bi_items)
-                    source_meta.append({"type": "business_insider"})
-                except Exception:
-                    # Best-effort only; ignore errors.
-                    pass
-
-            if settings.press_enable_yahoo_finance:
-                ticker = get_competitor_ticker(competitor.name)
-                if ticker:
-                    try:
-                        yf_items = collect_yahoo_finance_items(
-                            ticker,
-                            max_items=max_per_source,
-                            window_days=window_days,
-                        )
-                        raw_items.extend(yf_items)
-                        if yf_items:
-                            source_meta.append({"type": "yahoo_finance", "ticker": ticker})
-                    except Exception:
-                        pass
-
-            if settings.press_enable_cnbc:
-                try:
-                    cnbc_items = collect_cnbc_items(
-                        press_search_name,
-                        max_items=max_per_source,
-                        window_days=window_days,
-                    )
-                    raw_items.extend(cnbc_items)
-                    source_meta.append({"type": "cnbc"})
-                except Exception:
-                    pass
-
-            # Log raw counts per source so we can confirm Google News (and others) are pulled.
+            # Log raw counts per source.
             by_provider = {}
             for it in raw_items:
                 p = (it.get("provider") or "").strip() or "unknown"
                 by_provider[p] = by_provider.get(p, 0) + 1
-            print(f"[press] {competitor.name}: raw_items={len(raw_items)} by source: {by_provider}")
+            print(f"[press] Step 4 — Raw total: {len(raw_items)} by source: {by_provider}")
 
             if not raw_items:
+                print(f"[press] Step 4 — Raw total: 0 → skipping (no items)")
                 log_run(
                     session,
                     competitor.id,
@@ -808,16 +828,21 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                 )
                 continue
 
-            # 3) Apply 120-day window and global cap before any LLM work.
-            cutoff = datetime.now(timezone.utc) - timedelta(days=120)
+            # Apply 90-day window to non–PR Newswire items; keep all PR Newswire (press releases) regardless of age.
+            cutoff = datetime.now(timezone.utc) - timedelta(days=90)
             filtered_items: list[dict] = []
             for item in raw_items:
+                provider = (item.get("provider") or "").strip().lower()
+                if provider == "prnewswire":
+                    filtered_items.append(item)
+                    continue
                 dt = _parse_press_date(item.get("date"))
                 if dt and dt < cutoff:
                     continue
                 filtered_items.append(item)
 
             if not filtered_items:
+                print(f"[press] Step 5 — After 90d window: 0 items → skipping (all outside window)")
                 log_run(
                     session,
                     competitor.id,
@@ -831,11 +856,18 @@ def run_press(competitor_name: Optional[str] = None) -> None:
             max_raw = settings.press_max_raw_items_per_competitor
             if len(filtered_items) > max_raw:
                 filtered_items = filtered_items[:max_raw]
+            print(f"[press] Step 5 — After 90d window + cap (PR Newswire always kept) (max_raw={max_raw}): {len(filtered_items)} items")
 
-            # 4) Skip snapshot entirely if nothing meaningful changed.
-            raw_hash = _build_press_raw_hash(filtered_items)
-            if should_skip_due_to_hash(session, competitor.id, "press", raw_hash):
-                print(f"[press] {competitor.name}: skipping (snapshot_unchanged), filtered_items={len(filtered_items)}")
+            # 4) Load previous snapshot; only run enrichment when there are new items (LLM applies to new articles only).
+            latest = load_latest_snapshot(session, competitor.id, "press")
+            previous_structured = (latest.structured_json or {}) if latest else {}
+            previous_items = previous_structured.get("items") or []
+            previous_canonical = previous_structured.get("canonical_items") or []
+            previous_urls = {(it.get("url") or it.get("link") or "").strip() for it in previous_items if (it.get("url") or it.get("link") or "").strip()}
+            new_items = [it for it in filtered_items if (it.get("url") or it.get("link") or "").strip() not in previous_urls]
+
+            if not new_items:
+                print(f"[press] {competitor.name}: no new items since last pull — skipping Steps 6–9 (enrich/dedupe/persist).")
                 log_event(
                     "snapshot_unchanged",
                     competitor=competitor.name,
@@ -847,16 +879,13 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                     competitor.id,
                     "press",
                     "skipped",
-                    message="snapshot_unchanged",
+                    message="no_new_press_items",
                     extra={"endpoints": [ep.url for ep in endpoints], "filtered_items": len(filtered_items)},
                 )
                 continue
 
-            print(f"[press] {competitor.name}: persisting snapshot, filtered_items={len(filtered_items)}")
+            print(f"[press] Step 6 — Enriching (LLM for {len(new_items)} new item(s) only; merge with previous canonical)...")
 
-            # 5) Build structured snapshot and LLM-enriched canonical press list.
-            # Exclude company-site links (primary_domain + press endpoint domains) so we show
-            # external coverage and PR Newswire only.
             def _normalize_domain(host: str) -> str:
                 if not host:
                     return ""
@@ -886,10 +915,31 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                 structured.get("items") or [],
                 max_articles_to_summarize=settings.press_max_articles_to_summarize,
                 company_domains=company_domains,
+                previous_items=previous_items if previous_items else None,
+                previous_canonical=previous_canonical if previous_canonical else None,
             )
 
-            latest = load_latest_snapshot(session, competitor.id, "press")
-            previous_items = (latest.structured_json or {}).get("items", []) if latest else []
+            canonical = structured.get("canonical_items") or []
+            EXCLUDED_TOPICS = {"irrelevant", "promo_or_brand_marketing"}
+            display_list = [c for c in canonical if (c.get("topic") or "").strip().lower() not in EXCLUDED_TOPICS]
+            display_count = len(display_list)
+            print(f"[press] Step 7 — Final canonical (to display): {display_count} items")
+            for i, item in enumerate(display_list[:10], 1):
+                date_str = (item.get("date") or "no date")[:10] if item.get("date") else "no date"
+                title = (item.get("title") or "—")
+                if len(title) > 55:
+                    title = title[:55] + "…"
+                url = (item.get("url") or item.get("link") or "")
+                if len(url) > 70:
+                    url = url[:70] + "…"
+                print(f"[press]   {i}. [{date_str}] {title}")
+                print(f"[press]      {url}")
+            if display_count > 10:
+                print(f"[press]   ... and {display_count - 10} more")
+
+            print(f"[press] Step 8 — Persisting snapshot for {competitor.name}")
+
+            raw_hash = _build_press_raw_hash(filtered_items)
             current_items = structured.get("items", [])
 
             persist_snapshot(
@@ -935,6 +985,7 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                 ):
                     create_event(session, competitor.id, event)
 
+            print(f"[press] Step 9 — Done. Added events: {len(added_items)}")
             log_run(
                 session,
                 competitor.id,
@@ -942,6 +993,102 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                 "success",
                 extra={"added_items": len(added_items), "raw_items": len(raw_items), "filtered_items": len(filtered_items)},
             )
+
+
+# Hardcoded list for --local press run (no database).
+LOCAL_PRESS_COMPETITORS = [
+    ("Lark", "Lark Hotels"),
+    ("AvantStay", "AvantStay"),
+    ("Placemakr", "Placemakr"),
+]
+
+
+def run_press_local(competitor_name: Optional[str] = None) -> None:
+    """
+    Run press pipeline (Google News + PR Newswire, enrich, dedupe) without database.
+    Uses LOCAL_PRESS_COMPETITORS; always fetches fresh (no snapshot skip).
+    Use: python -m app.cli --local --channel press [--competitor NAME]
+    """
+    competitors = list(LOCAL_PRESS_COMPETITORS)
+    if competitor_name:
+        name_lower = (competitor_name or "").strip().lower()
+        competitors = [
+            (disp, search) for disp, search in competitors
+            if name_lower in disp.lower() or name_lower in search.lower()
+        ]
+        if not competitors:
+            print(f"[press] No local competitor matching {competitor_name!r}. Options: Lark, AvantStay, Placemakr.")
+            return
+
+    window_days = 90
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    max_per_source = getattr(settings, "press_max_items_per_source", 30)
+    max_raw = getattr(settings, "press_max_raw_items_per_competitor", 120)
+
+    for display_name, press_search_name in competitors:
+        print(f"\n[{datetime.now(timezone.utc).isoformat()}] === PRESS (local): {display_name} ({press_search_name!r}) ===")
+        raw_items: list[dict] = []
+
+        if getattr(settings, "press_enable_google_news", True):
+            try:
+                gn_items = collect_google_news_items(
+                    press_search_name,
+                    max_items=min(50, max_per_source * 2),
+                    window_days=window_days,
+                )
+                raw_items.extend(gn_items)
+                print(f"[press] Google News (90d): {len(gn_items)} items")
+            except Exception as e:
+                print(f"[press] Google News failed: {e}")
+
+        try:
+            prn_items = collect_prnewswire_items(
+                press_search_name,
+                max_items=100,
+                window_days=window_days,
+            )
+            raw_items.extend(prn_items)
+            print(f"[press] PR Newswire (90d): {len(prn_items)} items")
+        except Exception as e:
+            print(f"[press] PR Newswire failed: {e}")
+
+        filtered_items = []
+        for item in raw_items:
+            if (item.get("provider") or "").strip().lower() == "prnewswire":
+                filtered_items.append(item)
+                continue
+            dt = _parse_press_date(item.get("date"))
+            if dt and dt < cutoff:
+                continue
+            filtered_items.append(item)
+        if len(filtered_items) > max_raw:
+            filtered_items = filtered_items[:max_raw]
+        print(f"[press] After 90d + cap (PR Newswire always kept): {len(filtered_items)} items")
+
+        if not filtered_items:
+            print(f"[press] No items → skipping enrichment.")
+            continue
+
+        canonical = enrich_press_items_with_llm(
+            display_name,
+            filtered_items,
+            max_articles_to_summarize=getattr(settings, "press_max_articles_to_summarize", 40),
+            company_domains=[],
+            previous_items=None,
+            previous_canonical=None,
+        )
+        EXCLUDED = {"irrelevant", "promo_or_brand_marketing"}
+        display_list = [c for c in canonical if (c.get("topic") or "").strip().lower() not in EXCLUDED]
+        print(f"[press] Final (to display): {len(display_list)} items\n")
+        for i, item in enumerate(display_list[:15], 1):
+            date_str = (item.get("date") or "no date")[:10] if item.get("date") else "no date"
+            title = (item.get("title") or "—")[:65]
+            url = (item.get("url") or item.get("link") or "")
+            print(f"  {i}. [{date_str}] {title}")
+            print(f"      {url}")
+        if len(display_list) > 15:
+            print(f"  ... and {len(display_list) - 15} more")
+        print()
 
 
 def run_homepage(competitor_name: Optional[str] = None) -> None:
@@ -1119,7 +1266,17 @@ def advance_baseline_after_full_refresh() -> None:
             c.reporting_baseline_at = now
 
 
-def run(channel: Optional[str] = None, competitor_name: Optional[str] = None) -> None:
+def run(
+    channel: Optional[str] = None,
+    competitor_name: Optional[str] = None,
+    local: bool = False,
+) -> None:
+    if local:
+        if channel not in (None, "press"):
+            print("[local] Only --channel press is supported without a database. Use --channel press.")
+            return
+        run_press_local(competitor_name=competitor_name)
+        return
     if channel in (None, *RUNNER_CHANNELS):
         if channel in (None, "talent"):
             run_talent(competitor_name=competitor_name)

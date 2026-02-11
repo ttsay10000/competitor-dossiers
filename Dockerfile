@@ -14,6 +14,8 @@ RUN pip install --no-cache-dir -r requirements-render.txt
 # App code. Alembic migrations run at start if needed (see render.yaml or override startCommand).
 COPY . .
 
+# Playwright on for all container runs (refresh, cron, web in-process refresh). Lark/AvantStay need it.
+ENV PLAYWRIGHT_ENABLED=true
 # Default: run web server. Cron overrides via dockerCommand in render.yaml.
 ENV PORT=10000
 EXPOSE 10000

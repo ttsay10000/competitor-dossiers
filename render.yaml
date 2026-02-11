@@ -1,5 +1,5 @@
 # Render Blueprint: web app + cron. Uses Docker so Playwright + Chromium are available (Lark/AvantStay talent).
-# Set PLAYWRIGHT_ENABLED=true for both services in the Dashboard (or env group). Link Postgres so DATABASE_URL is set.
+# Link Postgres so DATABASE_URL is set (Dashboard or env group). PLAYWRIGHT_ENABLED is set below so refresh/reset/cron use Playwright.
 
 services:
   # Web service (FastAPI). Docker build installs Playwright + Chromium so JS-rendered pages can be fetched if needed.
@@ -8,6 +8,9 @@ services:
     runtime: docker
     dockerCommand: sh -c "python -m alembic upgrade head && exec python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT"
     healthCheckPath: /health
+    envVars:
+      - key: PLAYWRIGHT_ENABLED
+        value: "true"
 
   # Cron: full refresh (talent, asset, press, homepage, public_records). Same image has Playwright for Lark/AvantStay talent.
   - type: cron
@@ -15,10 +18,16 @@ services:
     runtime: docker
     schedule: "0 2 * * 0"
     dockerCommand: python -m app.cli --channel all
+    envVars:
+      - key: PLAYWRIGHT_ENABLED
+        value: "true"
 
-  # Optional: asset-only cron. Uncomment to use.
+  # Optional: asset-only cron. Uncomment to use (Playwright enabled via Dockerfile ENV + envVars).
   # - type: cron
   #   name: competitor-signals-asset
   #   runtime: docker
   #   schedule: "0 3 * * 0"
   #   dockerCommand: python -m app.cli --channel asset
+  #   envVars:
+  #     - key: PLAYWRIGHT_ENABLED
+  #       value: "true"

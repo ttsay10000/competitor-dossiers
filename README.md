@@ -98,12 +98,12 @@ Optionally add `python -m app.cli --channel homepage` to the daily run to detect
 - `GET /health` returns status and app version.
 
 ## Deploy/Readiness Checklist
-- Configure `DATABASE_URL`
-- Run migrations locally first: `./scripts/migrate.sh` (then deploy; Render runs `alembic upgrade head` at startup)
-- Seed competitors: `python -m app.seed`
-- Enable Playwright if needed: `PLAYWRIGHT_ENABLED=true`
-- Install Playwright browsers: `python -m playwright install`
-- Run a collector dry run: `python -m app.cli --channel all`
+- **Push to Render:** See [docs/DEPLOY_RENDER.md](docs/DEPLOY_RENDER.md) for local setup and what to configure on Render.
+- Configure `DATABASE_URL` on Render (and in `.env` for local dev).
+- Run migrations locally first: `./scripts/run.sh migrate` (then push; Render runs `alembic upgrade head` at startup).
+- Seed competitors: `python -m app.seed` (once, via Render shell or locally with Render DB URL).
+- Playwright is enabled in the Docker image and `render.yaml` for web + cron; for local runs use `PLAYWRIGHT_ENABLED=true` in `.env` and `python -m playwright install chromium`.
+- Optional: run a collector dry run locally: `./scripts/run.sh all`.
 
 ## Tests
 - Run: `pytest -q`
