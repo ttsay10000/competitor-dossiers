@@ -14,7 +14,7 @@ Do this once so the DB has competitors, sources, and initial snapshots.
 
 2. **Seed competitors and sources**
    - `python -m app.seed` (or `python3 -m app.seed`)
-   - This creates the competitors and their talent/asset/press URLs from `app/seed.py`.
+   - This reads **`seed_data.json`** in the project root and upserts competitors and their talent/asset/press URLs. On Render, seed runs automatically on every deploy so the file is the source of truth.
 
 3. **Run the collector(s)**
    - First run only stores snapshots (no feed events yet; events come from the *next* run when we diff).
@@ -30,7 +30,18 @@ After that, a **second run** (later the same day or next day) will diff against 
 
 ---
 
-## Current seeded sources (from `app/seed.py`)
+## Keeping competitors in sync (add in UI → persist for redeploys)
+
+- **Add a competitor in the UI** at `/competitors/new` (name, primary domain, talent/asset/press URLs). It is stored in the database only.
+- **Persist it for future deploys:** run **export-seed** so the DB is written back to the repo:
+  - `python -m app.cli --export-seed`
+  - This overwrites **`seed_data.json`** with all current competitors and their sources from the DB.
+  - **Commit and push** `seed_data.json`. On the next deploy, seed runs automatically and will upsert everyone in the file. New competitors are never lost on redeploy.
+- Seed **never deletes** existing competitors or sources; it only adds/updates from the file. To remove a competitor from the canonical list, remove them (or their sources) in the UI, run `--export-seed`, then commit.
+
+---
+
+## Current seeded sources (from `seed_data.json`)
 
 | Competitor  | Talent | Asset | Press |
 |------------|--------|--------|-------|

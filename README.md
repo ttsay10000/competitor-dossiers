@@ -84,8 +84,9 @@ Optionally add `python -m app.cli --channel homepage` to the daily run to detect
 - `/search` pages are often JS-rendered and may require a headless browser later.
 
 ## Seed Competitors
-- Run:
+- **Seed data** lives in **`seed_data.json`** (project root). It is applied on every Render deploy and when you run:
   - `python -m app.seed`
+- **After adding a competitor in the UI:** run `python -m app.cli --export-seed`, then commit `seed_data.json` so the new competitor is included in future deploys and not lost.
 
 ## JS Rendering (Playwright)
 - Install Playwright browsers after dependencies:
@@ -101,7 +102,7 @@ Optionally add `python -m app.cli --channel homepage` to the daily run to detect
 - **Push to Render:** See [docs/DEPLOY_RENDER.md](docs/DEPLOY_RENDER.md) for local setup and what to configure on Render.
 - Configure `DATABASE_URL` on Render (and in `.env` for local dev).
 - Run migrations locally first: `./scripts/run.sh migrate` (then push; Render runs `alembic upgrade head` at startup).
-- Seed competitors: `python -m app.seed` (once, via Render shell or locally with Render DB URL).
+- Seed runs automatically on deploy from `seed_data.json`. To add a competitor: add in UI, run `python -m app.cli --export-seed`, commit the updated file.
 - Playwright is enabled in the Docker image and `render.yaml` for web + cron; for local runs use `PLAYWRIGHT_ENABLED=true` in `.env` and `python -m playwright install chromium`.
 - Optional: run a collector dry run locally: `./scripts/run.sh all`.
 

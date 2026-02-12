@@ -1,8 +1,30 @@
-from datetime import datetime
-from typing import Optional
+from pathlib import Path
+import json
+from typing import Any, Optional
 
 from .db import get_session
 from .models import Competitor, SourceEndpoint
+
+
+def _seed_data_path() -> Path:
+    """Path to seed_data.json in project root (committed; survives redeploys)."""
+    return Path(__file__).resolve().parent.parent / "seed_data.json"
+
+
+def load_seed_competitors() -> list[dict[str, Any]]:
+    """Load competitor list from seed_data.json. Falls back to SEED_COMPETITORS if file missing."""
+    path = _seed_data_path()
+    if not path.exists():
+        return SEED_COMPETITORS
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return SEED_COMPETITORS
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and "competitors" in data:
+        return data["competitors"]
+    return SEED_COMPETITORS
 
 
 SEED_COMPETITORS = [
@@ -94,12 +116,13 @@ SEED_COMPETITORS = [
 ]
 
 
-def upsert_competitor(session, name: str, primary_domain: Optional[str]) -> Competitor:
+def upsert_competitor(session, name: str, primary_domain: Optional[str], is_active: bool = True) -> Competitor:
     competitor = session.query(Competitor).filter(Competitor.name == name).first()
     if competitor:
         competitor.primary_domain = primary_domain
+        competitor.is_active = is_active
         return competitor
-    competitor = Competitor(name=name, primary_domain=primary_domain)
+    competitor = Competitor(name=name, primary_domain=primary_domain, is_active=is_active)
     session.add(competitor)
     session.flush()
     return competitor
@@ -145,24 +168,60 @@ def upsert_source(
 
 
 def run_seed() -> None:
+    """Upsert competitors and sources from seed_data.json. Never deletes existing DB rows."""
     with get_session() as session:
-        for entry in SEED_COMPETITORS:
+        for entry in load_seed_competitors():
             competitor = upsert_competitor(
                 session,
                 entry["name"],
                 entry.get("primary_domain"),
+                is_active=entry.get("is_active", True),
             )
-            for source in entry["sources"]:
+            for source in entry.get("sources", []):
                 upsert_source(
                     session,
                     competitor.id,
                     source["channel"],
                     source["url"],
-                    source["confidence"],
+                    source.get("confidence", "high"),
                     js_required=bool(source.get("js_required")),
                     use_sitemap_first=bool(source.get("use_sitemap_first")),
                     extra_options=source.get("extra_options"),
                 )
+
+
+def export_seed_to_file() -> None:
+    """Write current DB competitors and sources to seed_data.json. Run after adding competitors in the UI."""
+    with get_session() as session:
+        competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        out = []
+        for c in competitors:
+            endpoints = sorted(c.source_endpoints, key=lambda e: (e.channel, e.id))
+            sources = []
+            for e in endpoints:
+                s: dict[str, Any] = {
+                    "channel": e.channel,
+                    "url": e.url,
+                    "confidence": e.confidence or "high",
+                }
+                if e.js_required:
+                    s["js_required"] = True
+                if e.use_sitemap_first:
+                    s["use_sitemap_first"] = True
+                if e.extra_options:
+                    s["extra_options"] = e.extra_options
+                sources.append(s)
+            row = {
+                "name": c.name,
+                "primary_domain": c.primary_domain or None,
+                "sources": sources,
+            }
+            if not getattr(c, "is_active", True):
+                row["is_active"] = False
+            out.append(row)
+    path = _seed_data_path()
+    path.write_text(json.dumps({"competitors": out}, indent=2) + "\n")
+    print(f"Wrote {len(out)} competitor(s) to {path}", flush=True)
 
 
 if __name__ == "__main__":

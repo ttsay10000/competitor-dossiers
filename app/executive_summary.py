@@ -84,6 +84,8 @@ _US_STATES = frozenset({
     "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington", "Washington DC",
     "West Virginia", "Wisconsin", "Wyoming",
 })
+# Sorted list for template/API (section splitting: "Properties by states" vs "Other properties").
+US_STATES_LIST = sorted(_US_STATES)
 
 
 def _location_label_to_state(loc: str) -> str:
@@ -233,8 +235,8 @@ def _build_context_text(context: Dict[str, Any]) -> str:
 
 def generate_executive_summary(context: Dict[str, Any]) -> Optional[str]:
     """
-    Return an executive summary as bullet points for the competitor dossier "Executive summary" block,
-    focused on what has changed recently and what is happening now.
+    Return a competitive intelligence brief (bullet-based) for the competitor dossier "Executive summary" block.
+    Filters noise, surfaces material changes, interprets what the competitor is optimizing for, and recommends action.
     Returns None if OPENAI_API_KEY is unset or the API call fails.
     """
     from .config import get_openai_client
@@ -244,29 +246,23 @@ def generate_executive_summary(context: Dict[str, Any]) -> Optional[str]:
     context_text = _build_context_text(context)
     competitor_name = context.get("competitor", {}).get("name", "Competitor")
 
-    system = """You are an executive briefing analyst. Output a structured summary with clear sections and spacing. Interpret the significance of hiring and job changes, not just counts.
+    system = """You are an AI Chief of Staff writing a competitive intelligence brief for Kasa's CEO and exec team. Your job is to filter noise, cluster related updates, interpret what this competitor is optimizing for, and translate changes into clear implications and actions. Do NOT restate every datapoint. Only surface changes that materially alter competitive dynamics (market entry/exit, meaningful inventory shifts, pricing/fees moves, leadership or key functional hiring, major product/website positioning changes, notable partnerships/vendor stack changes, regulatory/legal developments, or repeated patterns over time). If an item is cosmetic or one-off and doesn't matter, drop it. Output must be clean, bullet-based, and decisive.
 
-OUTPUT FORMAT (follow this structure exactly; use a blank line between each numbered section for readability):
+Return in this exact structure (use a blank line between sections):
 
-1. New properties: XX properties in YY areas — list the areas (e.g. California; Texas; Florida). If 0, say "0 properties."
+EXECUTIVE SUMMARY (5–8 bullets max): most important shifts for this competitor, why it matters, and overall risk/opportunity level (Low/Med/High).
 
-2. Removed properties: XX properties in YY areas — list the areas. If 0, say "0 properties."
+WHAT CHANGED (2–5 bullets): concrete changes from the data.
 
-3. Talent / hiring: State the counts (new roles posted, roles removed). Then in 1–2 sentences explain what it likely means: e.g. net growth in headcount, focus areas (engineering vs property ops), senior vs junior mix, or possible restructuring if many removals. Use the "Current open roles by function" data when provided to interpret where they are hiring (e.g. "Heavy hiring in Engineering and Sales suggests product scaling and go-to-market push").
+WHAT IT SIGNALS (1–3 bullets): inferred intent/optimization; defensive vs offensive; time horizon.
 
-4. Recent news: Derive 1–3 bullet points from the "Recent news" items. Focus on expansion, new markets, partnerships, funding, strategy, executive appointments. If no news, say "No notable press since baseline."
+IMPACT ON KASA (1–3 bullets): specific risks/opportunities.
 
-Then add a blank line, then this exact section header on its own line:
-Key takeaways
+RECOMMENDED ACTION (choose one: Ignore / Monitor / Copy / Counter-position / Pre-empt / Partner) + 1–2 bullets why.
 
-Under "Key takeaways", list 2–4 short bullet points (each starting with "- ") that an executive would care about most: strategic shifts, risks, opportunities, or recommended follow-ups.
+INDUSTRY CONTEXT (optional, 1–3 bullets): only if this competitor's moves reflect a broader industry trend worth calling out.
 
-Then add one more blank line and a final summary paragraph (2–4 sentences): bottom-line meaning, any new strategic shifts, and what to watch. Tone: calm and executive.
-
-Rules:
-- Use the exact numbers and areas from the data provided. Do not invent counts.
-- For talent, always comment on significance (what the new/removed role counts imply), not just repeat the numbers.
-- Format: each bullet with "- ". No sub-bullets. Use blank lines between sections. The line "Key takeaways" must appear exactly as written (no bold/asterisks in your output)."""
+Style rules: bullets only, no paragraphs beyond the first, no fluff, no generic strategy talk, use concrete language and strong verbs, avoid speculation not supported by signals, keep to ~300–500 words."""
 
     user = f"Competitor: {competitor_name}\n\nData:\n{context_text}"
 
@@ -304,18 +300,31 @@ def _strip_subbullets(text: str) -> str:
     return "\n".join(lines)
 
 
+# Section headers to bold in the executive summary display (competitive brief structure).
+_EXEC_SUMMARY_SECTION_HEADERS = frozenset({
+    "Key takeaways",
+    "EXECUTIVE SUMMARY",
+    "WHAT CHANGED",
+    "WHAT IT SIGNALS",
+    "IMPACT ON KASA",
+    "RECOMMENDED ACTION",
+    "INDUSTRY CONTEXT",
+})
+
+
 def format_executive_summary_for_display(text: Optional[str]) -> Optional[str]:
     """
-    Escape summary text and bold the standalone "Key takeaways" line for HTML display.
-    Returns None if text is None; otherwise returns HTML-safe string with that one line as <strong>.
+    Escape summary text and bold section headers for HTML display.
+    Returns None if text is None; otherwise returns HTML-safe string with section headers as <strong>.
     """
     if not text or not isinstance(text, str):
         return text
     import html
     out = []
     for line in text.splitlines():
-        if line.strip() == "Key takeaways":
-            out.append("<strong>Key takeaways</strong>")
+        stripped = line.strip()
+        if stripped in _EXEC_SUMMARY_SECTION_HEADERS:
+            out.append("<strong>" + html.escape(stripped) + "</strong>")
         else:
             out.append(html.escape(line))
     return "\n".join(out)
@@ -365,24 +374,32 @@ def clean_location_display_for_dossier(
 
 INPUT: You receive ONLY a list of summarized bullets: "Location: N" or "Location: N (K keys)". There is no per-property data—just these raw numbers by location and key counts.
 
-YOUR JOB:
-1. Review whether the list is already grouped by US state. If it is, you may return it with minimal changes (e.g. normalize state names).
-2. If not grouped by state: merge rows by state—add the totals together (count and keys) when you combine bullets into one state.
-3. For a region, city, or area: map it to the closest or most representative US state (e.g. Central Oregon → Oregon; Emerald Coast → Florida; Lake Tahoe → California; Poconos → Pennsylvania).
-4. If a region or geographical element does not map neatly to any single state, keep it as its own row with the same label and totals unchanged.
-5. Use "Other" only for: Unspecified, career site, privacy, non-property URLs, or genuinely non-US/unclear. Do not put US cities or regions into "Other".
+YOUR JOB — follow these two steps in order:
+
+Step 1 — Consolidate and clean state-level rows:
+- Merge duplicate state rows (same US state name) into a single row; sum "count" and "keys".
+- Normalize state names to full US state names (e.g. CA → California, Florida → Florida).
+- Do not yet change any region/city/geographical labels.
+
+Step 2 — Map regions/cities/geographical labels to states:
+- For every remaining row that is NOT already a US state (e.g. "Coastal Charleston", "Emerald Coast 30A", "Lake Norman", "Newport Beach"), assign it to the best-fit US state and merge that row's count and keys into that state.
+- Examples: Coastal Charleston → South Carolina; Emerald Coast 30A → Florida; Lake Norman → North Carolina; Newport Beach → California; Central Oregon → Oregon; Poconos → Pennsylvania.
+- If a label genuinely does not map to any single US state (e.g. international or ambiguous), keep it as its own row with the same label and totals unchanged.
+- Use "Other" only for: Unspecified, career site, privacy, non-property URLs, or genuinely non-US/unclear. Do not put US cities or regions into "Other".
 
 RULES:
 - Use full US state names only. When merging, sum both "count" and "keys".
 - Grand total of output "count" MUST equal the input total; sum "keys" correctly when merging.
 - For asset_delta_by_city: one row per state; "added" and "removed" are the sums of deltas you merged into that state.
-- List states first, then any unchanged region labels, then "Other" last if needed.
+- Output order: list US states first (by count descending), then any unchanged non-state labels, then "Other" last if needed.
 
-Return JSON only, no markdown: {"properties_by_location": [{"location": "...", "count": n, "keys": k}, ...], "asset_delta_by_city": [{"location": "...", "added": a, "removed": r}, ...]}.
-Include "keys" (number, 0 if not provided) on every properties_by_location row."""
+OUTPUT FORMAT:
+- Return JSON only, no markdown: {"properties_by_location": [{"location": "...", "count": n, "keys": k}, ...], "asset_delta_by_city": [{"location": "...", "added": a, "removed": r}, ...]}.
+- Include "keys" (number, 0 if not provided) on every properties_by_location row.
+- Your output is the *merged* result: each US state must appear at most once, with that state's summed count and keys. Do not include separate rows for regions/cities you have merged into a state (e.g. do not output both "South Carolina" and "Coastal Charleston" if you merged Coastal Charleston into South Carolina—output only "South Carolina" with the combined total)."""
 
     num_bullets = len(rows_sent)
-    user = f"Competitor: {competitor_name}\n\nTotal property count (your output counts MUST sum to this): {raw_total}\nTotal keys (sum when merging): {raw_keys_total}\n\nThere are {num_bullets} location bullets below. Review if they are grouped by state; if not, add totals together and map regions to the closest state (or keep separate if they don't map neatly).\n\nCurrent counts by location (raw):\n{counts_text or 'none'}\n\nChanges by location (raw):\n{deltas_text or 'none'}"
+    user = f"Competitor: {competitor_name}\n\nTotal property count (your output counts MUST sum to this): {raw_total}\nTotal keys (sum when merging): {raw_keys_total}\n\nThere are {num_bullets} location bullets below. Step 1: consolidate and clean state-level rows (merge duplicates, normalize names). Step 2: for any region/city/geographical label, assign it to the best-fit US state and merge its counts into that state; only keep a row separate if it does not map to any single US state.\n\nCurrent counts by location (raw):\n{counts_text or 'none'}\n\nChanges by location (raw):\n{deltas_text or 'none'}"
 
     try:
         resp = client.chat.completions.create(

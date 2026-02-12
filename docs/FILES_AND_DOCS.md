@@ -19,16 +19,19 @@ Quick reference to find docs and to decide what to keep or remove. **Planning-on
 | `ARCH.md` | System architecture, data flow, design principles, press deduping. | **Keep** — reference for how the system works. |
 | `DEBUG_AND_TEST_SCRIPTS.md` | Index of all debug/test scripts and how to run or remove them. | **Keep** — use to find or delete internal tests. |
 | `DEPLOY_RENDER.md` | Push-to-Render checklist; env vars; internal/external Postgres. | **Keep** — operational. (Contains credentials; consider `.gitignore` if repo is public.) |
+| `PROJECT_TRACKING_DOSSIER_IMPROVEMENTS.md` | Project tracking — dossier improvements; prioritization and tracking for dossier/executive-summary work. | **Keep** — planning and backlog for dossier. |
 | `FILES_AND_DOCS.md` | This index. | **Keep** — find/remove docs. |
 | `JOBS_DATA_FLOW.md` | Talent: what job data is parsed and what is sent to the LLM. | **Keep** — reference for talent/LLM behavior. |
 | `LLM_CLEANING_STEPS.md` | Order of LLM steps and prompts (press + asset location). | **Keep** — reference when debugging “data doesn’t populate.” |
 | `LOCAL_POSTGRES.md` | Local Postgres setup (e.g. macOS/Homebrew). | **Keep** — how-to for local DB. |
 | `LOCAL_REFRESH.md` | Run collectors locally against Render DB (Playwright, .env). | **Keep** — how-to for local refresh. |
+| `ADD_COMPETITOR_FLOW.md` | Add Competitor flow: create, storage, populate, dossier empty state, activation. | **Keep** — reference for Add Competitor UX and data flow. |
 | `POPULATE_SOURCES.md` | How to populate data: seed, first run, sources per competitor. | **Keep** — reference for populating data. |
 | `PRESS_FEED_STEPS.md` | Press pipeline steps (collection → enrichment → canonical items). | **Keep** — technical reference for press flow. |
 | `SCHEMA.md` | Core tables (competitors, source_endpoints, snapshots, events). | **Keep** — DB schema reference. |
 | `SIGNALS.md` | Event taxonomy, capability buckets, severity rules, persistence gates. | **Keep** — reference for event types and rules (or remove if you only use code as source of truth). |
 | `TALENT_SNAPSHOT_LLM.md` | Talent LLM role classification and why roles end up in “Other.” | **Keep** — reference for talent enrichment. |
+| `PROJECT_TRACKING_NEW_ITEMS_TO_BUILD.md` | Project tracking: new items to build — Add Competitor improvements, digital footprint, soft launch, Google Reviews, LinkedIn/social, public filings. | **Keep** — prioritization and implementation planning. |
 
 **Removed (planning-only):** `PRD.md` — product requirements and MVP spec; product is built, so it was deleted.
 

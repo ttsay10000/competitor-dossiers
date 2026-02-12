@@ -17,6 +17,7 @@ from ..executive_summary import (
     format_executive_summary_for_display,
     clean_location_display_for_dossier,
     aggregate_state_and_state_city_rows,
+    US_STATES_LIST,
 )
 from ..llm_structured import _assign_state_from_url, _normalize_domain, summarize_top_news_llm
 from ..rules.talent_rules import job_functional_area, FUNCTIONAL_AREA_DISPLAY_ORDER, PROPERTY_OPERATIONS_LABEL
@@ -381,6 +382,9 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         jobs_list = by_func[func]
         senior_count = sum(1 for j in jobs_list if j.get("is_senior"))
         row = {"function": func, "total": len(jobs_list), "senior": senior_count}
+        if senior_count > 0 and len(jobs_list) <= 5:
+            senior_titles = [(j.get("title") or "").strip() for j in jobs_list if j.get("is_senior") and (j.get("title") or "").strip()]
+            row["senior_titles"] = senior_titles
         if func == PROPERTY_OPERATIONS_LABEL:
             jobs_by_function_property.append(row)
         else:
@@ -559,6 +563,11 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     # Reads each group topic + recent press; outputs 3-5 key bullets with relevant dates.
     top_news_raw = summarize_top_news_llm(competitor.name, press_groups, days=30)
     top_news = (top_news_raw or [])
+    # Sort by date descending (most recent first); missing dates appear last
+    def _top_news_date_key(item):
+        d = (item.get("date") or "").strip()
+        return (d[:10] if len(d) >= 10 else d) or "0000-00-00"
+    top_news = sorted(top_news, key=_top_news_date_key, reverse=True)
 
     # Properties by location (state/city) for high-level week-over-week tracking.
     # Aggregate count and total keys per location (keys parsed from property details).
@@ -709,12 +718,18 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         {"location": r["location"], "count": r["count"], "keys": r.get("keys", 0)}
         for r in properties_by_location
     ]
+    us_states_set = frozenset(US_STATES_LIST)
+    properties_by_state = [r for r in properties_by_location if (r.get("location") or "").strip() in us_states_set]
+    properties_other = [r for r in properties_by_location if (r.get("location") or "").strip() not in us_states_set]
 
     first_talent_endpoint = next((e for e in competitor.source_endpoints if e.channel == "talent"), None)
     talent_job_board_url = first_talent_endpoint.url if first_talent_endpoint else None
 
+    has_any_snapshot = bool(latest_asset or latest_talent or latest_press)
+
     context = {
         "competitor": {"id": competitor.id, "name": competitor.name},
+        "has_any_snapshot": has_any_snapshot,
         "markets": markets,
         "capabilities": [{"capability": c.capability} for c in capabilities],
         "events": [_event_dict(e) for e in events],
@@ -731,6 +746,9 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         "top_news": top_news,
         "properties_by_location": properties_by_location,
         "properties_by_location_with_list": properties_by_location_with_list,
+        "properties_by_state": properties_by_state,
+        "properties_other": properties_other,
+        "us_states": US_STATES_LIST,
         "total_properties": total_properties,
         "location_totals_match": location_totals_match,
         "asset_baseline_date": asset_baseline_date,
@@ -842,6 +860,7 @@ def dossier_properties_by_location(competitor_id: int):
     return {
         "total_properties": context.get("total_properties", 0),
         "properties_by_location": context.get("properties_by_location") or [],
+        "us_states": context.get("us_states") or [],
         "other_properties_display": context.get("other_properties_display") or [],
         "location_totals_match": context.get("location_totals_match", True),
     }

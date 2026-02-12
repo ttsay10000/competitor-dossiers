@@ -9,8 +9,9 @@
 #   ./scripts/run.sh asset              # run asset only
 #   ./scripts/run.sh asset Lark         # run asset only for Lark (separate process; use if Lark overlaps AvantStay)
 #   ./scripts/run.sh asset AvantStay    # run asset only for AvantStay
-#   ./scripts/run.sh seed               # run seed (competitors + sources)
-#   ./scripts/run.sh serve               # start web server (uvicorn)
+#   ./scripts/run.sh seed               # run seed (competitors + sources from seed_data.json)
+#   ./scripts/run.sh export-seed        # export DB → seed_data.json (run after adding competitors in UI)
+#   ./scripts/run.sh serve              # start web server (uvicorn)
 #   ./scripts/run.sh migrate             # run alembic upgrade head
 #
 # Requires: .env with DATABASE_URL (and PLAYWRIGHT_ENABLED=true for talent/asset).
@@ -55,6 +56,9 @@ case "$CMD" in
   seed)
     exec "$PYTHON" -m app.seed
     ;;
+  export-seed)
+    exec "$PYTHON" -m app.cli --export-seed
+    ;;
   talent|asset|press|homepage|public_records|all)
     EXTRA=""
     if [ "${2:-}" = "--force" ]; then
@@ -66,7 +70,7 @@ case "$CMD" in
     exec "$PYTHON" -m app.cli --channel "$CMD" $EXTRA
     ;;
   *)
-    echo "Usage: $0 [talent|asset|press|homepage|public_records|all|seed|serve|migrate] [competitor_name|--force]"
+    echo "Usage: $0 [talent|asset|press|homepage|public_records|all|seed|export-seed|serve|migrate] [competitor_name|--force]"
     echo "  default: all (run all channels)"
     echo "  --force: clear latest snapshots so run does not skip (enrichment re-runs). E.g. ./scripts/run.sh press --force"
     exit 1

@@ -285,6 +285,8 @@ def run_talent(competitor_name: Optional[str] = None) -> None:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         if competitor_name:
             competitors = _filter_competitors_by_name(competitors, competitor_name)
+        else:
+            competitors = [c for c in competitors if getattr(c, "is_active", True)]
             if not competitors:
                 log_event("competitor_not_found", competitor_filter=competitor_name)
                 return
@@ -504,6 +506,8 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         if competitor_name:
             competitors = _filter_competitors_by_name(competitors, competitor_name)
+        else:
+            competitors = [c for c in competitors if getattr(c, "is_active", True)]
             if not competitors:
                 log_event("competitor_not_found", competitor_filter=competitor_name)
                 return
@@ -698,6 +702,8 @@ def run_press(competitor_name: Optional[str] = None) -> None:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         if competitor_name:
             competitors = _filter_competitors_by_name(competitors, competitor_name)
+        else:
+            competitors = [c for c in competitors if getattr(c, "is_active", True)]
             if not competitors:
                 log_event("competitor_not_found", competitor_filter=competitor_name)
                 return
@@ -1102,6 +1108,8 @@ def run_homepage(competitor_name: Optional[str] = None) -> None:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         if competitor_name:
             competitors = _filter_competitors_by_name(competitors, competitor_name)
+        else:
+            competitors = [c for c in competitors if getattr(c, "is_active", True)]
             if not competitors:
                 log_event("competitor_not_found", competitor_filter=competitor_name)
                 return
@@ -1186,6 +1194,8 @@ def run_public_records(competitor_name: Optional[str] = None) -> None:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         if competitor_name:
             competitors = _filter_competitors_by_name(competitors, competitor_name)
+        else:
+            competitors = [c for c in competitors if getattr(c, "is_active", True)]
             if not competitors:
                 log_event("competitor_not_found", competitor_filter=competitor_name)
                 return

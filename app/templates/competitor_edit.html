@@ -27,6 +27,12 @@
           <label>Primary Domain</label>
           <input name="primary_domain" value="{{ competitor.primary_domain or '' }}" />
         </div>
+        <div style="display: flex; align-items: flex-end;">
+          <label style="display: inline-flex; align-items: center; gap: 6px; margin-right: 12px;">
+            <input type="checkbox" name="is_active" value="1" {% if competitor.is_active %}checked{% endif %} />
+            <span>Active (include in cron/global refresh)</span>
+          </label>
+        </div>
         <div>
           <button type="submit">Save</button>
         </div>

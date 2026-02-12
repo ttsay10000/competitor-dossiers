@@ -1,3 +1,4 @@
+import logging
 import threading
 from urllib.parse import urlencode
 from typing import Optional
@@ -7,10 +8,24 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.exc import IntegrityError
 from starlette.status import HTTP_303_SEE_OTHER
 
+from sqlalchemy import func
+
 from ..db import get_session, get_last_refreshed
-from ..models import Competitor, SourceEndpoint, RunLog
+from ..models import Competitor, SourceEndpoint, RunLog, Snapshot
 
 router = APIRouter()
+
+# Main channels for status display
+DISPLAY_CHANNELS = ("talent", "asset", "press")
+
+
+def _sync_seed_file() -> None:
+    """After any competitor/source change, write DB to seed_data.json so UI additions persist. Never fail the request."""
+    try:
+        from ..seed import export_seed_to_file
+        export_seed_to_file()
+    except Exception as e:
+        logging.warning("Failed to sync seed_data.json after competitor change: %s", e, exc_info=True)
 
 
 @router.get("/")
@@ -18,11 +33,47 @@ def root():
     return RedirectResponse(url="/competitors", status_code=HTTP_303_SEE_OTHER)
 
 
+def _competitor_status(session, competitor_id: int) -> dict:
+    """Return has_snapshots per channel and last_runs per channel for a competitor."""
+    has_snapshots = {ch: False for ch in DISPLAY_CHANNELS}
+    subq = (
+        session.query(Snapshot.channel, func.count(Snapshot.id))
+        .filter(Snapshot.competitor_id == competitor_id, Snapshot.channel.in_(DISPLAY_CHANNELS))
+        .group_by(Snapshot.channel)
+        .all()
+    )
+    for ch, cnt in subq:
+        if cnt and cnt > 0:
+            has_snapshots[ch] = True
+
+    last_runs = {}
+    for log in (
+        session.query(RunLog)
+        .filter(RunLog.competitor_id == competitor_id, RunLog.channel.in_(DISPLAY_CHANNELS))
+        .order_by(RunLog.created_at.desc())
+    ):
+        if log.channel not in last_runs:
+            last_runs[log.channel] = {
+                "status": log.status,
+                "created_at_str": log.created_at.strftime("%Y-%m-%d %H:%M"),
+            }
+    return {"has_snapshots": has_snapshots, "last_runs": last_runs}
+
+
 @router.get("/competitors")
 def competitors_list(request: Request):
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
-        competitors_data = [{"id": c.id, "name": c.name, "primary_domain": c.primary_domain} for c in competitors]
+        competitors_data = []
+        for c in competitors:
+            status = _competitor_status(session, c.id)
+            competitors_data.append({
+                "id": c.id,
+                "name": c.name,
+                "primary_domain": c.primary_domain,
+                "has_snapshots": status["has_snapshots"],
+                "last_runs": status["last_runs"],
+            })
         last_refreshed = get_last_refreshed(session)
     nav_competitors = [{"id": c["id"], "name": c["name"]} for c in competitors_data]
     return request.app.state.templates.TemplateResponse(
@@ -49,16 +100,15 @@ def competitors_new(request: Request):
 
 @router.post("/competitors")
 async def competitors_create(request: Request):
-    form = await request.form()
-    name = (form.get("name") or "").strip()
-    if not name:
-        return RedirectResponse(url="/competitors/new", status_code=HTTP_303_SEE_OTHER)
-    primary_domain = (form.get("primary_domain") or "").strip() or None
-    talent_urls = form.getlist("talent_urls")
-    asset_urls = form.getlist("asset_urls")
-    press_urls = form.getlist("press_urls")
-
     try:
+        form = await request.form()
+        name = (form.get("name") or "").strip()
+        if not name:
+            return RedirectResponse(url="/competitors/new", status_code=HTTP_303_SEE_OTHER)
+        primary_domain = (form.get("primary_domain") or "").strip() or None
+        talent_urls = form.getlist("talent_urls")
+        asset_urls = form.getlist("asset_urls")
+        press_urls = form.getlist("press_urls")
         with get_session() as session:
             competitor = Competitor(name=name, primary_domain=primary_domain)
             session.add(competitor)
@@ -86,22 +136,46 @@ async def competitors_create(request: Request):
             _add_sources(press_urls, "press")
 
             new_id = competitor.id
+        _sync_seed_file()
         return RedirectResponse(url=f"/competitors/{new_id}/added", status_code=HTTP_303_SEE_OTHER)
     except IntegrityError:
         return RedirectResponse(
             url="/competitors/new?" + urlencode({"error": "duplicate"}),
             status_code=HTTP_303_SEE_OTHER,
         )
-    except Exception:
+    except Exception as e:
+        logging.exception("Failed to create competitor: %s", e)
         return RedirectResponse(
             url="/competitors/new?" + urlencode({"error": "server"}),
             status_code=HTTP_303_SEE_OTHER,
         )
 
 
+def _parse_channels(value: Optional[str]) -> Optional[list[str]]:
+    """Parse comma-separated channels; return None if empty/None (run all). Valid: talent, asset, press, homepage, public_records."""
+    if not value or not str(value).strip():
+        return None
+    from ..runner import RUNNER_CHANNELS
+    raw = [c.strip().lower() for c in str(value).split(",") if c.strip()]
+    valid = [c for c in raw if c in RUNNER_CHANNELS]
+    return valid if valid else None
+
+
 @router.post("/competitors/{competitor_id}/run-now")
-def competitor_run_now(competitor_id: int):
-    """Start data collection (talent, asset, press) for this competitor in the background. Redirects to Runs."""
+async def competitor_run_now(request: Request, competitor_id: int):
+    """Start data collection for this competitor in the background. Optional form/query: channels=talent,asset,press or channels[]."""
+    channels = None
+    form = await request.form()
+    if form:
+        # Form can send multiple channels (checkboxes) or single comma-separated
+        ch_list = form.getlist("channels")
+        if ch_list:
+            channels = _parse_channels(",".join(ch_list))
+        else:
+            channels = _parse_channels(form.get("channels"))
+    if channels is None:
+        channels = _parse_channels(request.query_params.get("channels"))
+
     with get_session() as session:
         competitor = session.get(Competitor, competitor_id)
         if competitor is None:
@@ -110,14 +184,18 @@ def competitor_run_now(competitor_id: int):
 
     def _run():
         from ..runner import run
-        run(competitor_name=name)
+        if channels:
+            for ch in channels:
+                run(channel=ch, competitor_name=name)
+        else:
+            run(competitor_name=name)
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
-    return RedirectResponse(
-        url=f"/runs?competitor_id={competitor_id}&started=1",
-        status_code=HTTP_303_SEE_OTHER,
-    )
+    redirect_url = f"/runs?competitor_id={competitor_id}&started=1"
+    if channels:
+        redirect_url += "&channels=" + ",".join(channels)
+    return RedirectResponse(url=redirect_url, status_code=HTTP_303_SEE_OTHER)
 
 
 @router.get("/competitors/{competitor_id}/added")
@@ -181,6 +259,7 @@ def competitors_edit(request: Request, competitor_id: int):
             "id": competitor.id,
             "name": competitor.name,
             "primary_domain": competitor.primary_domain,
+            "is_active": getattr(competitor, "is_active", True),
         }
         endpoints_data = [
             {
@@ -207,6 +286,7 @@ def competitors_update(
     competitor_id: int,
     name: str = Form(...),
     primary_domain: Optional[str] = Form(None),
+    is_active: Optional[str] = Form(None),
 ):
     with get_session() as session:
         competitor = session.get(Competitor, competitor_id)
@@ -214,6 +294,8 @@ def competitors_update(
             return RedirectResponse(url="/competitors", status_code=HTTP_303_SEE_OTHER)
         competitor.name = name.strip()
         competitor.primary_domain = (primary_domain or "").strip() or None
+        competitor.is_active = bool(is_active)
+    _sync_seed_file()
     return RedirectResponse(url=f"/competitors/{competitor_id}", status_code=HTTP_303_SEE_OTHER)
 
 
@@ -239,6 +321,7 @@ def competitor_add_source(
             use_sitemap_first=bool(use_sitemap_first),
         )
         session.add(endpoint)
+    _sync_seed_file()
     return RedirectResponse(url=f"/competitors/{competitor_id}", status_code=HTTP_303_SEE_OTHER)
 
 
@@ -248,6 +331,7 @@ def competitor_delete_source(competitor_id: int, source_id: int):
         endpoint = session.get(SourceEndpoint, source_id)
         if endpoint is not None:
             session.delete(endpoint)
+    _sync_seed_file()
     return RedirectResponse(url=f"/competitors/{competitor_id}", status_code=HTTP_303_SEE_OTHER)
 
 
@@ -270,4 +354,5 @@ def competitor_update_source(
         endpoint.confidence = confidence.strip() or "high"
         endpoint.js_required = bool(js_required)
         endpoint.use_sitemap_first = bool(use_sitemap_first)
+    _sync_seed_file()
     return RedirectResponse(url=f"/competitors/{competitor_id}", status_code=HTTP_303_SEE_OTHER)

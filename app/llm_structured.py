@@ -510,8 +510,9 @@ Given a list of jobs (index, title, dept, location), output a JSON array with on
 Each object must have: "index" (integer), "functional_area" (exactly one of: {areas_str}), "is_senior" (boolean).
 
 Functional area rules:
-- Use "Property operations" for on-property, guest-facing or property-level roles: front desk, housekeeping, maintenance, F&B (cook, server, bartender), concierge, guest experience, night auditor, room attendant, valet, bellman, property management, field ops, hotel/restaurant operations. When in doubt and the title suggests on-site hospitality or property-level execution, choose Property operations.
-- Use "Business & Strategy", "Sales / Growth", "Marketing", "AI / Data", "Product", "Engineering" for corporate/central roles (strategy, growth, product, engineering, data, marketing, sales, HR, finance, etc.).
+- Use "Property operations" for on-property, guest-facing or property-level roles: front desk, housekeeping, maintenance, F&B (cook, server, bartender), concierge, night auditor, room attendant, valet, bellman, property management, field ops, hotel/restaurant operations. When in doubt and the title suggests on-site hospitality or property-level execution, choose Property operations.
+- Use "Business & Strategy" for corporate/central roles: strategy, growth, product, engineering, data, marketing, sales, HR, finance, AND for guest experience associate, leasing agent, overnight guest experience associate (these are customer success, internal reservations, or virtual assistant roles, not on-property).
+- Use "Business & Strategy", "Sales / Growth", "Marketing", "AI / Data", "Product", "Engineering" for other corporate/central roles.
 - Use "Other" only when the role clearly does not fit any of the above.
 
 Treat as senior: C-level (CEO, CFO, etc.), VP, Vice President, Head of, Director, and similar. Otherwise is_senior is false.
@@ -1077,8 +1078,12 @@ def _group_press_into_clusters_llm(competitor_name: str, items: List[dict]) -> L
         lines.append(f"{i}: {date_s} | {outlet} | {title}")
 
     system = (
-        "You are given the full list of filtered press articles. Read every article TITLE and group them by the same story or event.\n\n"
-        "Input: N items (index 0 to N-1). Each line is INDEX | DATE | OUTLET | TITLE. Use only what you see in the TITLEs to decide grouping—same partnership, same hire, same opening = one group.\n\n"
+        "You group press articles by the same story or event. Input: N items (index 0 to N-1). Each line: INDEX | DATE | OUTLET | TITLE. Use only titles to decide grouping.\n\n"
+        "CITY/GEOGRAPHY RULE (critical): If an article mentions a city or region (Miami, Austin, Florida, Texas, Edgewater, etc.), that article is about that place. "
+        "Articles about the SAME city/region especially if about a new location (e.g. hotel opening) MUST be grouped together. Treat as same location: Miami = Florida = Edgewater (Miami neighborhood); Austin = Texas. City names and their states are equivalent. "
+        "Different cities are different stories: Miami and Austin are NOT the same—never group Austin articles with Miami articles. "
+        "Example: \"AvantStay opens Sense28 in Miami\", \"Sense28 in Florida\", and \"Hotel to make Miami debut in Edgewater\" are ALL the same story—group them together. \"The Code in Austin\" is a different story (Austin ≠ Miami). Never put a city-specific article in Other coverage when a group about that city's opening exists. City matching is decisive.\n\n"
+        "LATE COVERAGE: Articles about the same event often appear 1–3 weeks apart. Group by story, not by date. Late press about the same city + opening belongs in the same group.\n\n"
         "Your job: put articles that cover the SAME story into one group. Each group gets a short headline (group_title) and a brief summary (one_line_summary). "
         "The TARGET COMPANY name is provided below—use it in group_title when relevant (e.g. \"Placemakr and Hilton launch partnership\", \"AvantStay expands in Austin\", \"Lark Hotels partnership with Mews\"). "
         "Examples of group_title style for any hospitality company:\n"
@@ -1086,6 +1091,7 @@ def _group_press_into_clusters_llm(competitor_name: str, items: List[dict]) -> L
         "- Executive hire: \"[Company] hires new EVP [name]\" or \"[Company] appoints [role]\" when titles mention a specific hire\n"
         "- Openings/expansion: \"[Company] opens property in [city]\" or \"New [Company] locations\"\n"
         "- Other: one clear headline that describes the story (e.g. \"New property opening in Phoenix\").\n\n"
+        "Other coverage: Reserve \"Other coverage\" ONLY for articles that are clearly unrelated to any grouped story (different city, different topic). Never put city-specific articles into Other when they match an existing group's city and story type.\n\n"
         "For one_line_summary: write a short but informative summary (1–2 sentences) based on the article titles. Include key details: what happened, who was involved, and any outcome or context (e.g. market, role, partner name). "
         "Avoid one-word or fragment summaries; aim for 15–40 words so a reader understands the story without opening the articles. "
         "Example: \"Placemakr and Hilton announced a partnership to bring Hilton’s hotel brands to Placemakr’s extended-stay properties; coverage highlighted the expansion of the company’s distribution.\"\n\n"

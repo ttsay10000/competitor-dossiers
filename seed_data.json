@@ -1,0 +1,85 @@
+{
+  "competitors": [
+    {
+      "name": "Placemakr",
+      "primary_domain": "placemakr.com",
+      "sources": [
+        {"channel": "talent", "url": "https://jobs.lever.co/placemakr", "confidence": "high"},
+        {
+          "channel": "asset",
+          "url": "https://www.placemakr.com/locations",
+          "confidence": "high",
+          "extra_options": {"strategy_chain": ["html"], "min_properties_accept": 1}
+        },
+        {"channel": "press", "url": "https://www.placemakr.com/blog", "confidence": "high"}
+      ]
+    },
+    {
+      "name": "AvantStay",
+      "primary_domain": "avantstay.com",
+      "sources": [
+        {"channel": "talent", "url": "https://careers.kula.ai/avantstay", "confidence": "high"},
+        {
+          "channel": "asset",
+          "url": "https://avantstay.com/search",
+          "confidence": "low",
+          "js_required": true,
+          "use_sitemap_first": true,
+          "extra_options": {
+            "llm_extract": true,
+            "strategy_chain": ["sitemap_first", "html"],
+            "min_properties_accept": 5
+          }
+        },
+        {"channel": "press", "url": "https://avantstay.com/blog/", "confidence": "high"}
+      ]
+    },
+    {
+      "name": "Lark",
+      "primary_domain": "larkhospitality.com",
+      "sources": [
+        {"channel": "talent", "url": "https://ats.wizehire.com/career-site/lark-hospitality", "confidence": "high"},
+        {
+          "channel": "asset",
+          "url": "https://www.larkhospitality.com/portfolio/",
+          "confidence": "high",
+          "js_required": true,
+          "extra_options": {
+            "strategy": "js_exhaust",
+            "load_more": {
+              "button_text": "Load more hotels",
+              "post_load_wait_ms": 3000,
+              "click_selector": [
+                "a:has-text('Load more hotels')",
+                "button:has-text('Load more hotels')",
+                ":text('Load more hotels')",
+                "button:has-text('Load more')",
+                "button:has-text('Load More')",
+                "a:has-text('Load more')",
+                "a:has-text('Load More')",
+                "button:has-text('View more')",
+                "a:has-text('View more')",
+                "[data-testid='load-more']",
+                "button:has-text('Show more')",
+                "a:has-text('Show more')"
+              ],
+              "stop_when_selector_gone": true,
+              "wait_after_click_ms": 2000,
+              "wait_for_selector_timeout_ms": 10000,
+              "wait_after_gone_ms": 3000,
+              "wait_reappear_attempts": 5,
+              "max_clicks": 200
+            },
+            "llm_extract": true
+          }
+        },
+        {
+          "channel": "press",
+          "url": "https://www.larkhospitality.com/press/",
+          "confidence": "high",
+          "extra_options": {"press_search_name": "Lark Hotels"}
+        }
+      ]
+    }
+  ]
+}

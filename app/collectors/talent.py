@@ -250,6 +250,158 @@ def extract_jobs_from_html(html: str) -> list[dict[str, Any]]:
     return jobs
 
 
+def _looks_like_job_title(title: str) -> bool:
+    """True if text looks like a job title (not a department filter, location, or junk)."""
+    if not title or len(title) < 4:
+        return False
+    lower = title.lower().strip()
+    # Skip filter/section labels and UI junk
+    if lower in ("all departments", "all locations", "all jobs", "• on-site", "• remote", "on-site", "remote",
+                 "made with", "retail sales", "field operations", "executive"):
+        return False
+    if "•" in title:  # Bullet in filter UI
+        return False
+    # Skip department/category headings (these appear in filters, not as job titles)
+    if re.search(r"\([a-z&]+\)$", lower):  # e.g. (R&D), (Market Ops)
+        return False
+    dept_phrases = ("people & talent", "corporate and group", "regulatory affairs", "onboarding & supply",
+                    "consumer marketing", "growth marketing", "owner experience", "revenue management",
+                    "strategic initiatives", "it & systems", "concierge & events", "field operations executive",
+                    "central operations", "field operations -", "guest experience", "united states")
+    if any(d in lower for d in dept_phrases) and not any(
+        r in lower for r in ("manager", "associate", "engineer", "director", "coordinator", "specialist", "analyst")
+    ):
+        return False
+    # Job titles typically contain role keywords
+    job_keywords = (
+        "manager", "associate", "agent", "engineer", "director", "coordinator",
+        "specialist", "assistant", "analyst", "supervisor", "technician", "chef",
+        "housekeeper", "valet", "bellman", "concierge", "receptionist", "attendant",
+        "inspector", "paralegal", "strategist", "head of", "vp ", " vp", "executive",
+    )
+    if any(kw in lower for kw in job_keywords):
+        return True
+    # Multi-word titles that aren't obviously locations (e.g. "Front Desk" as two words)
+    words = title.split()
+    if len(words) >= 2 and not _looks_like_location_filter(title):
+        return True
+    return False
+
+
+def _looks_like_location_filter(text: str) -> bool:
+    """True if text looks like a location filter option (city, country, address)."""
+    lower = text.lower().strip()
+    # Geographic suffixes
+    if ", usa" in lower or ", united states" in lower or " usa" in lower:
+        return True
+    if any(lower.endswith(s) for s in (" argentina", " brazil", " mexico", " colombia", " chile")):
+        return True
+    # Address-like (starts with number, contains "suite", "unit", "blvd", "ave")
+    if re.search(r"^\d+\s+\w+", lower) or re.search(r"\b(suite|unit|blvd|ave|dr|st)\b", lower):
+        return True
+    # Common US state abbreviations - "City, ST" pattern
+    if re.search(r",\s*(ca|tx|fl|ny|pa|sc|tn|or|hi|la|ut|wa)\s*(,|$)", lower):
+        return True
+    return False
+
+
+def _title_is_likely_city(title: str, location: Optional[str]) -> bool:
+    """True if title+location suggests the title is a city/region (e.g. 'San Diego' with 'California, United States')."""
+    if not location:
+        return False
+    lower_loc = location.lower()
+    lower_title = title.lower()
+    # "ST, USA" or "State, USA" or "State, United States"
+    if re.search(r"^[a-z]{2},?\s*usa", lower_loc) or ", usa" in lower_loc:
+        return True
+    if ", united states" in lower_loc or lower_loc.endswith(" united states"):
+        return True  # "California, United States", "Florida, United States"
+    if any(lower_loc.endswith(s) for s in (", argentina", ", brazil", ", mexico", "argentina", "usa")):
+        return True
+    # Title has no job keyword and looks like a place name
+    job_kw = ("manager", "associate", "agent", "engineer", "director", "coordinator", "specialist", "assistant")
+    if not any(kw in lower_title for kw in job_kw) and len(title.split()) <= 3:
+        if re.search(r"(beach|city|valley|lake|island|springs|harbor|bay)$", lower_title):
+            return True
+    return False
+
+
+def extract_jobs_from_kula(html: str) -> list[dict[str, Any]]:
+    """Extract jobs from Kula/AvantStay career pages. DOM: department in span.css-ypynmf,
+    job line in p.chakra-text.css-f8zk62 as 'Title, Property, Location' (e.g. 'Hotel Valet & Bellman, The Code Hotel, Austin').
+    Split on first comma: before = job title, after = location/property."""
+    soup = BeautifulSoup(html, "html.parser")
+    jobs = []
+    seen = set()
+    # Only use span.ypynmf that looks like a department (not "All departments", not a city)
+    # and only use p.chakra-text.css-f8zk62 for job lines (the specific job listing class)
+    current_dept = None
+    for elem in soup.find_all(["span", "p"]):
+        if elem.name == "span" and elem.get("class"):
+            cls = " ".join(elem.get("class", []))
+            if "ypynmf" in cls:
+                dept_text = (elem.get_text() or "").strip()
+                # Only treat as department if it looks like one (has "–" or " - ", or contains "Operations", "Marketing", etc.)
+                if dept_text and dept_text not in ("All departments", "All locations"):
+                    if _looks_like_location_filter(dept_text) or len(dept_text) < 3:
+                        continue  # Skip city names, single chars
+                    if " – " in dept_text or " - " in dept_text or any(
+                        x in dept_text for x in ("Operations", "Marketing", "Finance", "Housekeeping", "Sales", "Legal", "Executive", "Guest", "Field", "Product")
+                    ):
+                        current_dept = dept_text
+        elif elem.name == "p" and elem.get("class"):
+            cls = " ".join(elem.get("class", []))
+            if "chakra-text" not in cls:
+                continue
+            raw = (elem.get_text() or "").strip()
+            if not raw or len(raw) < 4 or len(raw) > 200:
+                continue
+            if _is_cta_or_section_text(raw):
+                continue
+            if raw.startswith("USD ") or re.search(r"^\d+\.\d+-\d+\.\d+\s*/\s*(hour|year)", raw):
+                continue
+            if "Full Time" in raw or ("Remote" in raw and "," not in raw):
+                continue
+            if "; " in raw and "locations" in raw.lower():  # "Mexico; Brazil; Argentina + 1 locations"
+                continue
+            # Parse: "Title, Location (Property)" or "Title, Property, Location"
+            # Handle "Title (Scope), Location" e.g. "Head of FP&A (Global), Remote"
+            if "," in raw:
+                title_part, loc_part = raw.split(",", 1)
+                title = title_part.strip()
+                location = loc_part.strip() or None
+                # Fix split inside parens: "Head of FP&A (Global), Remote" -> title ends with "(", loc="Remote)"
+                if location and location.endswith(")") and "(" in title and not title.endswith(")"):
+                    title = title + ")"
+                    location = location[:-1].strip() or None
+            else:
+                title = raw
+                location = None
+            if not title or len(title) < 4 or len(title) > 120:
+                continue
+            if not _looks_like_job_title(title):
+                continue
+            if _looks_like_location_filter(title):
+                continue
+            # Skip when title is likely a city (e.g. "Great Barrington" with location "MA, USA")
+            if _title_is_likely_city(title, location):
+                continue
+            key = (title[:80], location or "")
+            if key in seen:
+                continue
+            seen.add(key)
+            posted_date = _posted_date_from_element(elem)
+            jobs.append({
+                "job_id": None,
+                "title": title,
+                "location": location,
+                "dept": current_dept,
+                "posted_date": posted_date,
+                "url": None,
+            })
+    return jobs
+
+
 def extract_jobs_from_wizehire_title_divs(html: str) -> list[dict[str, Any]]:
     """Extract job titles from WizeHire/Lark career pages where titles are in div.jss83 (e.g. 'Hotel Housekeeper', 'Building Maintenance Technician')."""
     soup = BeautifulSoup(html, "html.parser")
@@ -414,6 +566,10 @@ def collect_talent_snapshot(source_url: str) -> dict[str, Any]:
             jobs = extract_jobs_from_html(fetched.text)
         if not jobs:
             jobs = extract_jobs_from_headings(fetched.text)
+    elif "kula.ai" in source_url.lower():
+        jobs = extract_jobs_from_kula(fetched.text)
+        if not jobs:
+            jobs = extract_jobs_from_html(fetched.text)
     else:
         jobs = extract_jobs_from_html(fetched.text)
     out = {

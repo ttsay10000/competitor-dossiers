@@ -57,6 +57,12 @@
     </p>
     <div style="margin: 16px 0;">
       <form method="post" action="/competitors/{{ competitor.id }}/run-now" style="display: inline-block;">
+        <label style="display: inline-flex; align-items: center; gap: 8px; margin-right: 12px;">
+          <span class="meta">Channels:</span>
+          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="talent" checked /> Talent</label>
+          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="asset" checked /> Asset</label>
+          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="press" checked /> Press</label>
+        </label>
         <button type="submit">Populate this competitor now</button>
       </form>
       <span class="meta" style="margin-left: 8px;">Starts collection in the background; check <a href="/runs">Runs</a> for status.</span>

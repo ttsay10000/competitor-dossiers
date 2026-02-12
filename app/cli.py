@@ -31,7 +31,12 @@ def main() -> None:
     parser.add_argument(
         "--seed",
         action="store_true",
-        help="Run seed (update competitors/sources from seed.py) before channels. Use after changing seed.py.",
+        help="Run seed (update competitors/sources from seed_data.json) before channels.",
+    )
+    parser.add_argument(
+        "--export-seed",
+        action="store_true",
+        help="Export current DB competitors and sources to seed_data.json. Run after adding competitors in the UI, then commit the file.",
     )
     parser.add_argument(
         "--force",
@@ -59,6 +64,11 @@ def main() -> None:
 
     if args.digest:
         print_weekly_digest()
+        return
+
+    if args.export_seed and not args.local:
+        from .seed import export_seed_to_file
+        export_seed_to_file()
         return
 
     if args.seed and not args.local:

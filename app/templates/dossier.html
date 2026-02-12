@@ -4,6 +4,22 @@
     <div class="card empty">{{ error }}</div>
   {% else %}
     <h1>{{ competitor.name }} Dossier</h1>
+    {% if not has_any_snapshot %}
+    <div class="card" style="border-left: 6px solid var(--accent); margin-bottom: 16px;">
+      <strong>No data yet—run collection</strong>
+      <p class="meta" style="margin: 4px 0 12px 0;">This dossier has no snapshots yet. Run data collection to populate talent, asset, and press sections.</p>
+      <form method="post" action="/competitors/{{ competitor.id }}/run-now" style="display: inline-block;">
+        <label style="display: inline-flex; align-items: center; gap: 8px; margin-right: 12px;">
+          <span class="meta">Channels:</span>
+          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="talent" checked /> Talent</label>
+          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="asset" checked /> Asset</label>
+          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="press" checked /> Press</label>
+        </label>
+        <button type="submit">Populate now</button>
+      </form>
+      <span class="meta" style="margin-left: 8px;">Starts collection in the background; check <a href="/runs">Runs</a> for status.</span>
+    </div>
+    {% endif %}
     <div style="margin-bottom: 12px;">
       <form method="post" action="/dossier/{{ competitor.id }}/refresh" class="refresh-form" style="display: inline-block; margin-right: 8px;">
         <label style="display: inline-flex; align-items: center; gap: 6px; margin-right: 20px; white-space: nowrap;">
@@ -114,8 +130,20 @@
           <p class="meta" style="margin: 0 0 8px 0;">Note: Location breakdown (by state) does not sum to total—some locations may have been truncated before grouping.</p>
         {% endif %}
         {% if properties_by_location|length %}
+          {% if properties_by_state|length %}
+          <p class="card-section-title" style="margin: 8px 0 4px 0;">Properties by states</p>
+          <ul style="margin: 0 0 8px 0; padding-left: 20px;">
+            {% for row in properties_by_state %}
+            <li>
+              <strong>{{ row.location }}</strong> – {{ row.count }} propert{{ 'ies' if row.count != 1 else 'y' }}{% if row.get('keys') %} ({{ row["keys"] }} keys){% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          {% if properties_other|length %}
+          <p class="card-section-title" style="margin: 8px 0 4px 0;">Other properties (regions, geographical locations, other)</p>
           <ul style="margin: 0; padding-left: 20px;">
-            {% for row in properties_by_location %}
+            {% for row in properties_other %}
             <li>
               <strong>{{ row.location }}</strong> – {{ row.count }} propert{{ 'ies' if row.count != 1 else 'y' }}{% if row.get('keys') %} ({{ row["keys"] }} keys){% endif %}
               {% if row.location == 'Other' and other_properties_display|length %}
@@ -128,6 +156,7 @@
             </li>
             {% endfor %}
           </ul>
+          {% endif %}
         {% else %}
           <div class="meta">No property data yet. Run the asset collector to populate.</div>
         {% endif %}
@@ -156,8 +185,11 @@
             }
             var total = data.total_properties || 0;
             var rows = data.properties_by_location || [];
+            var usStates = (data.us_states || []).reduce(function(acc, s) { acc[s] = true; return acc; }, {});
             var otherList = data.other_properties_display || [];
             var totalsMatch = data.location_totals_match !== false;
+            var stateRows = rows.filter(function(r) { return usStates[(r.location || '').trim()]; });
+            var otherRows = rows.filter(function(r) { return !usStates[(r.location || '').trim()]; });
             var html = '';
             if (total > 0) {
               html += '<p style="margin: 0 0 8px 0;"><strong>Total: ' + total + ' propert' + (total !== 1 ? 'ies' : 'y') + '</strong></p>';
@@ -166,25 +198,41 @@
               html += '<p class="meta" style="margin: 0 0 8px 0;">Note: Location breakdown (by state) does not sum to total—some locations may have been truncated before grouping.</p>';
             }
             if (rows.length) {
-              html += '<ul style="margin: 0; padding-left: 20px;">';
-              for (var i = 0; i < rows.length; i++) {
-                var row = rows[i];
-                var loc = escapeHtml(row.location || '');
-                var count = row.count || 0;
-                var keys = row.keys || 0;
-                var keysStr = keys ? ' (' + keys + ' keys)' : '';
-                html += '<li><strong>' + loc + '</strong> – ' + count + ' propert' + (count !== 1 ? 'ies' : 'y') + keysStr;
-                if ((row.location || '') === 'Other' && otherList.length) {
-                  html += '<ul style="margin: 4px 0 0 0; padding-left: 20px;">';
-                  for (var j = 0; j < otherList.length; j++) {
-                    var op = otherList[j];
-                    html += '<li><span title="' + escapeHtml(op.url || '') + '">' + escapeHtml(op.name || '') + '</span> — ' + escapeHtml(op.raw_location || op.market || op.url || '—') + '</li>';
-                  }
-                  html += '</ul>';
+              if (stateRows.length) {
+                html += '<p class="card-section-title" style="margin: 8px 0 4px 0;">Properties by states</p>';
+                html += '<ul style="margin: 0 0 8px 0; padding-left: 20px;">';
+                for (var i = 0; i < stateRows.length; i++) {
+                  var row = stateRows[i];
+                  var loc = escapeHtml(row.location || '');
+                  var count = row.count || 0;
+                  var keys = row.keys || 0;
+                  var keysStr = keys ? ' (' + keys + ' keys)' : '';
+                  html += '<li><strong>' + loc + '</strong> – ' + count + ' propert' + (count !== 1 ? 'ies' : 'y') + keysStr + '</li>';
                 }
-                html += '</li>';
+                html += '</ul>';
               }
-              html += '</ul>';
+              if (otherRows.length) {
+                html += '<p class="card-section-title" style="margin: 8px 0 4px 0;">Other properties (regions, geographical locations, other)</p>';
+                html += '<ul style="margin: 0; padding-left: 20px;">';
+                for (var j = 0; j < otherRows.length; j++) {
+                  var row = otherRows[j];
+                  var loc = escapeHtml(row.location || '');
+                  var count = row.count || 0;
+                  var keys = row.keys || 0;
+                  var keysStr = keys ? ' (' + keys + ' keys)' : '';
+                  html += '<li><strong>' + loc + '</strong> – ' + count + ' propert' + (count !== 1 ? 'ies' : 'y') + keysStr;
+                  if ((row.location || '') === 'Other' && otherList.length) {
+                    html += '<ul style="margin: 4px 0 0 0; padding-left: 20px;">';
+                    for (var k = 0; k < otherList.length; k++) {
+                      var op = otherList[k];
+                      html += '<li><span title="' + escapeHtml(op.url || '') + '">' + escapeHtml(op.name || '') + '</span> — ' + escapeHtml(op.raw_location || op.market || op.url || '—') + '</li>';
+                    }
+                    html += '</ul>';
+                  }
+                  html += '</li>';
+                }
+                html += '</ul>';
+              }
             } else {
               html += '<div class="meta">No property data yet. Run the asset collector to populate.</div>';
             }
@@ -210,7 +258,14 @@
           {% if jobs_by_function|length %}
             <ul class="staffing-list">
               {% for row in jobs_by_function %}
-              <li><strong>{{ row.function }}</strong>: {{ row.total }} role{{ 's' if row.total != 1 else '' }}{% if row.senior %} ({{ row.senior }} senior){% endif %}</li>
+              <li>
+                <strong>{{ row.function }}</strong>: {{ row.total }} role{{ 's' if row.total != 1 else '' }}{% if row.senior %} ({{ row.senior }} senior){% endif %}
+                {% if row.get('senior_titles') %}
+                <ul style="margin: 2px 0 0 0; padding-left: 20px; font-weight: normal;">
+                  {% for t in row.senior_titles %}<li>{{ t }}</li>{% endfor %}
+                </ul>
+                {% endif %}
+              </li>
               {% endfor %}
             </ul>
           {% else %}
@@ -223,7 +278,14 @@
           {% if jobs_by_function_property|length %}
             <ul class="staffing-list">
               {% for row in jobs_by_function_property %}
-              <li><strong>{{ row.function }}</strong>: {{ row.total }} role{{ 's' if row.total != 1 else '' }}{% if row.senior %} ({{ row.senior }} senior){% endif %}</li>
+              <li>
+                <strong>{{ row.function }}</strong>: {{ row.total }} role{{ 's' if row.total != 1 else '' }}{% if row.senior %} ({{ row.senior }} senior){% endif %}
+                {% if row.get('senior_titles') %}
+                <ul style="margin: 2px 0 0 0; padding-left: 20px; font-weight: normal;">
+                  {% for t in row.senior_titles %}<li>{{ t }}</li>{% endfor %}
+                </ul>
+                {% endif %}
+              </li>
               {% endfor %}
             </ul>
           {% else %}

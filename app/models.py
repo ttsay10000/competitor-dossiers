@@ -28,6 +28,8 @@ class Competitor(Base):
     # summaries and timelines treat this as the comparison start date so that
     # only events/press after this point are considered "new".
     reporting_baseline_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # When False, excluded from cron/global refresh. Default True for new competitors.
+    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
 
     source_endpoints: Mapped[list["SourceEndpoint"]] = relationship(
         back_populates="competitor",

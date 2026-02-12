@@ -137,6 +137,7 @@ _DESTINATION_SLUG_TO_STATE = {
     "fort-myers-beach": "Florida",
     "st-augustine": "Florida",
     "emerald-coast": "Florida",
+    "emerald-coast-30a": "Florida",
     "30a": "Florida",
     # Hawaii
     "maui": "Hawaii",
@@ -190,11 +191,13 @@ _DESTINATION_SLUG_TO_STATE = {
     "teton-village": "Wyoming",
     # South Carolina
     "charleston": "South Carolina",
+    "coastal-charleston": "South Carolina",
     "myrtle-beach": "South Carolina",
     "hilton-head": "South Carolina",
     "kiawah-island": "South Carolina",
     # North Carolina
     "asheville": "North Carolina",
+    "lake-norman": "North Carolina",
     "outer-banks": "North Carolina",
     "charlotte": "North Carolina",
     # Georgia

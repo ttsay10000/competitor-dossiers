@@ -11,17 +11,10 @@ CAPABILITY_KEYWORDS = {
 # Functional areas for dossier summary. Split into:
 # - Business & strategy: roles that indicate business health at large (growth, strategy, product, etc.)
 # - Property operations: on-property roles (front desk, housekeeping, F&B) shown separately.
+# Order matters: Business & Strategy before Property operations so virtual/central roles match first.
 FUNCTIONAL_AREA_KEYWORDS = [
     ("AI / Data", ["ai", " ml", "machine learning", "data science", "data engineer", "data analyst", "analytics"]),
     ("Product", ["product manager", "product owner", "product design", "ux design", "ux researcher"]),
-    ("Property operations", [
-        "housekeeping", "maintenance", "front desk", "guest experience", "hospitality", "concierge",
-        "housekeeper", "dishwasher", "cook", "server", "bartender", "runner", "host", "auditor", "valet",
-        "bellman", "room attendant", "hotel ", "restaurant ", "line cook", "waiter", "waitress", "busser",
-        "food runner", "guest service", "night auditor", "property management", "field ops", "supervisor",
-        "front office", "guest relations", "laundry", "steward", "porter", "resort ", "property ",
-        "accommodations", "cleaning ", "room service", "f&b ", "food and beverage",
-    ]),
     ("Engineering", ["software engineer", "backend", "frontend", "full stack", "developer", " engineer", "R&D"]),
     ("Marketing", ["marketing", "brand", "content", "demand gen", "growth marketing", "performance marketing", "creative", "communications"]),
     ("Sales / Growth", ["sales", "account executive", "SDR", "BDR", "business development", "revenue", "growth"]),
@@ -29,6 +22,16 @@ FUNCTIONAL_AREA_KEYWORDS = [
         "strategy", "corp dev", "bizops", "fp&a", "finance", "legal", "accounting", "controller",
         "people", "talent", " hr", "human resources", "strategic initiatives", "investments", "real estate",
         "market manager", "area manager", "operations manager", "coordinator", "analyst", "administrator",
+        "guest experience associate", "overnight guest experience", "leasing agent", "leasing specialist",
+        "customer success", "reservations associate", "virtual assistant",
+    ]),
+    ("Property operations", [
+        "housekeeping", "maintenance", "front desk", "guest experience", "hospitality", "concierge",
+        "housekeeper", "dishwasher", "cook", "server", "bartender", "runner", "host", "auditor", "valet",
+        "bellman", "room attendant", "hotel ", "restaurant ", "line cook", "waiter", "waitress", "busser",
+        "food runner", "guest service", "night auditor", "property management", "field ops", "supervisor",
+        "front office", "guest relations", "laundry", "steward", "porter", "resort ", "property ",
+        "accommodations", "cleaning ", "room service", "f&b ", "food and beverage",
     ]),
 ]
 # "Property operations" is shown in its own section; the rest are "Business & strategy".
