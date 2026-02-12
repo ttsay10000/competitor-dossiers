@@ -10,7 +10,7 @@
 - source_endpoints
   - id
   - competitor_id
-  - channel (talent | asset | press)
+  - channel (talent | asset | press | social)
   - url
   - confidence (high | low)
   - created_at

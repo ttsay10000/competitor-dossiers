@@ -3,7 +3,7 @@ import json
 from typing import Any, Optional
 
 from .db import get_session
-from .models import Competitor, SourceEndpoint
+from .models import Competitor, CompetitorReviewProperty, SourceEndpoint
 
 
 def _seed_data_path() -> Path:
@@ -138,15 +138,17 @@ def upsert_source(
     use_sitemap_first: bool = False,
     extra_options: Optional[dict] = None,
 ) -> None:
-    # Match by competitor + channel so re-seeding updates URL when we change it (e.g. to Lever).
-    existing = (
-        session.query(SourceEndpoint)
-        .filter(
-            SourceEndpoint.competitor_id == competitor_id,
-            SourceEndpoint.channel == channel,
-        )
-        .first()
+    # Match by competitor + channel. For channel "social", also match by extra_options.platform so Twitter and LinkedIn both persist.
+    q = session.query(SourceEndpoint).filter(
+        SourceEndpoint.competitor_id == competitor_id,
+        SourceEndpoint.channel == channel,
     )
+    if channel == "social" and extra_options and extra_options.get("platform"):
+        platform = extra_options.get("platform")
+        candidates = q.all()
+        existing = next((e for e in candidates if (e.extra_options or {}).get("platform") == platform), None)
+    else:
+        existing = q.first()
     if existing:
         existing.url = url
         existing.confidence = confidence
@@ -167,8 +169,34 @@ def upsert_source(
     )
 
 
+def upsert_review_property(
+    session,
+    competitor_id: int,
+    place_id: str,
+    display_name: Optional[str] = None,
+) -> None:
+    existing = (
+        session.query(CompetitorReviewProperty)
+        .filter(
+            CompetitorReviewProperty.competitor_id == competitor_id,
+            CompetitorReviewProperty.place_id == place_id,
+        )
+        .first()
+    )
+    if existing:
+        existing.display_name = display_name
+        return
+    session.add(
+        CompetitorReviewProperty(
+            competitor_id=competitor_id,
+            place_id=place_id,
+            display_name=display_name,
+        )
+    )
+
+
 def run_seed() -> None:
-    """Upsert competitors and sources from seed_data.json. Never deletes existing DB rows."""
+    """Upsert competitors, sources, and review properties from seed_data.json. Never deletes existing DB rows."""
     with get_session() as session:
         for entry in load_seed_competitors():
             competitor = upsert_competitor(
@@ -188,6 +216,15 @@ def run_seed() -> None:
                     use_sitemap_first=bool(source.get("use_sitemap_first")),
                     extra_options=source.get("extra_options"),
                 )
+            for rp in entry.get("review_properties", []):
+                place_id = (rp.get("place_id") or "").strip()
+                if place_id:
+                    upsert_review_property(
+                        session,
+                        competitor.id,
+                        place_id,
+                        (rp.get("display_name") or "").strip() or None,
+                    )
 
 
 def export_seed_to_file() -> None:
@@ -211,11 +248,19 @@ def export_seed_to_file() -> None:
                 if e.extra_options:
                     s["extra_options"] = e.extra_options
                 sources.append(s)
+            review_properties = []
+            for rp in getattr(c, "review_properties", []) or []:
+                review_properties.append({
+                    "place_id": rp.place_id,
+                    "display_name": rp.display_name or None,
+                })
             row = {
                 "name": c.name,
                 "primary_domain": c.primary_domain or None,
                 "sources": sources,
             }
+            if review_properties:
+                row["review_properties"] = review_properties
             if not getattr(c, "is_active", True):
                 row["is_active"] = False
             out.append(row)

@@ -16,6 +16,9 @@ class TestAvantstayAssetFlow(unittest.TestCase):
         self.assertTrue(is_property_like("https://avantstay.com/12345/austin-tx/atlas"))
         self.assertFalse(is_property_like("https://avantstay.com/blog/"))
         self.assertFalse(is_property_like("https://avantstay.com/429468"))  # only one segment after id
+        # Bare search page is not a property (would show as "Unspecified" in location breakdown).
+        self.assertFalse(is_property_like("https://avantstay.com/search"))
+        self.assertFalse(is_property_like("https://avantstay.com/search/"))
 
     def test_extract_links_from_sitemap_parses_valid_xml(self) -> None:
         """Basic sanity check: valid sitemap XML yields loc URLs."""

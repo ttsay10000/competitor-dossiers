@@ -159,4 +159,93 @@
       </tbody>
     </table>
   </div>
+
+  <div class="card">
+    <h3>Reviews (Google)</h3>
+    <p class="meta" style="margin: 0 0 12px 0;">Track review rating and sentiment for properties. Add by Place ID or search (e.g. property name and address). Set <code>GOOGLE_PLACES_API_KEY</code> and run the <strong>reviews</strong> channel to refresh.</p>
+    {% if review_properties %}
+    <form method="post" action="/competitors/{{ competitor.id }}/run-now" style="display: inline-block; margin-bottom: 12px;">
+      <input type="hidden" name="channels" value="reviews" />
+      <button type="submit" class="secondary">Run reviews now</button>
+    </form>
+    {% endif %}
+    {% if review_error == "empty" %}
+      <p class="meta" style="color: var(--accent); margin: 0 0 8px 0;">Enter a Place ID or search query.</p>
+    {% elif review_error == "not_found" %}
+      <p class="meta" style="color: var(--accent); margin: 0 0 8px 0;">Could not resolve that to a Google Place. Try a full address or name.</p>
+    {% endif %}
+    <form method="post" action="/competitors/{{ competitor.id }}/review-properties" style="margin-bottom: 16px;">
+      <div class="row">
+        <div style="flex: 1;">
+          <input name="place_id_or_query" placeholder="Place ID (ChIJ...) or search: Property Name, City State" style="width: 100%;" />
+        </div>
+        <div>
+          <button type="submit">Add property</button>
+        </div>
+      </div>
+    </form>
+    <table>
+      <thead>
+        <tr>
+          <th>Property</th>
+          <th>Place ID</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rp in review_properties %}
+        <tr>
+          <td>{{ rp.display_name or rp.place_id }}</td>
+          <td class="muted" style="font-size: 12px;">{{ rp.place_id[:25] }}{% if rp.place_id|length > 25 %}…{% endif %}</td>
+          <td>
+            <form method="post" action="/competitors/{{ competitor.id }}/review-properties/{{ rp.id }}/delete" style="display: inline;">
+              <button type="submit" class="secondary">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if not review_properties %}
+        <tr>
+          <td colspan="3" class="muted">No review properties yet. Add one above.</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if reviews_snapshot and reviews_snapshot.get("properties") %}
+  <div class="card">
+    <h3>Latest review snapshot</h3>
+    <p class="meta" style="margin: 0 0 12px 0;">Per-property: total reviews, new since last refresh, recent average, trend vs overall.</p>
+    <div style="display: grid; gap: 12px;">
+      {% for p in reviews_snapshot.properties %}
+      <div class="card" style="padding: 12px; background: var(--bg-secondary);">
+        <strong>{{ p.display_name or p.place_id }}</strong>
+        {% if p.error %}
+          <span class="muted">{{ p.error }}</span>
+        {% else %}
+          <div class="row" style="flex-wrap: wrap; gap: 8px; margin-top: 8px;">
+            <span>Total reviews: <strong>{{ p.review_count }}</strong></span>
+            <span>New since refresh: <strong>{{ p.new_since_last.count }}</strong></span>
+            <span>Recent avg rating: {{ p.new_since_last.avg_rating or "—" }}/5</span>
+            <span>
+              Trend:
+              {% if p.trend == "POSITIVE" %}
+                <span style="color: green;">POSITIVE</span>
+              {% elif p.trend == "NEGATIVE" %}
+                <span style="color: #c00;">NEGATIVE</span>
+              {% else %}
+                <span class="muted">NEUTRAL</span>
+              {% endif %}
+            </span>
+          </div>
+          {% if p.sentiment_summary %}
+            <p class="meta" style="margin: 8px 0 0 0;">{{ p.sentiment_summary }}</p>
+          {% endif %}
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
 {% endblock %}

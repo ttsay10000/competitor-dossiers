@@ -14,6 +14,7 @@ Event types:
 - capital.fundraise_or_restructuring
 - narrative.priority_shift (only when explicit)
 - narrative.homepage_updated (digital footprint change)
+- narrative.social_signal (executive-relevant company post from Twitter/LinkedIn)
 - public_record.filing (trademark, regulatory, etc.)
 
 ## Capability Buckets (Talent)

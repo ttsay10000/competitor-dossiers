@@ -35,6 +35,10 @@ class Competitor(Base):
         back_populates="competitor",
         cascade="all, delete-orphan",
     )
+    review_properties: Mapped[list["CompetitorReviewProperty"]] = relationship(
+        back_populates="competitor",
+        cascade="all, delete-orphan",
+    )
 
 
 class SourceEndpoint(Base):
@@ -88,6 +92,19 @@ class Capability(Base):
     competitor_id: Mapped[int] = mapped_column(ForeignKey("competitors.id"), nullable=False)
     capability: Mapped[str] = mapped_column(String(64), nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now, nullable=False)
+
+
+class CompetitorReviewProperty(Base):
+    """User-tracked properties for Google Reviews per competitor. Add/remove via UI."""
+    __tablename__ = "competitor_review_properties"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    competitor_id: Mapped[int] = mapped_column(ForeignKey("competitors.id"), nullable=False)
+    place_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[Optional[str]] = mapped_column(String(512))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now, nullable=False)
+
+    competitor: Mapped["Competitor"] = relationship(back_populates="review_properties")
 
 
 class RunLog(Base):

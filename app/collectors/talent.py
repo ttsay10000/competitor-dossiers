@@ -2,6 +2,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
+from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
@@ -25,14 +26,17 @@ def detect_provider(url: str) -> str:
 
 
 def greenhouse_jobs_api(url: str) -> Optional[str]:
-    # Handles https://boards.greenhouse.io/{board}[/...]
-    parts = url.split("/boards.greenhouse.io/")
-    if len(parts) < 2:
-        return None
-    board_slug = parts[1].split("/")[0].strip()
-    if not board_slug:
-        return None
-    return f"https://boards-api.greenhouse.io/v1/boards/{board_slug}/jobs?content=true"
+    # Handles https://boards.greenhouse.io/{board}[/...] and https://job-boards.greenhouse.io/{board}[/...]
+    for prefix in ("/boards.greenhouse.io/", "/job-boards.greenhouse.io/"):
+        if prefix in url:
+            parts = url.split(prefix)
+            if len(parts) < 2:
+                return None
+            board_slug = parts[1].split("/")[0].split("?")[0].strip()
+            if not board_slug:
+                return None
+            return f"https://boards-api.greenhouse.io/v1/boards/{board_slug}/jobs?content=true"
+    return None
 
 
 def lever_jobs_api(url: str) -> Optional[str]:
@@ -288,6 +292,24 @@ def _looks_like_job_title(title: str) -> bool:
     return False
 
 
+def _clean_location_field(location: Optional[str]) -> Optional[str]:
+    """Strip salary/USD artifacts from location (Kula/AvantStay uses css-7pftiu for both location and salary)."""
+    if location is None or not isinstance(location, str):
+        return location
+    text = location.strip()
+    if not text:
+        return None
+    # Remove trailing " == $0", " == $50,000", " $123", " USD $50,000", " - $60,000" etc.
+    text = re.sub(r"\s*==\s*\$[\d,]+(?:\.\d+)?\s*$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+USD\s+\$[\d,]+(?:\.\d+)?(?:\s*[-–]\s*\$[\d,]+(?:\.\d+)?)?\s*$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+\$[\d,]+(?:\.\d+)?(?:\s*[-–]\s*\$[\d,]+(?:\.\d+)?)?\s*$", "", text)
+    # Remove leading salary if it got concatenated (e.g. "$0 Blakeslee, Pennsylvania")
+    text = re.sub(r"^\s*\$[\d,]+(?:\.\d+)?(?:\s*[-–]\s*\$[\d,]+(?:\.\d+)?)?\s+", "", text)
+    text = re.sub(r"^\s*USD\s+\$[\d,]+(?:\.\d+)?(?:\s*[-–]\s*\$[\d,]+(?:\.\d+)?)?\s+", "", text, flags=re.IGNORECASE)
+    text = text.strip().rstrip(",")
+    return text or None
+
+
 def _looks_like_location_filter(text: str) -> bool:
     """True if text looks like a location filter option (city, country, address)."""
     lower = text.lower().strip()
@@ -329,12 +351,12 @@ def _title_is_likely_city(title: str, location: Optional[str]) -> bool:
 def extract_jobs_from_kula(html: str) -> list[dict[str, Any]]:
     """Extract jobs from Kula/AvantStay career pages. DOM: department in span.css-ypynmf,
     job line in p.chakra-text.css-f8zk62 as 'Title, Property, Location' (e.g. 'Hotel Valet & Bellman, The Code Hotel, Austin').
-    Split on first comma: before = job title, after = location/property."""
+    Location/salary also use css-7pftiu; we only use f8zk62 for job lines and clean salary artifacts from location."""
     soup = BeautifulSoup(html, "html.parser")
     jobs = []
     seen = set()
     # Only use span.ypynmf that looks like a department (not "All departments", not a city)
-    # and only use p.chakra-text.css-f8zk62 for job lines (the specific job listing class)
+    # Only use p.chakra-text.css-f8zk62 for job lines (avoid 7pftiu-only which may be location/salary only)
     current_dept = None
     for elem in soup.find_all(["span", "p"]):
         if elem.name == "span" and elem.get("class"):
@@ -351,7 +373,7 @@ def extract_jobs_from_kula(html: str) -> list[dict[str, Any]]:
                         current_dept = dept_text
         elif elem.name == "p" and elem.get("class"):
             cls = " ".join(elem.get("class", []))
-            if "chakra-text" not in cls:
+            if "chakra-text" not in cls or "f8zk62" not in cls:
                 continue
             raw = (elem.get_text() or "").strip()
             if not raw or len(raw) < 4 or len(raw) > 200:
@@ -386,6 +408,7 @@ def extract_jobs_from_kula(html: str) -> list[dict[str, Any]]:
             # Skip when title is likely a city (e.g. "Great Barrington" with location "MA, USA")
             if _title_is_likely_city(title, location):
                 continue
+            location = _clean_location_field(location)
             key = (title[:80], location or "")
             if key in seen:
                 continue
@@ -451,14 +474,97 @@ def extract_jobs_from_headings(html: str) -> list[dict[str, Any]]:
     return jobs
 
 
+def extract_jobs_from_landing(html: str, base_url: str = "https://www.hellolanding.com") -> list[dict[str, Any]]:
+    """Extract jobs from Landing careers page. Uses a.job_title_link; location from adjacent td."""
+    soup = BeautifulSoup(html, "html.parser")
+    jobs = []
+    seen = set()
+    for link in soup.find_all("a", class_=lambda c: c and "job_title_link" in (c if isinstance(c, str) else " ".join(c))):
+        title = (link.get_text() or "").strip()
+        if not title or len(title) < 4 or len(title) > 120:
+            continue
+        href = link.get("href") or ""
+        job_url = urljoin(base_url, href) if href else None
+        location = None
+        row = link.find_parent("tr")
+        if row:
+            tds = row.find_all("td")
+            for i, td in enumerate(tds):
+                if td.find("a", class_=lambda c: c and "job_title_link" in (c if isinstance(c, str) else " ".join(c))):
+                    if i + 1 < len(tds):
+                        location = (tds[i + 1].get_text() or "").strip() or None
+                    break
+        key = (title[:80], location or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        posted_date = _posted_date_from_element(link)
+        jobs.append({
+            "job_id": None,
+            "title": title,
+            "location": _clean_location_field(location),
+            "dept": None,
+            "posted_date": posted_date,
+            "url": job_url,
+        })
+    return jobs
+
+
+def extract_jobs_from_blueground(html: str, base_url: str = "https://www.theblueground.com") -> list[dict[str, Any]]:
+    """Extract jobs from Blueground careers page. Uses section u-vs__top--3 u-vs__bottom--4; job_location span; dept from section titles."""
+    soup = BeautifulSoup(html, "html.parser")
+    jobs = []
+    seen = set()
+    current_dept = None
+    section = soup.find(class_=lambda c: c and "u-vs__top--3" in (c if isinstance(c, str) else " ".join(c)) and "u-vs__bottom--4" in (c if isinstance(c, str) else " ".join(c)))
+    if not section:
+        section = soup
+    for elem in section.descendants:
+        if not hasattr(elem, "name"):
+            continue
+        if elem.name == "div" and elem.get("class"):
+            classes = elem.get("class")
+            cls_str = " ".join(classes) if isinstance(classes, list) else str(classes)
+            if "bg-col-xs-12" in cls_str:
+                dept_text = (elem.get_text() or "").strip()
+                if dept_text and len(dept_text) < 80 and not _is_cta_or_section_text(dept_text):
+                    current_dept = dept_text
+        if elem.name == "a" and elem.get("href"):
+            href = elem.get("href") or ""
+            if "workable.com" in href.lower() or "/jobs/" in href.lower():
+                title = elem.get("title") or (elem.get_text() or "").strip()
+                if not title or len(title) < 4 or len(title) > 120:
+                    continue
+                job_url = href if href.startswith("http") else urljoin(base_url, href)
+                location = None
+                loc_span = elem.find_next("span", class_=lambda c: c and "job_location" in (c if isinstance(c, str) else " ".join(c)))
+                if loc_span:
+                    location = (loc_span.get_text() or "").strip() or None
+                key = (title[:80], location or "", current_dept or "")
+                if key in seen:
+                    continue
+                seen.add(key)
+                posted_date = _posted_date_from_element(elem)
+                jobs.append({
+                    "job_id": None,
+                    "title": title,
+                    "location": _clean_location_field(location),
+                    "dept": current_dept,
+                    "posted_date": posted_date,
+                    "url": job_url,
+                })
+    return jobs
+
+
 def normalize_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = []
     for job in jobs:
+        raw_loc = (job.get("location") or "").strip() or None
         normalized.append(
             {
                 "job_id": job.get("job_id"),
                 "title": (job.get("title") or "").strip(),
-                "location": (job.get("location") or "").strip() or None,
+                "location": _clean_location_field(raw_loc),
                 "dept": (job.get("dept") or "").strip() or None,
                 "posted_date": job.get("posted_date"),
                 "url": job.get("url"),
@@ -533,8 +639,8 @@ def collect_talent_snapshot(source_url: str) -> dict[str, Any]:
                 pass
         # Fall through to generic if API fails
 
-    # 4. Generic: competitor career page (HTML scrape). Kula and WizeHire are JS-rendered.
-    use_js = "kula.ai" in source_url.lower() or "wizehire.com" in source_url.lower()
+    # 4. Generic: competitor career page (HTML scrape). Kula, WizeHire, Blueground are JS-rendered.
+    use_js = "kula.ai" in source_url.lower() or "wizehire.com" in source_url.lower() or "theblueground.com" in source_url.lower()
     playwright_fallback = False
     if use_js:
         try:
@@ -553,12 +659,12 @@ def collect_talent_snapshot(source_url: str) -> dict[str, Any]:
                 }
                 fetched = fetch_url_js_exhaust(source_url, scroll_options)
             else:
-                fetched = fetch_url_js(source_url)
+                fetched = fetch_url_js(source_url)  # Kula, Blueground
         except (RuntimeError, Exception):
             fetched = fetch_url(source_url)
             playwright_fallback = True  # Playwright disabled or not installed; plain HTML usually gives 0 jobs
     else:
-        fetched = fetch_url(source_url)
+            fetched = fetch_url(source_url)
     # WizeHire/Lark: job titles are in div.jss83 (e.g. "Hotel Housekeeper"); prefer that over link text
     if "wizehire.com" in source_url.lower():
         jobs = extract_jobs_from_wizehire_title_divs(fetched.text)
@@ -568,6 +674,14 @@ def collect_talent_snapshot(source_url: str) -> dict[str, Any]:
             jobs = extract_jobs_from_headings(fetched.text)
     elif "kula.ai" in source_url.lower():
         jobs = extract_jobs_from_kula(fetched.text)
+        if not jobs:
+            jobs = extract_jobs_from_html(fetched.text)
+    elif "hellolanding.com" in source_url.lower():
+        jobs = extract_jobs_from_landing(fetched.text, base_url="https://www.hellolanding.com")
+        if not jobs:
+            jobs = extract_jobs_from_html(fetched.text)
+    elif "theblueground.com" in source_url.lower():
+        jobs = extract_jobs_from_blueground(fetched.text, base_url="https://www.theblueground.com")
         if not jobs:
             jobs = extract_jobs_from_html(fetched.text)
     else:

@@ -2,21 +2,28 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from typing import Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from .collectors.talent import collect_talent_snapshot, build_structured_json as build_talent_structured
 from .collectors.asset import collect_asset_snapshot, build_structured_json as build_asset_structured
 from .collectors.press import collect_press_snapshot, build_structured_json as build_press_structured
 from .collectors.global_press import collect_google_news_items, collect_prnewswire_items
-from .collectors.homepage import collect_homepage_snapshot, build_structured_json as build_homepage_structured
+from .collectors.homepage import (
+    build_composite_hash,
+    build_structured_json as build_homepage_structured,
+    collect_homepage_snapshot,
+)
 from .collectors.public_records import collect_public_records_snapshot, build_structured_json as build_public_records_structured
+from .collectors.reviews import collect_property_review, build_structured_json as build_reviews_structured
+from .collectors.social import collect_social_feed, build_structured_json as build_social_structured
 from .config import settings
 from .db import get_session
 from .diff.talent_diff import diff_jobs, count_recent_by_capability
 from .diff.asset_diff import diff_properties, extract_markets
-from .llm_structured import enrich_properties_with_llm, enrich_jobs_with_llm, enrich_press_items_with_llm
+from .llm_structured import enrich_properties_with_llm, enrich_jobs_with_llm, enrich_press_items_with_llm, enrich_social_posts_with_llm
 from .diff.press_diff import diff_items
-from .models import Competitor, SourceEndpoint, Snapshot, Event, Capability, RunLog
+from .diff.social_diff import diff_social_posts
+from .models import Competitor, CompetitorReviewProperty, SourceEndpoint, Snapshot, Event, Capability, RunLog
 from .rules.talent_rules import (
     assign_job_flags,
     build_capability_event,
@@ -31,12 +38,28 @@ from .rules.asset_rules import (
     build_pipeline_event,
 )
 from .rules.press_rules import classify_press, build_press_event, is_executive_relevant
-from .rules.homepage_rules import build_homepage_updated_event
+from .rules.homepage_rules import (
+    build_coming_soon_event,
+    build_homepage_updated_event,
+    detect_coming_soon_phrases,
+)
 from .rules.public_records_rules import build_filing_event
+from .rules.social_rules import build_social_signal_event
 
 # All channels that support per-competitor seed baseline (SEED_MODE): first snapshot
 # per competitor/channel persists as baseline; no diff or events until the next run.
-RUNNER_CHANNELS = ("talent", "asset", "press", "homepage", "public_records")
+RUNNER_CHANNELS = ("talent", "asset", "press", "homepage", "public_records", "reviews", "social")
+
+# Common paths to probe for digital footprint when product_paths is not set per endpoint.
+# Crawled for every competitor (homepage or primary_domain) to detect changes / coming-soon signals.
+COMMON_HOMEPAGE_PATHS = [
+    "/locations",
+    "/coming-soon",
+    "/product",
+    "/features",
+    "/about",
+    "/blog",
+]
 
 
 def load_latest_snapshot(session, competitor_id: int, channel: str) -> Optional[Snapshot]:
@@ -153,6 +176,8 @@ DEDUPE_WINDOWS_DAYS = {
     "capital.fundraise_or_restructuring": 90,
     "narrative.priority_shift": 90,
     "narrative.homepage_updated": 14,
+    "narrative.coming_soon": 30,
+    "narrative.social_signal": 30,
     "public_record.filing": 60,
 }
 
@@ -1103,6 +1128,34 @@ def run_press_local(competitor_name: Optional[str] = None) -> None:
         print()
 
 
+def _homepage_base_from_primary_domain(primary_domain: Optional[str]) -> Optional[str]:
+    """Return https base URL for a competitor with no explicit homepage endpoint."""
+    if not (primary_domain or "").strip():
+        return None
+    domain = (primary_domain or "").strip().lower()
+    if not domain:
+        return None
+    if "://" in domain:
+        return domain.rstrip("/")
+    return "https://www." + domain if not domain.startswith("www.") else "https://" + domain
+
+
+def _homepage_runs_for_competitor(competitor: Competitor) -> list[tuple[str, bool, list[str]]]:
+    """Return list of (base_url, js_required, paths) for this competitor's homepage channel."""
+    runs: list[tuple[str, bool, list[str]]] = []
+    endpoints = [ep for ep in competitor.source_endpoints if ep.channel == "homepage"]
+    if endpoints:
+        for ep in endpoints:
+            opts = getattr(ep, "extra_options", None) or {}
+            paths = opts.get("product_paths") or COMMON_HOMEPAGE_PATHS
+            runs.append((ep.url, getattr(ep, "js_required", False), paths))
+        return runs
+    base = _homepage_base_from_primary_domain(getattr(competitor, "primary_domain", None))
+    if base:
+        runs.append((base, False, COMMON_HOMEPAGE_PATHS))
+    return runs
+
+
 def run_homepage(competitor_name: Optional[str] = None) -> None:
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
@@ -1114,50 +1167,58 @@ def run_homepage(competitor_name: Optional[str] = None) -> None:
                 log_event("competitor_not_found", competitor_filter=competitor_name)
                 return
         for competitor in competitors:
-            endpoints = [
-                ep
-                for ep in competitor.source_endpoints
-                if ep.channel == "homepage"
-            ]
-            for endpoint in endpoints:
+            runs = _homepage_runs_for_competitor(competitor)
+            for base_url, js_required, paths in runs:
+                urls = [base_url] + [
+                    urljoin(base_url.rstrip("/") + "/", p.lstrip("/"))
+                    for p in paths
+                ]
                 print(
                     f"[{datetime.now(timezone.utc).isoformat()}] homepage run: "
-                    f"{competitor.name} {endpoint.url}"
+                    f"{competitor.name} {base_url}"
+                    + (f" (+{len(paths)} paths)" if paths else "")
                 )
-                try:
-                    snapshot = collect_homepage_snapshot(
-                        endpoint.url,
-                        js_required=getattr(endpoint, "js_required", False),
-                    )
-                except Exception as exc:
-                    log_run(
-                        session,
-                        competitor.id,
-                        "homepage",
-                        "error",
-                        message=str(exc),
-                        extra={"url": endpoint.url},
-                    )
+                pages: list[dict[str, Any]] = []
+                for url in urls:
+                    try:
+                        p = collect_homepage_snapshot(url, js_required=js_required)
+                        pages.append(p)
+                    except Exception as exc:
+                        log_run(
+                            session,
+                            competitor.id,
+                            "homepage",
+                            "error",
+                            message=str(exc),
+                            extra={"url": url},
+                        )
+                if not pages:
                     continue
-                if should_skip_due_to_hash(session, competitor.id, "homepage", snapshot.get("raw_hash")):
+                composite_hash = build_composite_hash(pages)
+                if should_skip_due_to_hash(session, competitor.id, "homepage", composite_hash):
                     log_run(
                         session,
                         competitor.id,
                         "homepage",
                         "skipped",
                         message="snapshot_unchanged",
-                        extra={"url": endpoint.url},
+                        extra={"url": base_url},
                     )
                     continue
-                structured = build_homepage_structured(snapshot)
+                snapshot_for_structured: dict[str, Any] = {"pages": pages}
+                structured = build_homepage_structured(
+                    snapshot_for_structured,
+                    detect_coming_soon=detect_coming_soon_phrases,
+                )
                 latest = load_latest_snapshot(session, competitor.id, "homepage")
                 is_first_snapshot = latest is None
+                first_raw = pages[0].get("raw_content") or ""
                 persist_snapshot(
                     session,
                     competitor.id,
                     "homepage",
-                    snapshot.get("raw_content") or "",
-                    snapshot.get("raw_hash") or "",
+                    first_raw,
+                    composite_hash,
                     structured,
                 )
                 seed_mode = getattr(settings, "seed_mode", False)
@@ -1168,10 +1229,151 @@ def run_homepage(competitor_name: Optional[str] = None) -> None:
                         "homepage",
                         "success",
                         message="homepage_seed_baseline",
-                        extra={"source_url": snapshot.get("source_url")},
+                        extra={"source_url": pages[0].get("source_url")},
                     )
                     continue
-                event = build_homepage_updated_event(snapshot.get("source_url") or endpoint.url)
+                prev_pages: list[dict[str, Any]] = []
+                if latest and latest.structured_json and isinstance(latest.structured_json.get("pages"), list):
+                    prev_pages = latest.structured_json["pages"]
+                else:
+                    if latest:
+                        prev_pages = [{
+                            "url": base_url,
+                            "raw_hash": latest.raw_hash or "",
+                            "content_hash": (latest.structured_json or {}).get("content_hash"),
+                        }]
+                prev_by_url = {p.get("url"): p for p in prev_pages if p.get("url")}
+                for page in structured.get("pages") or []:
+                    url = page.get("url") or ""
+                    prev = prev_by_url.get(url)
+                    content_changed = prev is None or (page.get("content_hash") != prev.get("content_hash"))
+                    if not content_changed:
+                        continue
+                    ev_updated = build_homepage_updated_event(url)
+                    title_updated = ev_updated["title"] + " " + (url[:80] if url else "")
+                    if not event_recently_created(
+                        session,
+                        competitor.id,
+                        "narrative.homepage_updated",
+                        title_updated,
+                        window_days=dedupe_window_for("narrative.homepage_updated"),
+                    ):
+                        create_event(session, competitor.id, ev_updated)
+                    phrases = page.get("coming_soon_phrases") or []
+                    if phrases:
+                        phrase = phrases[0]
+                        ev_soon = build_coming_soon_event(url, phrase)
+                        title_soon = ev_soon["title"] + " " + (url[:80] if url else "")
+                        if not event_recently_created(
+                            session,
+                            competitor.id,
+                            "narrative.coming_soon",
+                            title_soon,
+                            window_days=dedupe_window_for("narrative.coming_soon"),
+                        ):
+                            create_event(session, competitor.id, ev_soon)
+                log_run(
+                    session,
+                    competitor.id,
+                    "homepage",
+                    "success",
+                    extra={"source_url": pages[0].get("source_url")},
+                )
+
+
+def _build_social_raw_hash(posts: list[dict]) -> str:
+    """Stable hash for social posts so we can skip unchanged snapshots."""
+    if not posts:
+        return ""
+    keys = []
+    for p in posts:
+        pid = (p.get("id") or "").strip()
+        url = (p.get("url") or "").strip()
+        text = (p.get("text") or p.get("title") or "")[:200]
+        date = (p.get("published_at") or "").strip()
+        keys.append(f"{pid}|{url}|{text}|{date}")
+    keys.sort()
+    return hashlib.sha256("\n".join(keys).encode("utf-8")).hexdigest()
+
+
+def run_social(competitor_name: Optional[str] = None) -> None:
+    """Collect Twitter/LinkedIn posts via RSS; classify with LLM; create narrative.social_signal for executive-relevant new posts."""
+    with get_session() as session:
+        competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        if competitor_name:
+            competitors = _filter_competitors_by_name(competitors, competitor_name)
+        else:
+            competitors = [c for c in competitors if getattr(c, "is_active", True)]
+        if not competitors:
+            log_event("competitor_not_found", competitor_filter=competitor_name)
+            return
+        bridge = getattr(settings, "twitter_rss_bridge_base", None) or None
+        for competitor in competitors:
+            endpoints = [ep for ep in competitor.source_endpoints if ep.channel == "social"]
+            if not endpoints:
+                continue
+            print(
+                f"\n[{datetime.now(timezone.utc).isoformat()}] === SOCIAL: {competitor.name} "
+                f"({len(endpoints)} endpoint(s)) ==="
+            )
+            all_posts: list[dict] = []
+            raw_content_parts: list[str] = []
+            for ep in endpoints:
+                platform = (getattr(ep, "extra_options") or {}).get("platform") if isinstance(getattr(ep, "extra_options"), dict) else None
+                if not platform or platform not in ("twitter", "linkedin"):
+                    platform = "linkedin" if "linkedin" in (ep.url or "").lower() else "twitter"
+                try:
+                    feed = collect_social_feed(ep.url, platform, twitter_rss_bridge_base=bridge)
+                except Exception as exc:
+                    log_run(session, competitor.id, "social", "error", message=str(exc), extra={"url": ep.url})
+                    continue
+                items = feed.get("items") or []
+                all_posts.extend(items)
+                if feed.get("raw_content"):
+                    raw_content_parts.append(feed["raw_content"])
+            if not all_posts:
+                print(f"[social] {competitor.name}: 0 posts (no RSS or bridge)")
+                log_run(
+                    session,
+                    competitor.id,
+                    "social",
+                    "skipped",
+                    message="no_posts",
+                    extra={"endpoints": [ep.url for ep in endpoints]},
+                )
+                continue
+            raw_hash = _build_social_raw_hash(all_posts)
+            if should_skip_due_to_hash(session, competitor.id, "social", raw_hash):
+                log_run(session, competitor.id, "social", "skipped", message="snapshot_unchanged")
+                continue
+            print(f"[social] Step 1 — Collected {len(all_posts)} posts")
+            enriched = enrich_social_posts_with_llm(all_posts)
+            structured = build_social_structured({"posts": enriched})
+            current_posts = structured.get("posts") or []
+            raw_content = "\n---\n".join(raw_content_parts) if raw_content_parts else ""
+            latest = load_latest_snapshot(session, competitor.id, "social")
+            seed_mode = getattr(settings, "seed_mode", False)
+            is_first = latest is None
+            persist_snapshot(
+                session,
+                competitor.id,
+                "social",
+                raw_content,
+                raw_hash,
+                structured,
+            )
+            if seed_mode and is_first:
+                print(f"[social] Step 2 — Seed baseline. Total posts: {len(current_posts)}")
+                log_run(session, competitor.id, "social", "success", message="social_seed_baseline", extra={"posts": len(current_posts)})
+                continue
+            previous_posts = (latest.structured_json or {}).get("posts", []) if latest else []
+            diff = diff_social_posts(previous_posts, current_posts)
+            added = diff["added"]
+            events_created = 0
+            for post in added:
+                if (post.get("relevance") or "").lower() != "executive":
+                    continue
+                event = build_social_signal_event(post)
                 if not event_recently_created(
                     session,
                     competitor.id,
@@ -1180,13 +1382,9 @@ def run_homepage(competitor_name: Optional[str] = None) -> None:
                     window_days=dedupe_window_for(event["type"]),
                 ):
                     create_event(session, competitor.id, event)
-                log_run(
-                    session,
-                    competitor.id,
-                    "homepage",
-                    "success",
-                    extra={"source_url": snapshot.get("source_url")},
-                )
+                    events_created += 1
+            print(f"[social] Step 2 — Done. Added {len(added)} new posts; {events_created} executive-relevant events")
+            log_run(session, competitor.id, "social", "success", extra={"posts": len(current_posts), "added": len(added), "events": events_created})
 
 
 def run_public_records(competitor_name: Optional[str] = None) -> None:
@@ -1269,6 +1467,63 @@ def run_public_records(competitor_name: Optional[str] = None) -> None:
                 )
 
 
+def run_reviews(competitor_name: Optional[str] = None) -> None:
+    """Fetch Google Reviews for each competitor's tracked properties; persist snapshot with trend."""
+    with get_session() as session:
+        competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        if competitor_name:
+            competitors = _filter_competitors_by_name(competitors, competitor_name)
+        else:
+            competitors = [c for c in competitors if getattr(c, "is_active", True)]
+        if not competitors:
+            log_event("competitor_not_found", competitor_filter=competitor_name)
+            return
+        api_key = getattr(settings, "google_places_api_key", None) or ""
+        if not api_key.strip():
+            print("[reviews] GOOGLE_PLACES_API_KEY not set; skipping reviews channel.")
+            return
+        for competitor in competitors:
+            props = list(competitor.review_properties) if hasattr(competitor, "review_properties") else []
+            if not props:
+                continue
+            print(
+                f"\n[{datetime.now(timezone.utc).isoformat()}] === REVIEWS: {competitor.name} "
+                f"({len(props)} properties) ==="
+            )
+            properties_data = []
+            for rp in props:
+                data = collect_property_review(
+                    rp.place_id,
+                    display_name=rp.display_name,
+                    api_key=api_key,
+                )
+                properties_data.append(data)
+                if data.get("error"):
+                    print(f"[reviews] {rp.display_name or rp.place_id}: {data.get('error')}")
+            latest = load_latest_snapshot(session, competitor.id, "reviews")
+            previous_json = (latest.structured_json if latest else None) or None
+            structured = build_reviews_structured(properties_data, previous_json)
+            raw_content = json.dumps({"properties": len(structured.get("properties", []))})
+            raw_hash = hashlib.sha256(raw_content.encode("utf-8")).hexdigest()
+            persist_snapshot(
+                session,
+                competitor.id,
+                "reviews",
+                raw_content,
+                raw_hash,
+                structured,
+            )
+            ok_count = len([p for p in properties_data if not p.get("error")])
+            log_run(
+                session,
+                competitor.id,
+                "reviews",
+                "success",
+                extra={"properties": ok_count, "total": len(props)},
+            )
+            print(f"[reviews] Done. {ok_count}/{len(props)} properties.")
+
+
 def advance_baseline_after_full_refresh() -> None:
     """
     Set every competitor's reporting_baseline_at to now.
@@ -1304,6 +1559,10 @@ def run(
             run_homepage(competitor_name=competitor_name)
         if channel in (None, "public_records"):
             run_public_records(competitor_name=competitor_name)
+        if channel in (None, "social"):
+            run_social(competitor_name=competitor_name)
+        if channel in (None, "reviews"):
+            run_reviews(competitor_name=competitor_name)
     if channel is not None and channel not in RUNNER_CHANNELS:
         print(f"[{datetime.now(timezone.utc).isoformat()}] unknown channel: {channel}")
 

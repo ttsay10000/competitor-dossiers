@@ -9,12 +9,14 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import or_
 
 from ..db import get_session, get_last_refreshed
-from ..models import Competitor, Event, Snapshot, Capability
+from ..models import Competitor, CompetitorReviewProperty, Event, Snapshot, Capability
 from ..diff.asset_diff import diff_properties, delta_by_city, infer_location_for_property, is_location_treated_as_other, parse_keys_from_details
 from ..diff.talent_diff import diff_jobs
 from ..executive_summary import (
     generate_executive_summary,
+    generate_rollup_summary,
     format_executive_summary_for_display,
+    format_rollup_summary_for_display,
     clean_location_display_for_dossier,
     aggregate_state_and_state_city_rows,
     US_STATES_LIST,
@@ -59,6 +61,54 @@ def clear_dossier_caches_for_competitor(competitor_id: int) -> None:
     _EXEC_SUMMARY_CACHE = {k: v for k, v in _EXEC_SUMMARY_CACHE.items() if k[0] != competitor_id}
     _LOCATION_CLEAN_CACHE.clear()  # keys are (competitor_name, ...); clear all to avoid stale location data
 
+
+# Roll-up summary for competitors page: keyed by (id, hash(summary)) per competitor so cache invalidates when any summary changes.
+_ROLLUP_CACHE: dict[tuple, str] = {}
+_ROLLUP_CACHE_MAX = 20
+
+
+def get_rollup_summary(session):
+    """
+    Collect executive summaries for all competitors (from cache or generate), then produce one roll-up
+    via LLM. Returns (rollup_text, empty_reason). empty_reason is "no_summaries" when no exec summaries
+    exist yet, "no_api_key" when OPENAI_API_KEY unset, "rollup_failed" when LLM failed; None when success.
+    """
+    from ..config import settings
+    if not settings.openai_api_key:
+        return (None, "no_api_key")
+    competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+    collected = []  # list of (competitor_id, name, summary_text)
+    for c in competitors:
+        if not getattr(c, "is_active", True):
+            continue
+        context = build_dossier_context(session, c.id, skip_property_llm=True)
+        if "error" in context:
+            continue
+        cache_key = _exec_summary_cache_key(c.id, context)
+        summary = _EXEC_SUMMARY_CACHE.get(cache_key)
+        if summary is None:
+            summary = generate_executive_summary(context)
+            if summary and len(_EXEC_SUMMARY_CACHE) >= _EXEC_SUMMARY_CACHE_MAX:
+                _EXEC_SUMMARY_CACHE.clear()
+            if summary:
+                _EXEC_SUMMARY_CACHE[cache_key] = summary
+        if summary:
+            collected.append((c.id, c.name, summary))
+    if not collected:
+        return (None, "no_summaries")
+    import hashlib
+    rollup_cache_key = tuple((cid, hashlib.sha256(s.encode()).hexdigest()) for cid, _n, s in collected)
+    if rollup_cache_key in _ROLLUP_CACHE:
+        return (_ROLLUP_CACHE[rollup_cache_key], None)
+    if len(_ROLLUP_CACHE) >= _ROLLUP_CACHE_MAX:
+        _ROLLUP_CACHE.clear()
+    rollup = generate_rollup_summary(collected)
+    if not rollup:
+        return (None, "rollup_failed")
+    _ROLLUP_CACHE[rollup_cache_key] = rollup
+    return (rollup, None)
+
+
 # Suggested next actions based on event types (rules-based).
 RECOMMENDATIONS_MAP = {
     "asset.new_market": ("Review our presence and positioning in that market.", "Footprint expansion"),
@@ -72,6 +122,8 @@ RECOMMENDATIONS_MAP = {
     "capital.fundraise_or_restructuring": ("Monitor for positioning and pricing changes post-capital.", "Capital event"),
     "narrative.priority_shift": ("Align messaging and positioning with their stated priorities.", "Narrative shift"),
     "narrative.homepage_updated": ("Review the updated page for messaging or product changes.", "Digital footprint"),
+    "narrative.coming_soon": ("Review for pipeline or market-entry signal.", "Digital footprint"),
+    "narrative.social_signal": ("Review post for partnership, expansion, or positioning signal.", "Social"),
     "public_record.filing": ("Review filing for branding or entity strategy implications.", "Public record"),
 }
 
@@ -404,6 +456,8 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         takeaways.append("Hiring surge suggests strategic buildout.")
     if any(event.category == "partner" for event in events):
         takeaways.append("Partnership activity indicates distribution focus.")
+    if any((event.type or "").startswith("narrative.") for event in events):
+        takeaways.append("Digital footprint or messaging changes detected (homepage/product/coming-soon).")
     if not takeaways:
         takeaways.append("No major strategic shifts detected in the last 120 days.")
 
@@ -725,7 +779,54 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     first_talent_endpoint = next((e for e in competitor.source_endpoints if e.channel == "talent"), None)
     talent_job_board_url = first_talent_endpoint.url if first_talent_endpoint else None
 
-    has_any_snapshot = bool(latest_asset or latest_talent or latest_press)
+    # Reviews: list of tracked properties (for "no properties added" vs populated) and minimal top-line from snapshot.
+    review_properties = [
+        {"id": rp.id, "place_id": rp.place_id, "display_name": rp.display_name or rp.place_id}
+        for rp in (getattr(competitor, "review_properties", None) or [])
+    ]
+    if not review_properties:
+        review_properties = [
+            {"id": rp.id, "place_id": rp.place_id, "display_name": rp.display_name or rp.place_id}
+            for rp in session.query(CompetitorReviewProperty).filter(CompetitorReviewProperty.competitor_id == competitor_id).all()
+        ]
+    latest_reviews = (
+        session.query(Snapshot)
+        .filter(Snapshot.competitor_id == competitor_id, Snapshot.channel == "reviews")
+        .order_by(Snapshot.captured_at.desc())
+        .first()
+    )
+    latest_social = (
+        session.query(Snapshot)
+        .filter(Snapshot.competitor_id == competitor_id, Snapshot.channel == "social")
+        .order_by(Snapshot.captured_at.desc())
+        .first()
+    )
+    social_posts = []
+    if latest_social and latest_social.structured_json:
+        raw = (latest_social.structured_json or {}).get("posts") or []
+        social_posts = [p for p in raw if isinstance(p, dict)]
+    reviews_minimal = []
+    if latest_reviews and latest_reviews.structured_json:
+        for p in (latest_reviews.structured_json.get("properties") or []):
+            if p.get("error"):
+                reviews_minimal.append({
+                    "display_name": p.get("display_name") or p.get("place_id") or "Property",
+                    "line": p.get("error"),
+                    "trend": None,
+                })
+            else:
+                line = (p.get("sentiment_summary") or "").strip() or "—"
+                reviews_minimal.append({
+                    "display_name": (p.get("display_name") or p.get("place_id") or "Property").strip(),
+                    "line": line,
+                    "trend": p.get("trend"),
+                })
+
+    has_any_snapshot = bool(latest_asset or latest_talent or latest_press or latest_reviews or latest_social)
+    digital_footprint_events = [
+        _event_dict(e) for e in events
+        if (getattr(e, "type") or "") in ("narrative.homepage_updated", "narrative.coming_soon")
+    ]
 
     context = {
         "competitor": {"id": competitor.id, "name": competitor.name},
@@ -733,6 +834,7 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         "markets": markets,
         "capabilities": [{"capability": c.capability} for c in capabilities],
         "events": [_event_dict(e) for e in events],
+        "digital_footprint_events": digital_footprint_events,
         "talent_jobs": talent_jobs,
         "jobs_by_function": jobs_by_function,
         "jobs_by_function_property": jobs_by_function_property,
@@ -759,6 +861,9 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         "jobs_removed_since_baseline": jobs_removed_since_baseline,
         "other_properties_display": other_properties_display,
         "comparison_baseline_date": reporting_baseline_date,
+        "reviews_minimal": reviews_minimal,
+        "review_properties": review_properties,
+        "social_posts": social_posts,
     }
     # Executive summary is loaded lazily via JS (see GET /dossier/{id}/executive-summary) so page renders fast.
     context["executive_summary"] = None
@@ -921,6 +1026,7 @@ def dossier(request: Request, competitor_id: int):
             context["nav_competitors"] = [{"id": c.id, "name": c.name} for c in all_competitors]
             context["executive_summary_lazy"] = bool(settings.openai_api_key)
             context["properties_refinement_available"] = bool(settings.openai_api_key)
+            context["review_error"] = request.query_params.get("review_error")
     except Exception as exc:
         import traceback
         traceback.print_exc()

@@ -1760,3 +1760,81 @@ def enrich_press_items_with_llm(
         file=sys.stderr,
     )
     return press_groups
+
+
+# --- Social: promotion vs executive-relevant ------------------------------
+
+
+SOCIAL_CLASSIFY_SYSTEM = """You classify company social media posts (Twitter/LinkedIn) for an executive audience.
+For each post, output exactly one of: "promotion" or "executive".
+- promotion: Marketing fluff, generic "we're hiring", seasonal campaigns, product plugs with no strategic signal. Do not alert executives.
+- executive: New strategy, partnership, market entry, leadership change, product/positioning shift, funding/restructuring hints. Worth a one-line summary for the executive summary.
+If executive, also provide a one-line summary (max 120 chars)."""
+
+
+def enrich_social_posts_with_llm(posts: List[dict], batch_size: int = 12) -> List[dict]:
+    """
+    Classify each post as promotion vs executive-relevant. Add relevance and executive_summary.
+    Returns posts with "relevance" (executive|promotion|unknown) and optional "executive_summary".
+    """
+    if not posts:
+        return []
+    client = _openai_client()
+    if not client:
+        for p in posts:
+            p.setdefault("relevance", "unknown")
+        return posts
+
+    result: List[dict] = []
+    for i in range(0, len(posts), batch_size):
+        batch = posts[i : i + batch_size]
+        batch_with_index = [(j, p) for j, p in enumerate(batch)]
+        user_parts = [
+            "Posts to classify (one per block). For each, reply with the block number, then 'promotion' or 'executive', and if executive add a one-line summary.",
+        ]
+        for j, p in batch_with_index:
+            text = (p.get("text") or p.get("title") or "")[:800]
+            url = (p.get("url") or "")[:200]
+            user_parts.append(f"[{j}] {text}\nURL: {url}")
+        user_text = "\n\n".join(user_parts)
+        try:
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": SOCIAL_CLASSIFY_SYSTEM},
+                    {"role": "user", "content": user_text},
+                ],
+                temperature=0.1,
+            )
+            content = (resp.choices[0].message.content or "").strip()
+            # Parse lines like "0 executive Company announced partnership with X" or "1 promotion"
+            by_idx: dict[int, dict] = {}
+            for line in content.split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                # Expect: number then executive|promotion then optional summary
+                parts = line.split(None, 2)
+                if len(parts) >= 2:
+                    try:
+                        idx = int(parts[0].rstrip(".)"))
+                        rel = (parts[1] or "").lower()
+                        if rel not in ("executive", "promotion"):
+                            rel = "unknown"
+                        summary = parts[2].strip()[:200] if len(parts) > 2 and rel == "executive" else ""
+                        by_idx[idx] = {"relevance": rel, "executive_summary": summary}
+                    except (ValueError, IndexError):
+                        pass
+            for j, p in batch_with_index:
+                out = dict(p)
+                info = by_idx.get(j, {})
+                out["relevance"] = info.get("relevance", "unknown")
+                out["executive_summary"] = info.get("executive_summary", "")
+                result.append(out)
+        except Exception:
+            for _, p in batch_with_index:
+                out = dict(p)
+                out.setdefault("relevance", "unknown")
+                out.setdefault("executive_summary", "")
+                result.append(out)
+    return result

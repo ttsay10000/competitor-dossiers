@@ -14,6 +14,8 @@
           <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="talent" checked /> Talent</label>
           <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="asset" checked /> Asset</label>
           <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="press" checked /> Press</label>
+          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="reviews" /> Reviews</label>
+          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="social" /> Social</label>
         </label>
         <button type="submit">Populate now</button>
       </form>
@@ -118,7 +120,7 @@
       {% endif %}
     </div>
 
-    <!-- 4. Properties by location (state/city) + week-over-week vs baseline. Content may be replaced by JS when refinement loads. -->
+    <!-- 3. Properties by location (state/city) + week-over-week vs baseline. Content may be replaced by JS when refinement loads. -->
     <div class="card" id="properties-by-location-card">
       <strong>Properties by location</strong>
       <p class="meta">From latest asset pull: current counts by state or city. Any notable adds/removals are summarized in the Executive summary above.</p>
@@ -300,7 +302,29 @@
       {% endif %}
     </div>
 
-    <!-- 7. Press -->
+    <!-- 5. Website changes / digital footprint -->
+    <div class="card">
+      <strong>Website changes / digital footprint</strong>
+      <p class="meta" style="margin: 2px 0 12px 0;">Homepage, product page, or coming-soon changes that may signal strategy or pipeline shifts.</p>
+      {% if digital_footprint_events|length %}
+        {% for event in digital_footprint_events %}
+        <div class="card sev-{{ event.severity }}" style="margin-top: 8px;">
+          <div><strong>{{ event.title }}</strong></div>
+          <div class="meta">{{ event.occurred_at_str or event.detected_at_str }} · {{ event.type }}</div>
+          {% if event.why_it_matters %}
+            <div class="meta">Why it matters: {{ event.why_it_matters }}</div>
+          {% endif %}
+          {% if event.evidence_json and event.evidence_json.get('source_url') %}
+            <a href="{{ event.evidence_json.source_url }}" target="_blank" rel="noopener">View page</a>
+          {% endif %}
+        </div>
+        {% endfor %}
+      {% else %}
+        <div class="meta">No website or digital footprint changes in the past 90 days.</div>
+      {% endif %}
+    </div>
+
+    <!-- 6. Press -->
     <div class="card">
       <strong>Press</strong>
       <p class="meta">Business-focused news, grouped by topic. Links open the full article. Newest first.</p>
@@ -337,7 +361,77 @@
       {% endif %}
     </div>
 
-    <!-- 8. Recent events feed (90 days) - at bottom -->
+    <!-- 7. Social media updates -->
+    <div class="card">
+      <strong>Social media updates</strong>
+      <p class="meta" style="margin: 2px 0 12px 0;">Company posts from Twitter and LinkedIn (via RSS). Executive-relevant posts also appear in Recent events.</p>
+      {% if social_posts|length %}
+      <ul style="margin: 0; padding-left: 20px; list-style: none;">
+        {% for p in social_posts[:20] %}
+        <li style="margin-bottom: 10px;">
+          <span class="meta" style="font-size: 11px; font-weight: 600; text-transform: capitalize;">{{ p.platform or 'Social' }}</span>
+          {% if p.relevance == 'executive' %}<span style="font-size: 11px; margin-left: 6px; color: var(--accent);">· Executive-relevant</span>{% endif %}
+          <div style="margin: 2px 0 0 0;">{{ (p.text or p.title or '—')[:300] }}{% if (p.text or p.title or '')|length > 300 %}…{% endif %}</div>
+          {% if p.url %}<a href="{{ p.url }}" target="_blank" rel="noopener" class="meta" style="font-size: 12px;">View post</a>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% if social_posts|length > 20 %}<p class="meta">… and {{ social_posts|length - 20 }} more posts.</p>{% endif %}
+      {% else %}
+      <p class="meta" style="color: #6c757d;">No social posts yet. Add Twitter and LinkedIn links on <a href="/competitors/{{ competitor.id }}">Edit competitor</a>, then run the social channel.</p>
+      {% endif %}
+    </div>
+
+    <!-- 8. Google reviews per property -->
+    <div class="card">
+      <strong>Google reviews per property</strong>
+      <p class="meta" style="margin: 2px 0 12px 0;">AI summary of review sentiment per tracked property. Add properties below or on <a href="/competitors/{{ competitor.id }}">Edit competitor</a>; run the reviews channel to refresh.</p>
+      {% if not review_properties|length %}
+      <p class="meta" style="text-align: center; margin: 24px 0; color: #6c757d;">No properties added</p>
+      {% elif reviews_minimal|length %}
+      <ul style="margin: 0; padding-left: 20px; list-style: none;">
+        {% for r in reviews_minimal %}
+        <li style="margin-bottom: 8px;">
+          <strong>{{ r.display_name }}</strong>
+          {% if r.trend %}
+          <span style="font-size: 11px; font-weight: 600; margin-left: 6px;">
+            {% if r.trend == 'POSITIVE' %}<span style="color: #0a6b0a;">· Positive</span>{% elif r.trend == 'NEGATIVE' %}<span style="color: #b00;">· Negative</span>{% else %}<span class="muted">· Neutral</span>{% endif %}
+          </span>
+          {% endif %}
+          <div class="meta" style="margin: 2px 0 0 0;">{{ r.line }}</div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <ul style="margin: 0; padding-left: 20px; list-style: none;">
+        {% for rp in review_properties %}
+        <li style="margin-bottom: 6px;"><strong>{{ rp.display_name }}</strong></li>
+        {% endfor %}
+      </ul>
+      <p class="meta" style="margin: 8px 0 0 0;">Run reviews to see sentiment. Use <a href="/competitors/{{ competitor.id }}">Edit competitor</a> or <a href="/runs">Runs</a> to run the reviews channel.</p>
+      {% endif %}
+      <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-color, #dee2e6);">
+        <form method="post" action="/competitors/{{ competitor.id }}/review-properties">
+          <input type="hidden" name="next_url" value="/dossier/{{ competitor.id }}" />
+          <div class="row" style="align-items: flex-end;">
+            <div style="flex: 1;">
+              <label class="meta" style="display: block; margin-bottom: 4px;">Add property</label>
+              <input name="place_id_or_query" placeholder="Place ID (ChIJ...) or search: Property Name, City State" style="width: 100%;" />
+            </div>
+            <div>
+              <button type="submit">Add</button>
+            </div>
+          </div>
+          {% if review_error == "empty" %}
+          <p class="meta" style="color: var(--accent); margin: 6px 0 0 0;">Enter a Place ID or search query.</p>
+          {% elif review_error == "not_found" %}
+          <p class="meta" style="color: var(--accent); margin: 6px 0 0 0;">Could not resolve that to a Google Place. Try a full address or name.</p>
+          {% endif %}
+        </form>
+      </div>
+    </div>
+
+    <!-- 9. Recent events (past 90 days) -->
     <div class="card">
       <strong>Recent events (past 90 days)</strong>
       {% if events|length %}

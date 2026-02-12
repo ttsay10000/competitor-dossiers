@@ -38,6 +38,10 @@ class Settings:
         # will persist a baseline snapshot but skip creating events so that
         # subsequent scheduled runs only emit deltas vs this baseline.
         self.seed_mode = os.getenv("SEED_MODE", "false").lower() in {"1", "true", "yes"}
+        # Google Places API for reviews channel. Set GOOGLE_PLACES_API_KEY in env.
+        self.google_places_api_key = (os.getenv("GOOGLE_PLACES_API_KEY") or "").strip().strip("'\"")
+        # Twitter RSS bridge (e.g. Nitter instance) to turn profile URL into RSS. Example: https://nitter.example.com
+        self.twitter_rss_bridge_base = (os.getenv("TWITTER_RSS_BRIDGE_BASE_URL") or "").strip().rstrip("/") or None
 
 
 settings = Settings()

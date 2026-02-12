@@ -5,6 +5,13 @@
   {% if error_message %}
   <div class="card" role="alert" style="border-left: 6px solid #b84a2b;">
     <p style="margin: 0; color: var(--text);">{{ error_message }}</p>
+    {% if url_errors %}
+    <ul class="meta" style="margin: 8px 0 0 1.25rem; padding: 0;">
+      {% for e in url_errors %}
+      <li>{{ e.channel|capitalize }} URL {{ e.index + 1 }}: {{ e.message }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
   </div>
   {% endif %}
 
@@ -22,11 +29,19 @@
       <div class="row">
         <div>
           <label>Name</label>
-          <input name="name" required />
+          <input name="name" required value="{{ form_data.name if form_data else '' }}" />
         </div>
         <div>
           <label>Primary Domain</label>
-          <input name="primary_domain" placeholder="example.com" />
+          <input name="primary_domain" id="primary_domain" placeholder="example.com" value="{{ form_data.primary_domain if form_data else '' }}" />
+          <p class="meta" style="margin: 4px 0 0 0;">
+            <button type="button" id="suggest-urls-btn" class="secondary">Suggest URLs from domain</button>
+            <span id="suggest-status" class="meta" style="margin-left: 8px;"></span>
+          </p>
+          <div id="suggestions-box" style="display: none; margin-top: 12px; padding: 12px; background: var(--bg-secondary); border-radius: 8px;">
+            <p class="meta" style="margin: 0 0 8px 0;">Click a URL to add it to the list below.</p>
+            <div id="suggestions-content"></div>
+          </div>
         </div>
       </div>
 
@@ -38,11 +53,21 @@
           <strong>Lever</strong> (e.g. jobs.lever.co/company), <strong>Greenhouse</strong>, or <strong>Ashby</strong>—we use their APIs. Generic career pages (e.g. Kula, WizeHire) work too; we scrape job links. Add one URL per source if they use multiple boards.
         </p>
         <div id="talent-rows">
+          {% if form_data and form_data.talent_urls %}
+          {% for url in form_data.talent_urls %}
+          <div class="link-row row" style="margin-bottom: 8px; align-items: center;">
+            <span class="source-role" style="min-width: 72px; font-size: 12px; color: {{ 'var(--accent)' if loop.first else 'var(--muted)' }}; font-weight: {{ '600' if loop.first else 'normal' }};">{{ 'Primary' if loop.first else 'Secondary' }}</span>
+            <input type="url" name="talent_urls" placeholder="https://jobs.lever.co/company or https://careers.example.com" style="flex: 1;" value="{{ url }}" />
+            <button type="button" class="remove-link" aria-label="Remove row" style="margin-left: 8px;">Remove</button>
+          </div>
+          {% endfor %}
+          {% else %}
           <div class="link-row row" style="margin-bottom: 8px; align-items: center;">
             <span class="source-role" style="min-width: 72px; font-size: 12px; color: var(--accent); font-weight: 600;">Primary</span>
             <input type="url" name="talent_urls" placeholder="https://jobs.lever.co/company or https://careers.example.com" style="flex: 1;" />
             <button type="button" class="remove-link" aria-label="Remove row" style="margin-left: 8px;">Remove</button>
           </div>
+          {% endif %}
         </div>
         <button type="button" id="add-talent" class="secondary">+ Add another talent link</button>
       </div>
@@ -54,11 +79,21 @@
           We want the <strong>locations or properties page</strong> (or sitemap) so we can discover individual listings. Use the main page that links to properties—e.g. company.com/locations, /portfolio, or /properties. We’ll follow links or use the sitemap to build the footprint. Add another row if they have multiple region-specific pages.
         </p>
         <div id="asset-rows">
+          {% if form_data and form_data.asset_urls %}
+          {% for url in form_data.asset_urls %}
+          <div class="link-row row" style="margin-bottom: 8px; align-items: center;">
+            <span class="source-role" style="min-width: 72px; font-size: 12px; color: {{ 'var(--accent)' if loop.first else 'var(--muted)' }}; font-weight: {{ '600' if loop.first else 'normal' }};">{{ 'Primary' if loop.first else 'Secondary' }}</span>
+            <input type="url" name="asset_urls" placeholder="https://www.example.com/locations or /portfolio" style="flex: 1;" value="{{ url }}" />
+            <button type="button" class="remove-link" aria-label="Remove row" style="margin-left: 8px;">Remove</button>
+          </div>
+          {% endfor %}
+          {% else %}
           <div class="link-row row" style="margin-bottom: 8px; align-items: center;">
             <span class="source-role" style="min-width: 72px; font-size: 12px; color: var(--accent); font-weight: 600;">Primary</span>
             <input type="url" name="asset_urls" placeholder="https://www.example.com/locations or /portfolio" style="flex: 1;" />
             <button type="button" class="remove-link" aria-label="Remove row" style="margin-left: 8px;">Remove</button>
           </div>
+          {% endif %}
         </div>
         <button type="button" id="add-asset" class="secondary">+ Add another asset link</button>
       </div>
@@ -70,13 +105,41 @@
           We want the <strong>blog or press page</strong> (or RSS feed) so we can pull recent articles for the executive summary. Use e.g. company.com/blog, /press, or an RSS URL. We filter for executive-relevant items (fundraise, partnerships, expansion, etc.). Add multiple rows if they have separate blog and press URLs.
         </p>
         <div id="press-rows">
+          {% if form_data and form_data.press_urls %}
+          {% for url in form_data.press_urls %}
+          <div class="link-row row" style="margin-bottom: 8px; align-items: center;">
+            <span class="source-role" style="min-width: 72px; font-size: 12px; color: var(--muted);">{{ 'Primary' if loop.first else 'Secondary' }}</span>
+            <input type="url" name="press_urls" placeholder="https://www.example.com/blog or /press" style="flex: 1;" value="{{ url }}" />
+            <button type="button" class="remove-link" aria-label="Remove row" style="margin-left: 8px;">Remove</button>
+          </div>
+          {% endfor %}
+          {% else %}
           <div class="link-row row" style="margin-bottom: 8px; align-items: center;">
             <span class="source-role" style="min-width: 72px; font-size: 12px; color: var(--muted);">Primary</span>
             <input type="url" name="press_urls" placeholder="https://www.example.com/blog or /press" style="flex: 1;" />
             <button type="button" class="remove-link" aria-label="Remove row" style="margin-left: 8px;">Remove</button>
           </div>
+          {% endif %}
         </div>
         <button type="button" id="add-press" class="secondary">+ Add another press link</button>
+      </div>
+
+      <!-- Social: Twitter & LinkedIn (optional). We grab what we can via RSS; no scraping. -->
+      <div style="margin-top: 20px;">
+        <label style="font-weight: 600;">Social (Twitter & LinkedIn)</label>
+        <p class="meta" style="margin: 4px 0 8px 0;">
+          Optional. <strong>Twitter link</strong>: profile URL (e.g. twitter.com/CompanyName) or a Twitter RSS feed URL (e.g. Nitter). <strong>LinkedIn link</strong>: company page URL or an RSS feed that mirrors their posts. We collect via RSS only; set <code>TWITTER_RSS_BRIDGE_BASE_URL</code> to use a bridge for Twitter profiles.
+        </p>
+        <div class="row" style="margin-bottom: 8px; align-items: center; gap: 12px;">
+          <div style="flex: 1;">
+            <label class="meta" style="display: block; margin-bottom: 4px;">Twitter</label>
+            <input type="url" name="twitter_url" placeholder="https://twitter.com/CompanyName or Nitter RSS URL" style="width: 100%;" value="{{ form_data.twitter_url if form_data and form_data.twitter_url else '' }}" />
+          </div>
+          <div style="flex: 1;">
+            <label class="meta" style="display: block; margin-bottom: 4px;">LinkedIn</label>
+            <input type="url" name="linkedin_url" placeholder="https://linkedin.com/company/company-name or RSS URL" style="width: 100%;" value="{{ form_data.linkedin_url if form_data and form_data.linkedin_url else '' }}" />
+          </div>
+        </div>
       </div>
 
       <div style="margin-top: 20px;">
@@ -130,6 +193,72 @@
           if (container.querySelectorAll(".link-row").length > 1) row.remove();
         });
       });
+
+      function addRowWithValue(containerId, name, value, placeholder, roleLabel) {
+        roleLabel = roleLabel || "Secondary";
+        var container = document.getElementById(containerId);
+        var row = document.createElement("div");
+        row.className = "link-row row";
+        row.style.marginBottom = "8px";
+        row.style.alignItems = "center";
+        row.innerHTML =
+          '<span class="source-role" style="min-width: 72px; font-size: 12px; color: var(--muted);">' + roleLabel + '</span>' +
+          '<input type="url" name="' + name + '" placeholder="' + (placeholder || "") + '" style="flex: 1;" value="' + (value || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;") + '" />' +
+          '<button type="button" class="remove-link" aria-label="Remove row" style="margin-left: 8px;">Remove</button>';
+        container.appendChild(row);
+        row.querySelector(".remove-link").addEventListener("click", function() {
+          if (container.querySelectorAll(".link-row").length > 1) row.remove();
+        });
+      }
+
+      var suggestBtn = document.getElementById("suggest-urls-btn");
+      var suggestStatus = document.getElementById("suggest-status");
+      var suggestBox = document.getElementById("suggestions-box");
+      var suggestContent = document.getElementById("suggestions-content");
+      if (suggestBtn && suggestContent) {
+        suggestBtn.addEventListener("click", function() {
+          var domain = (document.getElementById("primary_domain") && document.getElementById("primary_domain").value || "").trim();
+          if (!domain) {
+            if (suggestStatus) suggestStatus.textContent = "Enter a primary domain first.";
+            return;
+          }
+          if (suggestStatus) suggestStatus.textContent = "Loading…";
+          suggestBox.style.display = "none";
+          fetch("/competitors/suggest-urls?domain=" + encodeURIComponent(domain))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+              if (suggestStatus) suggestStatus.textContent = "";
+              var html = "";
+              ["talent", "asset", "press"].forEach(function(ch) {
+                var list = data[ch] || [];
+                if (list.length === 0) return;
+                var label = ch.charAt(0).toUpperCase() + ch.slice(1);
+                var containerId = ch + "-rows";
+                var name = ch + "_urls";
+                var placeholder = "";
+                html += '<p class="meta" style="margin: 0 0 4px 0; font-weight: 600;">' + label + '</p><p style="margin: 0 0 8px 0;">';
+                list.forEach(function(url) {
+                  html += '<button type="button" class="secondary" style="margin: 2px 4px 2px 0;" data-url="' + url.replace(/"/g, "&quot;") + '" data-container="' + containerId + '" data-name="' + name + '">' + url + "</button> ';
+                });
+                html += '</p>';
+              });
+              suggestContent.innerHTML = html || '<p class="meta">No suggestions.</p>';
+              suggestBox.style.display = "block";
+              suggestContent.querySelectorAll("button[data-url]").forEach(function(btn) {
+                btn.addEventListener("click", function() {
+                  var url = btn.getAttribute("data-url");
+                  var containerId = btn.getAttribute("data-container");
+                  var name = btn.getAttribute("data-name");
+                  var placeholders = { "talent_urls": "https://jobs.lever.co/company or https://careers.example.com", "asset_urls": "https://www.example.com/locations or /portfolio", "press_urls": "https://www.example.com/blog or /press" };
+                  addRowWithValue(containerId, name, url, placeholders[name] || "", "Secondary");
+                });
+              });
+            })
+            .catch(function() {
+              if (suggestStatus) suggestStatus.textContent = "Could not load suggestions.";
+            });
+        });
+      }
     })();
   </script>
 {% endblock %}

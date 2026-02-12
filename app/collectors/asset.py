@@ -85,6 +85,9 @@ def is_property_like(url: str) -> bool:
     # Exclude portfolio index (e.g. /portfolio or /portfolio/) — only /portfolio/slug is a property.
     if path_lower in ("/portfolio", "/properties", "/locations", "/property"):
         return False
+    # Exclude bare search/listing index (e.g. AvantStay https://avantstay.com/search) — not a property.
+    if path_lower in ("/search", "/search/"):
+        return False
     if re.search(
         r"/(extended-stays?|corporate-group|corporate-stays?|business|residents|about|contact-us?|cookie-notice|faqs?|help|support)(?:/|\?|$)",
         path_lower,
@@ -98,7 +101,6 @@ def is_property_like(url: str) -> bool:
         r"/apartments/",
         r"/homes/",
         r"/destinations/",
-        r"/search",
         r"/listing/",
         r"/stay/",
         r"/vacation-rentals/",
@@ -118,6 +120,9 @@ def _is_junk_property_link(link_text: str, href: str) -> bool:
     if text == "privacy policy" or text.startswith("see all ") and "blog" in text:
         return True
     if re.match(r"^(see all|view all)\s", text) and ("blog" in text or "location" in text):
+        return True
+    # Landing: "View all homes in Atlanta, GA" etc. are nav cards, not properties
+    if "view all homes" in text:
         return True
     # Generic "All properties/locations" navigation links (e.g. Placemakr city-level pages) — not individual assets.
     if text in ("all properties", "all locations"):
@@ -153,8 +158,22 @@ def _is_junk_property_link(link_text: str, href: str) -> bool:
     return False
 
 
-def extract_properties_from_html(html: str) -> list[dict[str, Any]]:
+def _link_in_empty_landing_section(link) -> bool:
+    """True if link is inside a container that has 'No properties available' (Landing: skip empty locations)."""
+    parent = link.parent
+    for _ in range(20):
+        if parent is None or parent.name in ("body", "html"):
+            break
+        text = (parent.get_text() or "").strip()
+        if "no properties available" in text.lower():
+            return True
+        parent = getattr(parent, "parent", None)
+    return False
+
+
+def extract_properties_from_html(html: str, source_url: str = "") -> list[dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
+    is_landing = "hellolanding.com" in (source_url or "").lower()
     properties = []
     for link in soup.find_all("a"):
         href = link.get("href") or ""
@@ -164,6 +183,8 @@ def extract_properties_from_html(html: str) -> list[dict[str, Any]]:
         if not is_property_like(href):
             continue
         if _is_junk_property_link(text, href):
+            continue
+        if is_landing and _link_in_empty_landing_section(link):
             continue
         properties.append(
             {
@@ -550,7 +571,7 @@ def _extract_properties_via_llm(html: str, page_url: str) -> List[dict[str, Any]
         return []
 
 
-def _merge_link_properties_into(block_properties: List[dict[str, Any]], html: str, threshold: int = 25) -> List[dict[str, Any]]:
+def _merge_link_properties_into(block_properties: List[dict[str, Any]], html: str, threshold: int = 25, source_url: str = "") -> List[dict[str, Any]]:
     """
     When we have few properties from Lark-style blocks (e.g. partial HTML or different page structure),
     merge in any additional properties found via link extraction so we don't cap at ~15.
@@ -558,7 +579,7 @@ def _merge_link_properties_into(block_properties: List[dict[str, Any]], html: st
     """
     if len(block_properties) > threshold or not html:
         return block_properties
-    link_props = extract_properties_from_html(html)
+    link_props = extract_properties_from_html(html, source_url)
     if not link_props:
         return block_properties
 
@@ -765,6 +786,121 @@ def _playwright_available() -> bool:
         return False
 
 
+def _parse_blueground_slug_city_state(slug: str) -> tuple[str, str]:
+    """Parse Blueground destination slug (e.g. agoura-hills-ca-usa) into (city, state)."""
+    parts = (slug or "").strip().lower().split("-")
+    if len(parts) < 3 or parts[-1] != "usa":
+        return ("", "")
+    state_abbrev = parts[-2]
+    if len(state_abbrev) != 2:
+        return ("", "")
+    city_parts = parts[:-2]
+    city = " ".join(p.capitalize() for p in city_parts)
+    state = state_abbrev.upper()
+    return (city, state)
+
+
+def _fetch_blueground_destinations(source_url: str) -> tuple[str, str, List[dict[str, Any]]]:
+    """
+    Blueground-specific: destinations page -> click each USA destination -> Search -> scrape units.
+    North America / USA only; excludes Canada and non-USA.
+    Returns (raw_html, raw_hash, properties).
+    """
+    import time
+    from ..config import settings
+    if not settings.playwright_enabled:
+        raise RuntimeError("Blueground destinations strategy requires PLAYWRIGHT_ENABLED=true")
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise RuntimeError("playwright is not installed")
+    from .http import CHROMIUM_LAUNCH_ARGS
+
+    parsed = urlparse(source_url)
+    base = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else source_url
+    properties: List[dict[str, Any]] = []
+    raw_html_parts: List[str] = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=CHROMIUM_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(source_url, wait_until="networkidle", timeout=60000)
+        time.sleep(2)
+        html = page.content()
+        raw_html_parts.append(html)
+
+        soup = BeautifulSoup(html, "html.parser")
+        usa_links: List[tuple[str, str, str]] = []
+        for a in soup.find_all("a", href=True):
+            href = (a.get("href") or "").strip()
+            if "/m/furnished-apartments/" not in href:
+                continue
+            match = re.search(r"/m/furnished-apartments/([a-z0-9-]+)", href, re.IGNORECASE)
+            if not match:
+                continue
+            slug = match.group(1).lower()
+            if not slug.endswith("-usa"):
+                continue
+            if "canada" in slug or slug.endswith("-on") or slug.endswith("-bc") or slug.endswith("-ab"):
+                continue
+            full_url = urljoin(base, href)
+            city, state = _parse_blueground_slug_city_state(slug)
+            usa_links.append((full_url, city, state))
+
+        seen_units: set[tuple[str, str]] = set()
+        for dest_url, city, state in usa_links[:50]:
+            try:
+                page.goto(dest_url, wait_until="networkidle", timeout=30000)
+                time.sleep(1.5)
+                search_selectors = [
+                    "button:has-text('Search')",
+                    "button:has-text('Add dates')",
+                    "a:has-text('Search')",
+                    "[data-testid*='search']",
+                    "button[type='submit']",
+                ]
+                clicked = False
+                for sel in search_selectors:
+                    try:
+                        loc = page.locator(sel).first
+                        if loc.is_visible():
+                            loc.click()
+                            time.sleep(2.5)
+                            clicked = True
+                            break
+                    except Exception:
+                        continue
+                dest_html = page.content()
+                raw_html_parts.append(dest_html)
+                dest_soup = BeautifulSoup(dest_html, "html.parser")
+                for span in dest_soup.find_all("span", class_=lambda c: c and "listing-card_name" in (c if isinstance(c, str) else " ".join(c))):
+                    name = span.get("title") or (span.get_text() or "").strip()
+                    if not name or len(name) < 3:
+                        continue
+                    key = (name[:100], city, state)
+                    if key in seen_units:
+                        continue
+                    seen_units.add(key)
+                    market = f"{city}, {state}" if city and state else None
+                    properties.append({
+                        "url": dest_url,
+                        "name": name,
+                        "market": market,
+                        "status": None,
+                        "state": state or None,
+                        "city": city or None,
+                    })
+            except Exception:
+                continue
+
+        browser.close()
+
+    import hashlib
+    combined = "\n".join(raw_html_parts)
+    raw_hash = hashlib.sha256(combined.encode("utf-8")).hexdigest()
+    return (combined, raw_hash, properties)
+
+
 # Default minimum properties to "accept" a strategy result when using strategy_chain.
 # If a strategy returns fewer than this, we try the next in the chain (avoids "succeeding" with wrong process).
 _ASSET_CHAIN_MIN_PROPERTIES = 5
@@ -857,12 +993,13 @@ def collect_asset_snapshot(
                 f"Asset fetch failed: {fetched.url} returned HTTP {fetched.status_code}. "
                 "Refusing to parse or persist; check Runs for this error."
             )
-        properties = extract_properties_from_html(fetched.text)
+        properties = extract_properties_from_html(fetched.text, source_url)
         return {
             "source_url": fetched.url,
             "raw_content": fetched.text,
             "raw_hash": fetched.raw_hash,
             "properties": normalize_properties(properties),
+            "note": "html",
         }
 
     def _fetch_without_browser() -> dict[str, Any]:
@@ -885,7 +1022,7 @@ def collect_asset_snapshot(
         lark_blocks = _extract_lark_style_blocks(fetched.text, base_url)
         if lark_blocks and opts.get("llm_extract"):
             properties = _extract_properties_via_llm_from_blocks(lark_blocks, source_url)
-            properties = _merge_link_properties_into(properties, fetched.text, threshold=999)
+            properties = _merge_link_properties_into(properties, fetched.text, threshold=999, source_url=source_url)
             normalized = normalize_properties(properties)
             if not normalized and properties:
                 normalized = normalize_properties(_lark_blocks_to_properties_without_llm(lark_blocks))
@@ -900,7 +1037,7 @@ def collect_asset_snapshot(
             # else fall through to generic LLM/link path
         elif lark_blocks and not opts.get("llm_extract"):
             properties = _lark_blocks_to_properties_without_llm(lark_blocks)
-            properties = _merge_link_properties_into(properties, fetched.text, threshold=999)
+            properties = _merge_link_properties_into(properties, fetched.text, threshold=999, source_url=source_url)
             normalized = normalize_properties(properties)
             if normalized:
                 return {
@@ -914,7 +1051,7 @@ def collect_asset_snapshot(
         if opts.get("llm_extract"):
             properties = _extract_properties_via_llm(fetched.text, source_url)
             if not properties:
-                properties = extract_properties_from_html(fetched.text)
+                properties = extract_properties_from_html(fetched.text, source_url)
                 return {
                     "source_url": fetched.url,
                     "raw_content": fetched.text,
@@ -927,9 +1064,9 @@ def collect_asset_snapshot(
                 "raw_content": fetched.text,
                 "raw_hash": fetched.raw_hash,
                 "properties": normalize_properties(properties),
-                "note": "llm",
+                    "note": "llm",
             }
-        properties = extract_properties_from_html(fetched.text)
+        properties = extract_properties_from_html(fetched.text, source_url)
         return {
             "source_url": fetched.url,
             "raw_content": fetched.text,
@@ -940,6 +1077,17 @@ def collect_asset_snapshot(
 
     def run_one_strategy(strategy: str) -> dict[str, Any]:
         """Run a single strategy by name; returns snapshot dict. Used for both chain and single-strategy."""
+        if strategy == "blueground_destinations":
+            if _playwright_available() and "theblueground.com" in source_url.lower():
+                raw_html, raw_hash, properties = _fetch_blueground_destinations(source_url)
+                return {
+                    "source_url": source_url,
+                    "raw_content": raw_html,
+                    "raw_hash": raw_hash,
+                    "properties": normalize_properties(properties),
+                    "note": "blueground_destinations",
+                }
+            return _fetch_without_browser()
         if strategy == "api":
             api_cfg = opts.get("api") or {}
             properties = fetch_from_api(api_cfg, source_url)
@@ -976,8 +1124,8 @@ def collect_asset_snapshot(
                     # and merge link-based properties so we don't undercount (e.g. ~69 from links).
                     properties = _extract_properties_via_llm(fetched.text, source_url)
                     if not properties:
-                        properties = extract_properties_from_html(fetched.text)
-                    properties = _merge_link_properties_into(properties or [], fetched.text, threshold=999)
+                        properties = extract_properties_from_html(fetched.text, source_url)
+                    properties = _merge_link_properties_into(properties or [], fetched.text, threshold=999, source_url=source_url)
                     return {
                         "source_url": fetched.url,
                         "raw_content": fetched.text,
@@ -985,7 +1133,7 @@ def collect_asset_snapshot(
                         "properties": normalize_properties(properties),
                         "note": "js_exhaust" if not lark_blocks else "js_exhaust_lark_blocks",
                     }
-                properties = extract_properties_from_html(fetched.text)
+                properties = extract_properties_from_html(fetched.text, source_url)
                 return {
                     "source_url": fetched.url,
                     "raw_content": fetched.text,
@@ -997,7 +1145,7 @@ def collect_asset_snapshot(
         if strategy == "js":
             if _playwright_available():
                 fetched = fetch_url_js(source_url)
-                properties = extract_properties_from_html(fetched.text)
+                properties = extract_properties_from_html(fetched.text, source_url)
                 return {
                     "source_url": fetched.url,
                     "raw_content": fetched.text,
@@ -1026,7 +1174,7 @@ def collect_asset_snapshot(
                         "properties": normalize_properties(llm_props),
                         "note": "llm",
                     }
-                properties = extract_properties_from_html(fetched.text)
+                properties = extract_properties_from_html(fetched.text, source_url)
                 return {
                     "source_url": fetched.url,
                     "raw_content": fetched.text,
@@ -1034,7 +1182,7 @@ def collect_asset_snapshot(
                     "properties": normalize_properties(properties),
                     "note": "html",
                 }
-            properties = extract_properties_from_html(fetched.text)
+            properties = extract_properties_from_html(fetched.text, source_url)
             return {
                 "source_url": fetched.url,
                 "raw_content": fetched.text,

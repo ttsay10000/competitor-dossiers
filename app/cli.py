@@ -12,7 +12,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Competitor Signals Runner")
     parser.add_argument(
         "--channel",
-        choices=["talent", "asset", "press", "homepage", "public_records", "all"],
+        choices=["talent", "asset", "press", "homepage", "public_records", "reviews", "social", "all"],
         default="all",
         help="Which channel to run",
     )
@@ -87,7 +87,7 @@ def main() -> None:
         if channel:
             print(f"[force] Channel: {channel}")
         else:
-            print(f"[force] All channels (talent, asset, press, homepage, public_records)")
+            print(f"[force] All channels (talent, asset, press, homepage, public_records, reviews, social)")
 
     run(channel=channel, competitor_name=args.competitor, local=args.local)
 

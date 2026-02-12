@@ -62,6 +62,34 @@
   </script>
   <p class="meta" style="margin: -8px 0 12px 0;"><strong>Force refresh &amp; reset baseline</strong>: clears snapshots so re-enrichment runs, sets each competitor’s comparison date to now, then runs all collectors. Use after changing press groupings or LLM logic—otherwise runs skip when URLs are unchanged.</p>
 
+  <div class="card" id="rollup-card">
+    <h3>Recent updates</h3>
+    <div id="rollup-content" class="rollup-box" style="max-height: 280px; overflow-y: auto; white-space: pre-wrap; font-size: 14px; line-height: 1.5;">Loading…</div>
+  </div>
+  <script>
+    (function() {
+      var el = document.getElementById('rollup-content');
+      if (!el) return;
+      fetch('/competitors/rollup-summary')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.empty && data.message) {
+            el.textContent = data.message;
+            el.style.whiteSpace = 'normal';
+            return;
+          }
+          if (data.rollup_display) {
+            el.innerHTML = data.rollup_display;
+            el.style.whiteSpace = 'normal';
+          }
+        })
+        .catch(function() {
+          el.textContent = 'Could not load recent updates.';
+          el.style.whiteSpace = 'normal';
+        });
+    })();
+  </script>
+
   <div class="card">
     <h3>Existing</h3>
     <table>
@@ -81,9 +109,10 @@
           <td class="muted" style="font-size: 12px;">
             {% set has = competitor.has_snapshots or {} %}
             {% set runs = competitor.last_runs or {} %}
-            {% for ch in ['talent', 'asset', 'press'] %}
+            {% for ch in display_channels %}
+            {% set letter = channel_letters.get(ch, ch[0]|upper) %}
             <span title="{{ ch }}: {% if has.get(ch) %}has data{% else %}no data{% endif %}{% if runs.get(ch) %}; last run: {{ runs[ch].status }}{% endif %}">
-              {{ ch[0]|upper }}:{% if has.get(ch) %}✓{% else %}—{% endif %}
+              {{ letter }}:{% if has.get(ch) %}✓{% else %}—{% endif %}
               {% if runs.get(ch) %}<span style="{% if runs[ch].status == 'error' %}color: #c00;{% endif %}">({{ runs[ch].status }})</span>{% endif %}
             </span>
             {% if not loop.last %} · {% endif %}

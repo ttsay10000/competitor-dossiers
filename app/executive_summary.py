@@ -5,7 +5,7 @@ Also provides LLM-cleaned location display (State - City) for properties by loca
 """
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .diff.asset_diff import resolve_destination_slug_to_state
 
@@ -67,11 +67,26 @@ def _extract_properties_by_location_array(text: str) -> Optional[List[Dict[str, 
     arr = list(by_loc.values())
     return arr if arr else None
 
-# Hard caps so exec summary stays one fast LLM call; can relax after baseline redo.
+# Caps for exec summary prompt size (location/news/delta); events are not capped.
 MAX_LOCATION_ROWS_FOR_SUMMARY = 25
-MAX_EVENTS_FOR_SUMMARY = 8
 MAX_NEWS_FOR_SUMMARY = 15  # Include more press to surface new markets, expansion coverage
 MAX_DELTA_BY_CITY_ROWS = 15
+MAX_REVIEW_PROPERTIES_FOR_SUMMARY = 10  # Sample of review sentiment sent to LLM (only when significant)
+
+# Event type priority for executive summary: precedent (0) = news, asset, talent, digital footprint;
+# secondary (1) = social, reviews. Events sorted by this rank then by date (newest first).
+EVENT_TYPE_PRIORITY_PRECEDENT = 0
+EVENT_TYPE_PRIORITY_SECONDARY = 1
+_EVENT_PRIORITY_ORDER = (
+    "talent.",
+    "asset.",
+    "partner.",
+    "capital.",
+    "narrative.homepage_updated",
+    "narrative.coming_soon",
+    "narrative.priority_shift",
+    "public_record.",
+)
 
 # US state full names for state-level aggregation (no LLM).
 _US_STATES = frozenset({
@@ -86,6 +101,32 @@ _US_STATES = frozenset({
 })
 # Sorted list for template/API (section splitting: "Properties by states" vs "Other properties").
 US_STATES_LIST = sorted(_US_STATES)
+
+
+def _event_priority_rank(etype: str) -> int:
+    """Return 0 for precedent signals (talent, asset, news-related, digital footprint), 1 for secondary (social, reviews)."""
+    if not etype:
+        return EVENT_TYPE_PRIORITY_SECONDARY
+    if etype == "narrative.social_signal":
+        return EVENT_TYPE_PRIORITY_SECONDARY
+    if etype.startswith("narrative.review") or "review" in etype.lower():
+        return EVENT_TYPE_PRIORITY_SECONDARY
+    for prefix in _EVENT_PRIORITY_ORDER:
+        if etype == prefix or (prefix.endswith(".") and etype.startswith(prefix)):
+            return EVENT_TYPE_PRIORITY_PRECEDENT
+    return EVENT_TYPE_PRIORITY_PRECEDENT  # unknown type treat as precedent
+
+
+def _is_significant_review(r: dict) -> bool:
+    """True if this review row indicates a major or significant change (e.g. declining trend, negative sentiment)."""
+    line = (r.get("line") or "").lower()
+    trend = (r.get("trend") or "").lower()
+    negative_markers = ("declining", "negative", "complaint", "complaints", "poor", "issue", "issues", "problem", "disappoint")
+    if trend in ("declining", "negative", "down"):
+        return True
+    if any(m in line for m in negative_markers):
+        return True
+    return False
 
 
 def _location_label_to_state(loc: str) -> str:
@@ -224,11 +265,50 @@ def _build_context_text(context: Dict[str, Any]) -> str:
     else:
         parts.append("Recent news: none.")
 
-    # Events this week (additional signal)
+    # 4. Review sentiment — only when there are major/significant changes (e.g. declining trend, negative sentiment)
+    reviews_minimal = context.get("reviews_minimal") or []
+    significant_reviews = [r for r in reviews_minimal if _is_significant_review(r)]
+    if significant_reviews:
+        lines = []
+        rest = [r for r in reviews_minimal if r not in significant_reviews]
+        for r in (significant_reviews + rest)[:MAX_REVIEW_PROPERTIES_FOR_SUMMARY]:
+            name = (r.get("display_name") or "Property")[:50]
+            line = (r.get("line") or "").strip() or "—"
+            trend = r.get("trend")
+            s = f"{name}: {line}"
+            if trend:
+                s += f" (trend: {trend})"
+            lines.append(s)
+        if lines:
+            parts.append("Review sentiment (sample; significant changes): " + " | ".join(lines))
+
+    # 5. Events this week. Precedent first (talent, asset, news-related, digital footprint), then secondary (social).
     events_week = context.get("events_this_week") or []
     if events_week:
-        event_titles = [e.get("title", "") for e in events_week[:MAX_EVENTS_FOR_SUMMARY] if e.get("title")]
-        parts.append("Events detected this week: " + "; ".join(event_titles))
+        def _event_date_key(e: dict) -> str:
+            return e.get("occurred_at_str") or e.get("detected_at_str") or "0000-00-00"
+        # Newest first, then by priority (precedent first); stable sort keeps newest-first within each priority
+        events_week = sorted(events_week, key=_event_date_key, reverse=True)
+        events_week = sorted(
+            events_week,
+            key=lambda e: _event_priority_rank((e.get("type") or "").strip()),
+        )
+        event_bits = []
+        for e in events_week:
+            title = (e.get("title") or "").strip()
+            if not title:
+                continue
+            etype = (e.get("type") or "").strip()
+            if etype == "narrative.social_signal":
+                event_bits.append(f"{title} [social]")
+            elif etype and etype.startswith("narrative."):
+                event_bits.append(f"{title} [digital footprint]")
+            elif etype:
+                event_bits.append(f"{title} [{etype}]")
+            else:
+                event_bits.append(title)
+        if event_bits:
+            parts.append("Events detected this week: " + "; ".join(event_bits))
 
     return "\n\n".join(parts)
 
@@ -246,23 +326,31 @@ def generate_executive_summary(context: Dict[str, Any]) -> Optional[str]:
     context_text = _build_context_text(context)
     competitor_name = context.get("competitor", {}).get("name", "Competitor")
 
-    system = """You are an AI Chief of Staff writing a competitive intelligence brief for Kasa's CEO and exec team. Your job is to filter noise, cluster related updates, interpret what this competitor is optimizing for, and translate changes into clear implications and actions. Do NOT restate every datapoint. Only surface changes that materially alter competitive dynamics (market entry/exit, meaningful inventory shifts, pricing/fees moves, leadership or key functional hiring, major product/website positioning changes, notable partnerships/vendor stack changes, regulatory/legal developments, or repeated patterns over time). If an item is cosmetic or one-off and doesn't matter, drop it. Output must be clean, bullet-based, and decisive.
+    system = """You are an AI Chief of Staff writing a competitive intelligence brief for Kasa's CEO and exec team. Your job is to filter noise, cluster related updates, interpret what this competitor is optimizing for, and translate changes into clear implications and actions.
 
-Return in this exact structure (use a blank line between sections):
+PRIORITY: Lead with and prioritize (1) news/press, (2) asset/footprint changes, (3) talent/hiring, and (4) digital footprint (homepage, coming-soon, product page changes). Include social media and Google review sentiment only when they reflect major or significant changes (e.g. notable negative trend, executive-relevant social post about strategy/partnership/expansion). Do not emphasize routine social posts or neutral review sentiment.
 
-EXECUTIVE SUMMARY (5–8 bullets max): most important shifts for this competitor, why it matters, and overall risk/opportunity level (Low/Med/High).
+Do NOT restate every datapoint. Only surface changes that materially alter competitive dynamics (market entry/exit, meaningful inventory shifts, pricing/fees moves, leadership or key functional hiring, major product/website positioning changes, digital footprint changes, notable partnerships/vendor stack changes, regulatory/legal developments, or repeated patterns over time). If an item is cosmetic or one-off and doesn't matter, drop it. Output must be clean, bullet-based, and decisive.
 
-WHAT CHANGED (2–5 bullets): concrete changes from the data.
+Return in this exact structure. Do NOT start with "EXECUTIVE SUMMARY" or any top-level header—the page already has a header. Do NOT use a blank line before each section header; use only a single newline between sections.
 
-WHAT IT SIGNALS (1–3 bullets): inferred intent/optimization; defensive vs offensive; time horizon.
+• (5–8 bullets): most important shifts for this competitor, why it matters, and overall risk/opportunity level (Low/Med/High).
 
-IMPACT ON KASA (1–3 bullets): specific risks/opportunities.
+WHAT CHANGED
+• (2–5 bullets): concrete changes from the data.
 
-RECOMMENDED ACTION (choose one: Ignore / Monitor / Copy / Counter-position / Pre-empt / Partner) + 1–2 bullets why.
+WHAT IT SIGNALS
+• (1–3 bullets): inferred intent/optimization; defensive vs offensive; time horizon.
+
+IMPACT ON KASA
+• (1–3 bullets): specific risks/opportunities.
+
+RECOMMENDED ACTION: [choose one: Ignore / Monitor / Copy / Counter-position / Pre-empt / Partner]
+• (1–2 bullets why)
 
 INDUSTRY CONTEXT (optional, 1–3 bullets): only if this competitor's moves reflect a broader industry trend worth calling out.
 
-Style rules: bullets only, no paragraphs beyond the first, no fluff, no generic strategy talk, use concrete language and strong verbs, avoid speculation not supported by signals, keep to ~300–500 words."""
+Format rules: use the bullet character • for every list item (never use a dash - for bullets). No blank line before section headers. No "EXECUTIVE SUMMARY" line at the top. Style: bullets only, no fluff, no generic strategy talk, concrete language and strong verbs, avoid speculation not supported by signals, ~300–500 words."""
 
     user = f"Competitor: {competitor_name}\n\nData:\n{context_text}"
 
@@ -285,48 +373,156 @@ Style rules: bullets only, no paragraphs beyond the first, no fluff, no generic 
     return None
 
 
+def generate_rollup_summary(per_competitor_summaries: List[Tuple[int, str, str]]) -> Optional[str]:
+    """
+    Produce a single roll-up summary from multiple competitor executive summaries for the
+    competitors page. Returns a blob with: (1) a short lead paragraph "Recent updates",
+    (2) per-competitor bullets. Returns None if no summaries or LLM fails.
+    """
+    from .config import get_openai_client
+    if not per_competitor_summaries:
+        return None
+    client = get_openai_client()
+    if not client:
+        return None
+    # Build input: one block per competitor (name + summary text).
+    blocks = []
+    for cid, name, text in per_competitor_summaries:
+        if not (name and text):
+            continue
+        blocks.append(f"--- {name} (id={cid}) ---\n{text.strip()}")
+    if not blocks:
+        return None
+    combined = "\n\n".join(blocks)
+    system = """You are an AI Chief of Staff for Kasa's exec team. You are given executive summaries for several competitors (each block below is one competitor, with a header "--- Name (id=...) ---"). Each summary already has sections such as EXECUTIVE SUMMARY, WHAT CHANGED, WHAT IT SIGNALS, IMPACT ON KASA, RECOMMENDED ACTION. Use those sections to produce ONE short roll-up for the main competitors page.
+
+Output exactly two parts:
+
+1. **Recent updates:** — A short lead paragraph (2–3 sentences) that synthesizes major news *across* competitors at executive level. Surface cross-cutting themes (e.g. expansion in the same regions, similar hiring or partnership moves) rather than listing each competitor. End with the single most important takeaway or insight for Kasa. Keep it succinct and direct.
+
+2. **Per-competitor bullets** — A list, one bullet per competitor, in the same order as the input blocks:
+   - **[Competitor Name]:** [1–2 sentence summary of that competitor's major news — e.g. big hires, new partnerships, new or number of openings and city names, recommended action.]
+   Use the exact competitor names from the block headers (the text after "--- " and before " (id="). Do not invent or reorder competitors.
+
+Style: bullets only for the list; no fluff; concrete language; ~200–400 words total. If a competitor's summary is thin or mostly "no material changes," say so briefly rather than padding."""
+
+    user = f"Competitor executive summaries (each block is one competitor; use the name in the block header):\n\n{combined}"
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            max_tokens=800,
+            temperature=0.3,
+        )
+        choice = resp.choices[0] if resp.choices else None
+        if choice and choice.message and choice.message.content:
+            return choice.message.content.strip()
+    except Exception:
+        pass
+    return None
+
+
 def _strip_subbullets(text: str) -> str:
-    """Keep only top-level bullets (lines starting with '- ' or '* ' at column 0). Remove sub-bullets; preserve blank lines for spacing."""
+    """Keep only top-level bullets (lines starting with '- ', '* ', or '• ' at column 0). Remove sub-bullets; preserve blank lines for spacing."""
     lines = []
     for line in text.splitlines():
         s = line.rstrip()
         if not s:
             lines.append("")  # preserve blank lines for section spacing
             continue
-        # Sub-bullet: indented then bullet (e.g. "  - " or "    * ")
-        if len(s) > 2 and s[0] in " \t" and (s.lstrip().startswith("- ") or s.lstrip().startswith("* ")):
+        # Sub-bullet: indented then bullet (e.g. "  - ", "    * ", "    • ")
+        ls = s.lstrip()
+        if len(ls) > 1 and s[0] in " \t" and (ls.startswith("- ") or ls.startswith("* ") or ls.startswith("• ")):
             continue
         lines.append(s)
     return "\n".join(lines)
 
 
-# Section headers to bold in the executive summary display (competitive brief structure).
-_EXEC_SUMMARY_SECTION_HEADERS = frozenset({
-    "Key takeaways",
-    "EXECUTIVE SUMMARY",
-    "WHAT CHANGED",
-    "WHAT IT SIGNALS",
-    "IMPACT ON KASA",
-    "RECOMMENDED ACTION",
-    "INDUSTRY CONTEXT",
-})
-
-
-def format_executive_summary_for_display(text: Optional[str]) -> Optional[str]:
+def format_rollup_summary_for_display(text: Optional[str]) -> Optional[str]:
     """
-    Escape summary text and bold section headers for HTML display.
-    Returns None if text is None; otherwise returns HTML-safe string with section headers as <strong>.
+    Escape roll-up summary for HTML and bold **Recent updates:** and **[Competitor Name]:** style lines.
     """
     if not text or not isinstance(text, str):
         return text
     import html
     out = []
     for line in text.splitlines():
+        s = line.rstrip()
+        if not s:
+            out.append("")
+            continue
+        escaped = html.escape(s)
+        # Bold **Recent updates:** or **...:** at start (markdown-style).
+        if escaped.startswith("**") and ":**" in escaped:
+            end = escaped.index(":**") + 3
+            out.append("<strong>" + escaped[2:end] + "</strong>" + escaped[end:])
+        else:
+            out.append(escaped)
+    return "\n".join(out)
+
+
+# Section headers to bold in the executive summary display (competitive brief structure).
+# EXECUTIVE SUMMARY is not included—we strip that line so the page header is the only title.
+_EXEC_SUMMARY_SECTION_HEADERS = frozenset({
+    "Key takeaways",
+    "WHAT CHANGED",
+    "WHAT IT SIGNALS",
+    "IMPACT ON KASA",
+    "INDUSTRY CONTEXT",
+})
+
+# Recommended action line gets bold + accent color (e.g. "RECOMMENDED ACTION: Monitor").
+RECOMMENDED_ACTION_CSS_COLOR = "#0d6efd"
+
+
+def format_executive_summary_for_display(text: Optional[str]) -> Optional[str]:
+    """
+    Escape summary text, bold section headers, and highlight RECOMMENDED ACTION with color.
+    Strips a leading EXECUTIVE SUMMARY line, normalizes dashes to bullets (•), and removes
+    blank lines that appear immediately before section headers.
+    """
+    if not text or not isinstance(text, str):
+        return text
+    import html
+    lines = text.splitlines()
+    # Strip leading "EXECUTIVE SUMMARY" or "EXECUTIVE SUMMARY:" line so the page header is the only title.
+    while lines and lines[0].strip().upper() in ("EXECUTIVE SUMMARY", "EXECUTIVE SUMMARY:"):
+        lines.pop(0)
+    # Remove blank line immediately before a section header to tighten spacing.
+    section_headers_upper = {h.upper() for h in _EXEC_SUMMARY_SECTION_HEADERS}
+    tightened = []
+    for i, line in enumerate(lines):
         stripped = line.strip()
-        if stripped in _EXEC_SUMMARY_SECTION_HEADERS:
+        if stripped == "":
+            j = i + 1
+            while j < len(lines) and lines[j].strip() == "":
+                j += 1
+            if j < len(lines):
+                next_stripped = lines[j].strip().upper()
+                if next_stripped in section_headers_upper or next_stripped.startswith("RECOMMENDED ACTION:"):
+                    continue  # drop this blank line before header
+        tightened.append(line)
+    lines = tightened
+    out = []
+    for line in lines:
+        stripped = line.strip()
+        # Normalize dash bullets to bullet character for display.
+        if line.startswith("- ") and not line.startswith("• "):
+            line = "• " + line[2:]
+        escaped = html.escape(line)
+        if stripped.upper().startswith("RECOMMENDED ACTION:"):
+            out.append(
+                "<strong><span style=\"color: " + RECOMMENDED_ACTION_CSS_COLOR + ";\">"
+                + html.escape(stripped) + "</span></strong>"
+            )
+        elif stripped in _EXEC_SUMMARY_SECTION_HEADERS:
             out.append("<strong>" + html.escape(stripped) + "</strong>")
         else:
-            out.append(html.escape(line))
+            out.append(escaped)
     return "\n".join(out)
 
 
@@ -372,7 +568,7 @@ def clean_location_display_for_dossier(
 
     system = """You are consolidating property location data for a real estate/hospitality dashboard.
 
-INPUT: You receive ONLY a list of summarized bullets: "Location: N" or "Location: N (K keys)". There is no per-property data—just these raw numbers by location and key counts.
+INPUT: You receive ONLY a list of summarized bullets: "Location: N" or "Location: N (K keys)". There is no per-property data—just these raw numbers by location and key counts. Location labels may be full state names, or US region/city/area names (often title-cased from URL slugs, e.g. "Emerald Coast 30a", "Smith Mountain Lake", "Lake Norman").
 
 YOUR JOB — follow these two steps in order:
 
@@ -382,10 +578,11 @@ Step 1 — Consolidate and clean state-level rows:
 - Do not yet change any region/city/geographical labels.
 
 Step 2 — Map regions/cities/geographical labels to states:
-- For every remaining row that is NOT already a US state (e.g. "Coastal Charleston", "Emerald Coast 30A", "Lake Norman", "Newport Beach"), assign it to the best-fit US state and merge that row's count and keys into that state.
-- Examples: Coastal Charleston → South Carolina; Emerald Coast 30A → Florida; Lake Norman → North Carolina; Newport Beach → California; Central Oregon → Oregon; Poconos → Pennsylvania.
-- If a label genuinely does not map to any single US state (e.g. international or ambiguous), keep it as its own row with the same label and totals unchanged.
-- Use "Other" only for: Unspecified, career site, privacy, non-property URLs, or genuinely non-US/unclear. Do not put US cities or regions into "Other".
+- For EVERY remaining row that is NOT already a US state, use US geographic knowledge to assign it to the best-fit US state and merge that row's count and keys into that state.
+- Do NOT put any US city, region, or area name into "Other". When in doubt, assign to the most likely single state.
+- Examples you must follow: Coastal Charleston → South Carolina; Emerald Coast, 30a, Emerald Coast 30a → Florida; Lake Norman → North Carolina; Newport Beach → California; Central Oregon, Bend, Sunriver → Oregon; Poconos → Pennsylvania; Smith Mountain Lake → Virginia; Gulf Shores → Alabama; Blue Ridge (or similar) → North Carolina or Georgia; Myrtle Beach, Hilton Head, Kiawah → South Carolina; Gatlinburg, Pigeon Forge, Smoky Mountains → Tennessee; Branson → Missouri; Ozarks → Missouri; Destin, Panama City Beach, 30a → Florida; Outer Banks → North Carolina; Cape Cod, Berkshires → Massachusetts; Hamptons, Hudson Valley, Catskills → New York.
+- Only keep a row as its own label (do not merge) if it genuinely does not map to any single US state (e.g. international, or multi-state region with no clear primary). Do not use "Other" for those—keep the original label.
+- Use "Other" ONLY for: Unspecified, career site, privacy, non-property URLs (e.g. /search), or genuinely non-US/unclear. Never put a US city, region, or area into "Other".
 
 RULES:
 - Use full US state names only. When merging, sum both "count" and "keys".
