@@ -67,7 +67,8 @@ The **press_groups** list is what the dossier uses. Runner flattens to `canonica
 
 - **Function:** `clean_location_display_for_dossier(competitor_name, properties_by_location, asset_delta_by_city, other_sub_bullets_text=...)`
 - **Input:** **Only the list of summarized bullets** — e.g. "Temecula: 5 (12 keys)", "Central Oregon: 3", "Other: 2". No per-property data (no URLs, no names). Plus asset_delta_by_city. `other_sub_bullets_text` is not sent (kept for API compatibility only).
-- **What the LLM does:** Reviews whether the list is already grouped by state. If not, adds totals and maps regions to the closest US state (or keeps a row separate if it doesn't map neatly). Returns JSON:
+- **"Other" / subbullets:** The dossier **never shows subbullets** under any location row (state or Other). Only main bullets are shown (e.g. "California – 5 properties (100 keys)", "Other – 2 properties"). The per-property list under "Other" is not displayed.
+- **What the LLM does (region → state):** The LLM receives **regional/city labels** (e.g. "Emerald Coast 30a", "Temecula", "Central Oregon") and **maps them to US state names**, merging counts. So the dossier shows **state names** in "Properties by states" and only non-mappable rows (or "Other") in "Other properties". Returns JSON:
   - `properties_by_location`: `[{ "location": "California", "count": n, "keys": k }, ...]`
   - `asset_delta_by_city`: `[{ "location": "Texas", "added": a, "removed": r }, ...]`
 - **Prompt rules:** Region → pick closest state; if region doesn't map neatly, keep separate. Use "Other" only for Unspecified/non-US/career/privacy. Grand total of counts must match input total.

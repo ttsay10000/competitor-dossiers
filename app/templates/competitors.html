@@ -55,17 +55,18 @@
       });
 
       var params = new URLSearchParams(window.location.search);
-      if ((params.get('refreshed') || params.get('seed_run') || params.get('export_seed')) && statusEl) {
+      if ((params.get('refreshed') || params.get('seed_run') || params.get('export_seed') || params.get('force_refresh')) && statusEl) {
         if (refreshTimerId) clearInterval(refreshTimerId);
         if (params.get('refreshed')) statusEl.textContent = 'Refresh complete.';
         else if (params.get('seed_run')) statusEl.textContent = 'Seed run complete (file → DB).';
         else if (params.get('export_seed') === '1') statusEl.textContent = 'Export seed complete (DB → file).';
         else if (params.get('export_seed') === 'failed') { statusEl.textContent = 'Export seed failed (check server logs).'; statusEl.style.color = 'var(--warning, #b8860b)'; }
+        else if (params.get('force_refresh') === 'failed') { statusEl.textContent = 'Force refresh failed (check server logs). If another refresh is running, wait for it to finish.'; statusEl.style.color = 'var(--warning, #b8860b)'; }
         else statusEl.textContent = '';
         if (params.get('refreshed') || params.get('seed_run') || params.get('export_seed') === '1') statusEl.style.color = 'var(--accent)';
         setTimeout(function() { statusEl.textContent = ''; statusEl.style.color = ''; }, 5000);
         if (window.history && window.history.replaceState) {
-          var q = window.location.search.replace(/[?&]refreshed=1/, '').replace(/[?&]forced=1/, '').replace(/[?&]seed_run=1/, '').replace(/[?&]export_seed=[^&]+/, '').replace(/^\?&/, '?').replace(/&$/, '');
+          var q = window.location.search.replace(/[?&]refreshed=1/, '').replace(/[?&]forced=1/, '').replace(/[?&]seed_run=1/, '').replace(/[?&]export_seed=[^&]+/, '').replace(/[?&]force_refresh=[^&]+/, '').replace(/^\?&/, '?').replace(/&$/, '');
           window.history.replaceState({}, '', window.location.pathname + (q || ''));
         }
       }

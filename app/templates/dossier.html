@@ -1,43 +1,78 @@
 {% extends "base.html" %}
 {% block content %}
-  <h1>{{ (competitor or {}).get('name', 'Dossier') }} Dossier</h1>
+  {% set _competitor_name = (competitor or {}).get('name', 'Dossier') %}
+  <nav class="breadcrumb">
+    <a href="/competitors">Dossiers</a> › <a href="/competitors/{{ competitor.id }}">Edit</a> › <span>{{ _competitor_name }}</span>
+  </nav>
+  <div class="page-header">
+    <h1>{{ _competitor_name }} Dossier</h1>
+    <a href="/competitors/{{ competitor.id }}"><button class="secondary">Edit competitor</button></a>
+  </div>
   {% if error %}
-    <div class="card" style="border-left: 6px solid #b84a2b; margin-bottom: 16px;">
+    <div class="card mb-16" style="border-left: 6px solid #b84a2b;">
       <strong>Error loading dossier</strong>
-      <p class="meta" style="margin: 4px 0 0 0;">{{ error }}</p>
+      <p class="meta mt-4">{{ error }}</p>
     </div>
   {% endif %}
-  {% if not has_any_snapshot and not error %}
-    <div class="card" style="border-left: 6px solid var(--accent); margin-bottom: 16px;">
-      <strong>No data yet—run collection</strong>
-      <p class="meta" style="margin: 4px 0 12px 0;">This dossier has no snapshots yet. Run data collection to populate talent, asset, and press sections.</p>
-      <form method="post" action="/competitors/{{ competitor.id }}/run-now" style="display: inline-block;">
-        <label style="display: inline-flex; align-items: center; gap: 8px; margin-right: 12px;">
-          <span class="meta">Channels:</span>
-          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="talent" checked /> Talent</label>
-          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="asset" checked /> Asset</label>
-          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="press" checked /> Press</label>
-          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="reviews" /> Reviews</label>
-          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="social" /> Social</label>
-        </label>
-        <button type="submit">Populate now</button>
-      </form>
-      <span class="meta" style="margin-left: 8px;">Starts collection in the background; check <a href="/runs">Runs</a> for status.</span>
+  <div class="card mb-16">
+    <strong>Refresh or populate data</strong>
+    {% set _channels = display_channels | default(['talent', 'asset', 'press', 'homepage', 'reviews', 'social']) %}
+    {% set _has = has_snapshots | default({}) %}
+    <p class="meta card-desc">Signal status</p>
+    <div class="channel-pills mb-12">
+      {% for ch in _channels %}
+      {% set label = 'Website' if ch == 'homepage' else ch|capitalize %}
+      <span class="channel-pill {% if _has.get(ch) %}has{% endif %}" title="{{ label }}: {% if _has.get(ch) %}has data{% else %}no data{% endif %}">{{ label }}{% if _has.get(ch) %} ✓{% endif %}</span>
+      {% endfor %}
     </div>
-  {% endif %}
-  <div style="margin-bottom: 12px;">
-      <form method="post" action="/dossier/{{ competitor.id }}/refresh" class="refresh-form" style="display: inline-block; margin-right: 8px;">
-        <label style="display: inline-flex; align-items: center; gap: 6px; margin-right: 20px; white-space: nowrap;">
-          <input type="checkbox" name="force" value="1" /> Force full refresh
-        </label>
-        <button type="submit">Refresh data</button>
-      </form>
-      <form method="post" action="/dossier/{{ competitor.id }}/seed" class="refresh-form" style="display: inline-block;">
-        <button type="submit">Reset baseline & refresh</button>
-      </form>
-      <span id="refresh-status" class="meta" style="margin-left: 8px; font-weight: 500;"></span>
-      <p class="meta" style="margin: 4px 0 0 0;">Refresh data runs all collectors (asset, talent, press) and updates events vs current baseline. <strong>Force full refresh</strong> clears the press cache so Google News and other sources are re-fetched (use after code changes or if press links/dates are missing). Reset baseline sets comparison to now, then runs collectors.</p>
+    <div style="display: grid; gap: 16px;">
+      <div>
+        <p class="meta card-desc">Run channels — choose which collectors to run (see <a href="/runs">Runs</a> for status).</p>
+        <form method="post" action="/competitors/{{ competitor.id }}/run-now" class="run-channels-form" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;">
+          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="talent" {% if not _has.get('talent') %}checked{% endif %} /> Talent</label>
+          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="asset" {% if not _has.get('asset') %}checked{% endif %} /> Asset</label>
+          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="press" {% if not _has.get('press') %}checked{% endif %} /> Press</label>
+          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="homepage" {% if not _has.get('homepage') %}checked{% endif %} /> Website</label>
+          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="reviews" {% if not _has.get('reviews') %}checked{% endif %} /> Reviews</label>
+          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="social" {% if not _has.get('social') %}checked{% endif %} /> Social</label>
+          <button type="submit">Run selected channels</button>
+        </form>
+      </div>
+      <div style="padding-top: 12px; border-top: 1px solid var(--border);">
+        <p class="meta card-desc">Reset — sets comparison baseline to now, then runs all collectors.</p>
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;">
+          <form method="post" action="/dossier/{{ competitor.id }}/seed" class="refresh-form" style="display: inline-block;">
+            <button type="submit">Reset baseline &amp; refresh</button>
+          </form>
+          <span id="refresh-status" class="meta" style="font-weight: 500;"></span>
+          <span class="meta">For full reset (incl. press cache), use <strong>Force refresh &amp; reset baseline</strong> on <a href="/competitors">Dossiers</a>.</span>
+        </div>
+      </div>
     </div>
+  </div>
+
+  <div id="run-status-card" class="card mb-16" style="display: none; border-left: 4px solid var(--accent, #0d6efd);">
+    <strong>Run status</strong>
+    <p class="meta card-desc">Channels you started are below. Timers update every few seconds until each finishes.</p>
+    <ul id="run-status-list" style="margin: 0; padding-left: 20px; list-style: none;"></ul>
+  </div>
+
+  <div class="dossier-layout">
+    <aside class="dossier-nav">
+      <div class="dossier-nav-title">Jump to</div>
+      <ul>
+        <li><a href="#executive-summary">Executive summary</a></li>
+        <li><a href="#top-news">Top news</a></li>
+        <li><a href="#properties-by-location">Properties</a></li>
+        <li><a href="#talent-snapshot">Talent</a></li>
+        <li><a href="#website-changes">Website changes</a></li>
+        <li><a href="#press">Press</a></li>
+        <li><a href="#social">Social</a></li>
+        <li><a href="#reviews">Reviews</a></li>
+        <li><a href="#recent-events">Recent events</a></li>
+      </ul>
+    </aside>
+    <div class="dossier-content">
     <script>
       (function() {
         var statusEl = document.getElementById('refresh-status');
@@ -46,6 +81,13 @@
             var btn = form.querySelector('button[type=submit]');
             if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
             if (statusEl) statusEl.textContent = 'Refreshing… (this may take a few minutes)';
+          });
+        });
+        document.querySelectorAll('.run-channels-form').forEach(function(form) {
+          form.addEventListener('submit', function() {
+            var btn = form.querySelector('button[type=submit]');
+            if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+            if (statusEl) statusEl.textContent = 'Starting selected channels…';
           });
         });
         if (new URLSearchParams(window.location.search).get('refreshed') && statusEl) {
@@ -57,13 +99,79 @@
             window.history.replaceState({}, '', window.location.pathname + (q || ''));
           }
         }
+
+        var runStatusCard = document.getElementById('run-status-card');
+        var runStatusList = document.getElementById('run-status-list');
+        var params = new URLSearchParams(window.location.search);
+        var started = params.get('started') === '1';
+        var runStartTs = parseInt(params.get('run_start_ts') || '0', 10);
+        var channelsParam = params.get('channels');
+        var requestedChannels = channelsParam ? channelsParam.split(',').map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean) : [];
+
+        var CHANNEL_LABELS = { talent: 'Talent', asset: 'Asset', press: 'Press', homepage: 'Website', social: 'Social', reviews: 'Reviews' };
+        function channelLabel(ch) { return CHANNEL_LABELS[ch] || ch.charAt(0).toUpperCase() + ch.slice(1); }
+
+        if (runStatusCard && runStatusList && started && runStartTs && requestedChannels.length) {
+          runStatusCard.style.display = 'block';
+          var competitorId = {{ competitor.id | default(0) }};
+          var pollIntervalMs = 2000;
+          var pollTimerId = null;
+
+          function renderRunStatus(data) {
+            var runningByChannel = {};
+            (data.running || []).forEach(function(r) { runningByChannel[r.channel] = r.created_at; });
+            var completedByChannel = {};
+            (data.completed || []).forEach(function(c) { completedByChannel[c.channel] = c; });
+            var now = new Date();
+            var runStartDate = new Date(runStartTs * 1000);
+            var html = '';
+            var allDone = true;
+            requestedChannels.forEach(function(ch) {
+              var label = channelLabel(ch);
+              var completed = completedByChannel[ch];
+              var completedAfterStart = completed && completed.created_at && new Date(completed.created_at) >= runStartDate;
+              if (completedAfterStart) {
+                var status = completed.status === 'success' ? 'success' : (completed.status === 'error' ? 'failure' : completed.status);
+                var msg = completed.message ? ' — ' + completed.message : '';
+                var color = completed.status === 'success' ? 'var(--accent)' : (completed.status === 'error' ? '#b84a2b' : '');
+                html += '<li style="margin-bottom: 6px;"><strong>' + label + '</strong>: <span style="color:' + color + '">' + (completed.status === 'success' ? 'Success' : (completed.status === 'error' ? 'Failure' : completed.status)) + '</span>' + (msg ? ' <span class="meta">' + msg + '</span>' : '') + '</li>';
+              } else if (runningByChannel[ch]) {
+                allDone = false;
+                var startedAt = runningByChannel[ch];
+                var start = new Date(startedAt);
+                var sec = Math.floor((now - start) / 1000);
+                html += '<li style="margin-bottom: 6px;"><strong>' + label + '</strong>: running <span class="meta">(' + sec + ' s)</span></li>';
+              } else {
+                allDone = false;
+                html += '<li style="margin-bottom: 6px;"><strong>' + label + '</strong>: <span class="meta">starting…</span></li>';
+              }
+            });
+            runStatusList.innerHTML = html || '<li class="meta">Loading…</li>';
+            if (allDone && requestedChannels.length > 0) {
+              if (pollTimerId) { clearInterval(pollTimerId); pollTimerId = null; }
+            }
+          }
+
+          function poll() {
+            fetch('/dossier/' + competitorId + '/run-status')
+              .then(function(r) { return r.json(); })
+              .then(function(data) {
+                if (data.error) return;
+                renderRunStatus(data);
+              })
+              .catch(function() {});
+          }
+
+          poll();
+          pollTimerId = setInterval(poll, pollIntervalMs);
+        }
       })();
     </script>
 
-    <!-- 0. AI-generated executive summary (recent changes in bullets); loaded async so page opens fast -->
-    <div class="card" style="background: var(--card-bg, #f8f9fa); border-left: 4px solid var(--accent, #0d6efd);">
+    <!-- 0. AI-generated executive summary -->
+    <div id="executive-summary" class="card dossier-section mb-24" style="background: var(--card-bg, #f8f9fa); border-left: 4px solid var(--accent, #0d6efd);">
       <strong>Executive summary</strong>
-      <p class="meta" style="margin: 2px 0 12px 0;">AI-generated executive summary focused on what has changed recently across talent, markets, assets, and news.</p>
+      <p class="meta card-desc">AI-generated executive summary focused on what has changed recently across talent, markets, assets, and news.</p>
       <div id="executive-summary-content">
         {% if executive_summary %}
           <div class="exec-summary-body" style="margin: 0; font-size: 15px; line-height: 1.9; white-space: pre-line;">{{ executive_summary | exec_summary_display }}</div>
@@ -105,12 +213,12 @@
     </script>
     {% endif %}
 
-    <!-- 3. Top news: LLM summary of most interesting business news from press groupings (past ~30 days) -->
-    <div class="card">
+    <!-- Top news -->
+    <div id="top-news" class="card dossier-section mb-24">
       <strong>Top news</strong>
-      <p class="meta">AI summary of the most relevant business news from grouped press and recent press releases (past 30 days).</p>
+      <p class="meta card-desc">AI summary of the most relevant business news from grouped press and recent press releases (past 30 days).</p>
       {% if top_news|length %}
-        <ul style="margin: 0; padding-left: 20px;">
+        <ul class="card-list">
           {% for item in top_news %}
           <li>
             {% if item.get('date') %}<span class="meta" style="font-weight: 500;">{{ item.date }}</span> — {% endif %}
@@ -123,10 +231,10 @@
       {% endif %}
     </div>
 
-    <!-- 3. Properties by location (state/city) + week-over-week vs baseline. Content may be replaced by JS when refinement loads. -->
-    <div class="card" id="properties-by-location-card">
+    <!-- Properties by location -->
+    <div id="properties-by-location" class="card dossier-section mb-24">
       <strong>Properties by location</strong>
-      <p class="meta">From latest asset pull: current counts by state or city. Any notable adds/removals are summarized in the Executive summary above.</p>
+      <p class="meta card-desc">From latest asset pull: current counts by state or city. Any notable adds/removals are summarized in the Executive summary above.</p>
       <div id="properties-by-location-content">
         {% if total_properties and total_properties > 0 %}
           <p style="margin: 0 0 8px 0;"><strong>Total: {{ total_properties }} propert{{ 'ies' if total_properties != 1 else 'y' }}</strong></p>
@@ -136,8 +244,8 @@
         {% endif %}
         {% if properties_by_location|length %}
           {% if properties_by_state|length %}
-          <p class="card-section-title" style="margin: 8px 0 4px 0;">Properties by states</p>
-          <ul style="margin: 0 0 8px 0; padding-left: 20px;">
+          <p class="card-section-title mt-8 mb-4">Properties by states</p>
+          <ul class="card-list mb-12">
             {% for row in properties_by_state %}
             <li>
               <strong>{{ row.location }}</strong> – {{ row.count }} propert{{ 'ies' if row.count != 1 else 'y' }}{% if row.get('keys') %} ({{ row["keys"] }} keys){% endif %}
@@ -146,18 +254,11 @@
           </ul>
           {% endif %}
           {% if properties_other|length %}
-          <p class="card-section-title" style="margin: 8px 0 4px 0;">Other properties (regions, geographical locations, other)</p>
-          <ul style="margin: 0; padding-left: 20px;">
+          <p class="card-section-title mt-8 mb-4">Other properties (regions, geographical locations, other)</p>
+          <ul class="card-list">
             {% for row in properties_other %}
             <li>
               <strong>{{ row.location }}</strong> – {{ row.count }} propert{{ 'ies' if row.count != 1 else 'y' }}{% if row.get('keys') %} ({{ row["keys"] }} keys){% endif %}
-              {% if row.location == 'Other' and other_properties_display|length %}
-                <ul style="margin: 4px 0 0 0; padding-left: 20px;">
-                  {% for op in other_properties_display %}
-                  <li><span title="{{ op.url }}">{{ op.name }}</span> — {{ op.raw_location or op.market or op.url or '—' }}</li>
-                  {% endfor %}
-                </ul>
-              {% endif %}
             </li>
             {% endfor %}
           </ul>
@@ -191,7 +292,6 @@
             var total = data.total_properties || 0;
             var rows = data.properties_by_location || [];
             var usStates = (data.us_states || []).reduce(function(acc, s) { acc[s] = true; return acc; }, {});
-            var otherList = data.other_properties_display || [];
             var totalsMatch = data.location_totals_match !== false;
             var stateRows = rows.filter(function(r) { return usStates[(r.location || '').trim()]; });
             var otherRows = rows.filter(function(r) { return !usStates[(r.location || '').trim()]; });
@@ -225,16 +325,7 @@
                   var count = row.count || 0;
                   var keys = row.keys || 0;
                   var keysStr = keys ? ' (' + keys + ' keys)' : '';
-                  html += '<li><strong>' + loc + '</strong> – ' + count + ' propert' + (count !== 1 ? 'ies' : 'y') + keysStr;
-                  if ((row.location || '') === 'Other' && otherList.length) {
-                    html += '<ul style="margin: 4px 0 0 0; padding-left: 20px;">';
-                    for (var k = 0; k < otherList.length; k++) {
-                      var op = otherList[k];
-                      html += '<li><span title="' + escapeHtml(op.url || '') + '">' + escapeHtml(op.name || '') + '</span> — ' + escapeHtml(op.raw_location || op.market || op.url || '—') + '</li>';
-                    }
-                    html += '</ul>';
-                  }
-                  html += '</li>';
+                  html += '<li><strong>' + loc + '</strong> – ' + count + ' propert' + (count !== 1 ? 'ies' : 'y') + keysStr + '</li>';
                 }
                 html += '</ul>';
               }
@@ -251,18 +342,18 @@
     </script>
     {% endif %}
 
-    <!-- 6. Talent snapshot -->
-    <div class="card">
+    <!-- Talent snapshot -->
+    <div id="talent-snapshot" class="card dossier-section mb-24">
       <strong>Talent snapshot</strong>
-      <p class="meta" style="margin-bottom: 4px;">Roles by function. Business & strategy vs property operations.</p>
+      <p class="meta card-desc">Roles by function. Business & strategy vs property operations.</p>
       {% if talent_jobs|length %}
         <p class="staffing-total">{{ talent_jobs|length }} total role{{ 's' if talent_jobs|length != 1 else '' }}.</p>
         {% if talent_jobs|length <= 2 %}
         <p class="meta" style="margin: 6px 0 12px 0; padding: 8px 10px; background: #fef3cd; border-radius: 6px; border-left: 3px solid #856404;">Unusually low count—in most cases careers pages have more openings. The careers page may have failed to load (e.g. JavaScript/Playwright required). Re-run the talent collector with Playwright enabled if needed.</p>
         {% endif %}
-        <div style="margin-bottom: 12px;">
+        <div class="talent-subsection mb-16">
           <strong class="card-section-title">Business & strategy</strong>
-          <p class="staffing-body muted" style="margin: 2px 0 6px 0;">Market managers, strategy, growth, product, engineering, etc.</p>
+          <p class="staffing-body muted mt-4 mb-6">Market managers, strategy, growth, product, engineering, etc.</p>
           {% if jobs_by_function|length %}
             <ul class="staffing-list">
               {% for row in jobs_by_function %}
@@ -277,12 +368,12 @@
               {% endfor %}
             </ul>
           {% else %}
-            <p class="staffing-body muted" style="margin: 2px 0 0 0;">No business/strategy roles in this snapshot.</p>
+            <p class="staffing-body muted mt-4">No business/strategy roles in this snapshot.</p>
           {% endif %}
         </div>
-        <div>
+        <div class="talent-subsection" style="padding-top: 16px; border-top: 1px solid var(--border);">
           <strong class="card-section-title">Property operations</strong>
-          <p class="staffing-body muted" style="margin: 2px 0 6px 0;">Front desk, housekeeping, F&B, maintenance—on-property roles.</p>
+          <p class="staffing-body muted mt-4 mb-6">Front desk, housekeeping, F&B, maintenance—on-property roles.</p>
           {% if jobs_by_function_property|length %}
             <ul class="staffing-list">
               {% for row in jobs_by_function_property %}
@@ -297,7 +388,7 @@
               {% endfor %}
             </ul>
           {% else %}
-            <p class="staffing-body muted" style="margin: 2px 0 0 0;">No property operations roles in this snapshot.</p>
+            <p class="staffing-body muted mt-4">No property operations roles in this snapshot.</p>
           {% endif %}
         </div>
         {% if talent_job_board_url %}
@@ -309,14 +400,14 @@
       {% endif %}
     </div>
 
-    <!-- 5. Website changes / digital footprint -->
-    <div class="card">
+    <!-- Website changes / digital footprint -->
+    <div id="website-changes" class="card dossier-section mb-24">
       <strong>Website changes / digital footprint</strong>
-      <p class="meta" style="margin: 2px 0 12px 0;">Homepage, product page, or coming-soon changes that may signal strategy or pipeline shifts.</p>
+      <p class="meta card-desc">Homepage, product page, or coming-soon changes that may signal strategy or pipeline shifts.</p>
       {% if digital_footprint_events|length %}
-        <ul style="margin: 0; padding-left: 20px;">
+        <ul class="card-list">
           {% for event in digital_footprint_events %}
-          <li style="margin-bottom: 6px;">
+          <li>
             <span class="meta">{{ event.occurred_at_str or event.detected_at_str }}</span> — {{ event.title }}
             {% if event.evidence_json and event.evidence_json.get('source_url') %}
               <a href="{{ event.evidence_json.source_url }}" target="_blank" rel="noopener">View page</a>
@@ -329,13 +420,13 @@
       {% endif %}
     </div>
 
-    <!-- 6. Press -->
-    <div class="card">
+    <!-- Press -->
+    <div id="press" class="card dossier-section mb-24">
       <strong>Press</strong>
-      <p class="meta">Business-focused news, grouped by topic. Links open the full article. Newest first.</p>
+      <p class="meta card-desc">Business-focused news, grouped by topic. Links open the full article. Newest first.</p>
       {% if press_groups|length %}
         {% for group in press_groups %}
-        <div style="margin-bottom: 12px;">
+        <div class="mb-16">
           <strong style="font-size: 13px;">{{ group.get('group_title') or 'News' }}</strong>
           {% if group.get('group_latest_date') %}
           <span class="meta" style="font-weight: 500;"> · {{ group.group_latest_date }}</span>
@@ -343,7 +434,7 @@
           {% if group.get('one_line_summary') %}
           <div class="meta" style="margin: 2px 0 6px 0;">{{ group.one_line_summary }}</div>
           {% endif %}
-          <ul style="margin: 0; padding-left: 20px;">
+          <ul class="card-list">
             {% for art in group.get('articles') or [] %}
             <li>
               <span class="meta" style="font-weight: 500;">{{ art.get('date') or 'Date unknown' }}</span>
@@ -366,14 +457,14 @@
       {% endif %}
     </div>
 
-    <!-- 7. Social media updates -->
-    <div class="card">
+    <!-- Social media updates -->
+    <div id="social" class="card dossier-section mb-24">
       <strong>Social media updates</strong>
-      <p class="meta" style="margin: 2px 0 12px 0;">Company posts from Twitter and LinkedIn (via RSS). Executive-relevant posts also appear in Recent events.</p>
+      <p class="meta card-desc">Company posts from Twitter and LinkedIn (via RSS). Executive-relevant posts also appear in Recent events.</p>
       {% if social_posts|length %}
-      <ul style="margin: 0; padding-left: 20px; list-style: none;">
+      <ul class="card-list" style="list-style: none;">
         {% for p in social_posts[:20] %}
-        <li style="margin-bottom: 10px;">
+        <li class="mb-12">
           <span class="meta" style="font-size: 11px; font-weight: 600; text-transform: capitalize;">{{ p.platform or 'Social' }}</span>
           {% if p.relevance == 'executive' %}<span style="font-size: 11px; margin-left: 6px; color: var(--accent);">· Executive-relevant</span>{% endif %}
           <div style="margin: 2px 0 0 0;">{{ (p.text or p.title or '—')[:300] }}{% if (p.text or p.title or '')|length > 300 %}…{% endif %}</div>
@@ -387,16 +478,16 @@
       {% endif %}
     </div>
 
-    <!-- 8. Google reviews per property -->
-    <div class="card">
+    <!-- Google reviews per property -->
+    <div id="reviews" class="card dossier-section mb-24">
       <strong>Google reviews per property</strong>
-      <p class="meta" style="margin: 2px 0 12px 0;">AI summary of review sentiment per tracked property. Add properties below or on <a href="/competitors/{{ competitor.id }}">Edit competitor</a>; run the reviews channel to refresh.</p>
+      <p class="meta card-desc">AI summary of review sentiment per tracked property. Add properties below or on <a href="/competitors/{{ competitor.id }}">Edit competitor</a>; run the reviews channel to refresh.</p>
       {% if not review_properties|length %}
       <p class="meta" style="text-align: center; margin: 24px 0; color: #6c757d;">No properties added</p>
       {% elif reviews_minimal|length %}
-      <ul style="margin: 0; padding-left: 20px; list-style: none;">
+      <ul class="card-list" style="list-style: none;">
         {% for r in reviews_minimal %}
-        <li style="margin-bottom: 8px;">
+        <li class="mb-8">
           <strong>{{ r.display_name }}</strong>
           {% if r.trend %}
           <span style="font-size: 11px; font-weight: 600; margin-left: 6px;">
@@ -408,14 +499,14 @@
         {% endfor %}
       </ul>
       {% else %}
-      <ul style="margin: 0; padding-left: 20px; list-style: none;">
+      <ul class="card-list" style="list-style: none;">
         {% for rp in review_properties %}
-        <li style="margin-bottom: 6px;"><strong>{{ rp.display_name }}</strong></li>
+        <li class="mb-6"><strong>{{ rp.display_name }}</strong></li>
         {% endfor %}
       </ul>
       <p class="meta" style="margin: 8px 0 0 0;">Run reviews to see sentiment. Use <a href="/competitors/{{ competitor.id }}">Edit competitor</a> or <a href="/runs">Runs</a> to run the reviews channel.</p>
       {% endif %}
-      <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-color, #dee2e6);">
+      <div class="mt-16 pt-12" style="border-top: 1px solid var(--border);">
         <form method="post" action="/competitors/{{ competitor.id }}/review-properties">
           <input type="hidden" name="next_url" value="/dossier/{{ competitor.id }}" />
           <div class="row" style="align-items: flex-end;">
@@ -436,12 +527,12 @@
       </div>
     </div>
 
-    <!-- 9. Recent events (past 90 days) -->
-    <div class="card">
+    <!-- Recent events -->
+    <div id="recent-events" class="card dossier-section mb-24">
       <strong>Recent events (past 90 days)</strong>
       {% if events|length %}
         {% for event in events %}
-        <div class="card sev-{{ event.severity }}" style="margin-top: 8px;">
+        <div class="card sev-{{ event.severity }} mt-12" style="padding: 12px;">
           <div><strong>{{ event.title }}</strong></div>
           <div class="meta">{{ event.occurred_at_str or event.detected_at_str }} · {{ event.category }} · {{ event.type }}</div>
           {% if event.why_it_matters %}
@@ -465,7 +556,10 @@
         </div>
         {% endfor %}
       {% else %}
-        <div class="meta">No recent events.</div>
+        <p class="meta mt-4">No recent events.</p>
       {% endif %}
     </div>
+
+    </div><!-- .dossier-content -->
+  </div><!-- .dossier-layout -->
 {% endblock %}

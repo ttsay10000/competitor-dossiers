@@ -415,19 +415,19 @@ def generate_rollup_summary(per_competitor_summaries: List[Tuple[int, str, str]]
     if not blocks:
         return None
     combined = "\n\n".join(blocks)
-    system = """You are an AI Chief of Staff for Kasa's exec team. You are given executive summaries for several competitors (each block below is one competitor, with a header "--- Name (id=...) ---"). Each summary has top-line bullets and an IMPACT ON KASA / RECOMMENDED ACTION section (and optionally INDUSTRY CONTEXT). Use those to produce ONE short roll-up for the main competitors page.
+    system = """You are an AI Chief of Staff for Kasa's exec team. You are given executive summaries for several competitors (each block below is one competitor, with a header "--- Name (id=...) ---"). Each summary has top-line bullets and may include IMPACT ON KASA / RECOMMENDED ACTION. Pull out concrete facts from the summaries to write the roll-up; do NOT include recommended actions in the output.
 
 Output exactly two parts:
 
-1. **Recent updates:** — A short lead paragraph (2–3 sentences) that synthesizes major news *across* competitors at executive level. Surface cross-cutting themes (e.g. expansion in the same regions, similar hiring or partnership moves) rather than listing each competitor. End with the single most important takeaway or insight for Kasa. Keep it succinct and direct.
+1. **Recent updates:** — A short lead paragraph (2–3 sentences) that synthesizes major news *across* competitors at executive level. Use specific market names, regions, or cities where expansion or openings are mentioned (e.g. "Austin", "Miami", "UK")—not vague language like "new markets". Surface cross-cutting themes (e.g. expansion in the same regions, similar hiring or partnership moves). End with the single most important takeaway or insight for Kasa. Keep it succinct and direct.
 
 2. **Per-competitor bullets** — A list, one bullet per competitor, in the same order as the input blocks:
-   - **[Competitor Name]:** [1–2 sentence summary of that competitor's major news — e.g. big hires, new partnerships, new or number of openings and city names, recommended action.]
+   - **[Competitor Name]:** [1–2 sentences of specific recent news only: name actual hires or roles if mentioned, named partnerships, specific cities or markets for new openings/expansion, key press or product/strategy shifts. Do NOT include "recommended action" or generic advice—only what actually happened (news, hires, market entries, partnerships, exits).]
    Use the exact competitor names from the block headers (the text after "--- " and before " (id="). Do not invent or reorder competitors.
 
-Style: bullets only for the list; no fluff; concrete language; ~200–400 words total. If a competitor's summary is thin or mostly "no material changes," say so briefly rather than padding.
+Style: bullets only for the list; no fluff; concrete language; name real markets and moves; ~200–400 words total. If a competitor's summary is thin or mostly "no material changes," say so briefly rather than padding.
 
-FORMATTING: Output with clear line breaks for display. Put the "Recent updates" paragraph first, then a blank line, then "Per-competitor bullets" on its own line, then each competitor bullet on its own line (one line per " - **Name:** ..."). Do not run everything into one paragraph."""
+FORMATTING: Output with clear line breaks for display. Put the "Recent updates" paragraph first, then a single newline, then "Per-competitor bullets" on its own line, then each competitor bullet on its own line (one line per " - **Name:** ..."). Do not run everything into one paragraph."""
 
     user = f"Competitor executive summaries (each block is one competitor; use the name in the block header):\n\n{combined}"
 
@@ -474,13 +474,13 @@ def polish_rollup_summary(text: str) -> Optional[str]:
 
 Output exactly two parts:
 
-1. **Recent updates:** — A short top-line paragraph (2–3 sentences) that synthesizes what is happening across competitors and the single most important takeaway or insight for Kasa. Be direct and executive-ready.
+1. **Recent updates:** — A short top-line paragraph (2–3 sentences) that synthesizes what is happening across competitors, using specific market/city names where relevant, and the single most important takeaway or insight for Kasa. Be direct and executive-ready.
 
-2. **Per-competitor bullets:** — One bullet per competitor, each on its own line. Format each line as: " - **Competitor Name:** [1–2 sentence summary of changes since last refresh and why it matters for Kasa.]"
+2. **Per-competitor bullets:** — One bullet per competitor, each on its own line. Format each line as: " - **Competitor Name:** [1–2 sentence summary of specific changes since last refresh: named hires or roles, specific partnerships, actual cities or markets for openings/expansion, key news or strategy shifts.]"
 - Use the exact competitor names that appear in the input. Do not add or remove competitors; keep the same order.
-- Write strong, concrete bullets: specific moves (hires, partnerships, openings, exits), recommended action, and implication for Kasa. No fluff or generic strategy talk.
+- Write strong, concrete bullets: only specific facts (hires, partnerships, market entries, openings with city/market names, press, exits). Do NOT include "recommended action" or generic advice—focus on what actually happened. No fluff or generic strategy talk.
 
-FORMATTING: Put "**Recent updates:**" and its paragraph first, then a blank line, then "**Per-competitor bullets:**" on its own line, then exactly one line per competitor bullet. Use " - **Name:**" for each bullet. Output only the recap, nothing else."""
+FORMATTING: Put "**Recent updates:**" and its paragraph first, then a single newline, then "**Per-competitor bullets:**" on its own line, then exactly one line per competitor bullet. Use " - **Name:**" for each bullet. Output only the recap, nothing else."""
 
     try:
         resp = client.chat.completions.create(
@@ -517,8 +517,7 @@ def clean_rollup_formatting(text: str) -> Optional[str]:
 Your task: output the EXACT same text with only formatting changes. Do not change a single word or add/remove content.
 
 Formatting rules:
-- Put "**Recent updates:**" (and its paragraph) first. End the paragraph with a single newline.
-- Then a blank line.
+- Put "**Recent updates:**" (and its paragraph) first. End the paragraph with a single newline (no blank line after it).
 - Then "**Per-competitor bullets:**" on its own line (or "2. **Per-competitor bullets:**" if it was numbered).
 - Then each bullet on its own line: every " - **Name:** ..." must be on a separate line. Do not join multiple bullets onto one line.
 
@@ -584,7 +583,7 @@ def _normalize_rollup_line_breaks(text: str) -> str:
         if not (p.startswith("- **") or p.startswith(" - **")):
             result += " " + p
             continue
-        result += "\n\n" + p if result else p
+        result += "\n" + p if result else p
     return result
 
 
@@ -648,7 +647,20 @@ def format_executive_summary_for_display(text: Optional[str]) -> Optional[str]:
         else:
             prev_blank = False
         collapsed.append(line)
-    lines = collapsed
+    # Remove blank lines that sit between two bullet lines so bullets run - X / - X / - X with no gap.
+    def _is_bullet_line(s: str) -> bool:
+        t = s.strip()
+        return len(t) > 1 and (t.startswith("- ") or t.startswith("• ") or t.startswith("* "))
+    no_blank_between_bullets = []
+    for i, line in enumerate(collapsed):
+        stripped = line.strip()
+        if stripped == "":
+            prev_ok = i > 0 and _is_bullet_line(collapsed[i - 1])
+            next_ok = i + 1 < len(collapsed) and _is_bullet_line(collapsed[i + 1])
+            if prev_ok and next_ok:
+                continue  # skip blank between two bullets
+        no_blank_between_bullets.append(line)
+    lines = no_blank_between_bullets
     # Remove blank line immediately before a section header to tighten spacing.
     section_headers_upper = {h.upper() for h in _EXEC_SUMMARY_SECTION_HEADERS}
     tightened = []

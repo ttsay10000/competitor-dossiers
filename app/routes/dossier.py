@@ -10,8 +10,8 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import or_
 
 from ..db import get_session, get_last_refreshed
-from ..models import Competitor, CompetitorReviewProperty, Event, Snapshot, Capability
-from ..diff.asset_diff import diff_properties, delta_by_city, infer_location_for_property, is_location_treated_as_other, parse_keys_from_details
+from ..models import Competitor, CompetitorReviewProperty, Event, RunLog, Snapshot, Capability
+from ..diff.asset_diff import diff_properties, delta_by_city, infer_location_for_property, is_location_treated_as_other, asset_location_display_label, parse_keys_from_details
 from ..diff.talent_diff import diff_jobs
 from ..executive_summary import (
     generate_executive_summary,
@@ -27,6 +27,10 @@ from ..rules.talent_rules import job_functional_area, FUNCTIONAL_AREA_DISPLAY_OR
 
 router = APIRouter()
 
+# Channels shown in "Refresh or populate data" (order: T A P W S R). Website = homepage/digital footprint.
+DISPLAY_CHANNELS = ("talent", "asset", "press", "homepage", "social", "reviews")
+CHANNEL_LETTERS = {"talent": "T", "asset": "A", "press": "P", "homepage": "W", "social": "S", "reviews": "R"}
+
 # In-memory caches for LLM results (keyed so repeat loads / same snapshot are fast).
 # Max entries to avoid unbounded growth; LRU-style eviction by clearing when over limit.
 _EXEC_SUMMARY_CACHE: dict[tuple, str] = {}
@@ -35,6 +39,7 @@ _LOCATION_CLEAN_CACHE: dict[tuple, dict] = {}
 _LOCATION_CLEAN_CACHE_MAX = 100
 # Bump when prompt or aggregation logic changes so cached results are invalidated and new LLM runs.
 _LOCATION_CLEAN_CACHE_VERSION = 2
+
 
 
 def _exec_summary_cache_key(competitor_id: int, context: dict) -> tuple:
@@ -792,7 +797,7 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
             jobs_removed_since_baseline = len(talent_diff["removed"])
             has_talent_refresh_since_baseline = True
 
-    # Expand "Other" (non-state) into subbullets for display and for LLM (URL path hints: temecula, central-oregon, etc.).
+    # Other (non-state) properties: list kept for rollup/exec-summary context only. We never show subbullets in the UI.
     other_properties_display = []
     other_props = [p for p in asset_props if is_location_treated_as_other(infer_location_for_property(p))]
     if other_props:
@@ -836,14 +841,15 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     else:
         # No LLM or rejected: still use state-aggregated rows so display is one row per state (e.g. Vermont – 2 properties (62 keys))
         properties_by_location = properties_by_location_for_llm
-    # Use same list for single-bullet display (one line per location: "Location – N properties (M keys)")
+    # Use same list for single-bullet display (one line per location: "Location – N properties (M keys)").
+    # Other/sitemap/undefined locations show as "Other (regions, undefined, etc.)" in bullets.
     properties_by_location_with_list = [
-        {"location": r["location"], "count": r["count"], "keys": r.get("keys", 0)}
+        {"location": asset_location_display_label(r.get("location") or ""), "count": r["count"], "keys": r.get("keys", 0)}
         for r in properties_by_location
     ]
     us_states_set = frozenset(US_STATES_LIST)
-    properties_by_state = [r for r in properties_by_location if (r.get("location") or "").strip() in us_states_set]
-    properties_other = [r for r in properties_by_location if (r.get("location") or "").strip() not in us_states_set]
+    properties_by_state = [r for r in properties_by_location_with_list if (r.get("location") or "").strip() in us_states_set]
+    properties_other = [r for r in properties_by_location_with_list if (r.get("location") or "").strip() not in us_states_set]
 
     first_talent_endpoint = next((e for e in competitor.source_endpoints if e.channel == "talent"), None)
     talent_job_board_url = first_talent_endpoint.url if first_talent_endpoint else None
@@ -870,6 +876,12 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         .order_by(Snapshot.captured_at.desc())
         .first()
     )
+    latest_homepage = (
+        session.query(Snapshot)
+        .filter(Snapshot.competitor_id == competitor_id, Snapshot.channel == "homepage")
+        .order_by(Snapshot.captured_at.desc())
+        .first()
+    )
     social_posts = []
     if latest_social and latest_social.structured_json:
         raw = (latest_social.structured_json or {}).get("posts") or []
@@ -891,7 +903,15 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
                     "trend": p.get("trend"),
                 })
 
-    has_any_snapshot = bool(latest_asset or latest_talent or latest_press or latest_reviews or latest_social)
+    has_any_snapshot = bool(latest_asset or latest_talent or latest_press or latest_reviews or latest_social or latest_homepage)
+    has_snapshots = {
+        "talent": bool(latest_talent),
+        "asset": bool(latest_asset),
+        "press": bool(latest_press),
+        "homepage": bool(latest_homepage),
+        "social": bool(latest_social),
+        "reviews": bool(latest_reviews),
+    }
     digital_footprint_events = [
         _event_dict(e) for e in events
         if (getattr(e, "type") or "") in ("narrative.homepage_updated", "narrative.coming_soon")
@@ -900,6 +920,9 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     context = {
         "competitor": {"id": competitor.id, "name": competitor.name},
         "has_any_snapshot": has_any_snapshot,
+        "has_snapshots": has_snapshots,
+        "display_channels": DISPLAY_CHANNELS,
+        "channel_letters": CHANNEL_LETTERS,
         "markets": markets,
         "capabilities": [{"capability": c.capability} for c in capabilities],
         "events": [_event_dict(e) for e in events],
@@ -1107,14 +1130,18 @@ def force_refresh_and_reset_baseline(request: Request):
     from ..db import get_session
     from ..seed import run_seed
 
-    run_seed()
-    logging.info("Force refresh: ran seed (seed_data.json → DB).")
-    with get_session() as session:
-        deleted = clear_all_snapshots(session, channel=None)
-    logging.info("Force refresh: cleared %d snapshot(s) (all channels, all competitors).", deleted)
-    advance_baseline_after_full_refresh()
-    run_all_channels()
-    return RedirectResponse(url="/competitors?refreshed=1&forced=1", status_code=303)
+    try:
+        run_seed()
+        logging.info("Force refresh: ran seed (seed_data.json → DB).")
+        with get_session() as session:
+            deleted = clear_all_snapshots(session, channel=None)
+        logging.info("Force refresh: cleared %d snapshot(s) (all channels, all competitors).", deleted)
+        advance_baseline_after_full_refresh()
+        run_all_channels()
+        return RedirectResponse(url="/competitors?refreshed=1&forced=1", status_code=303)
+    except Exception as e:
+        logging.exception("Force refresh failed: %s", e)
+        return RedirectResponse(url="/competitors?force_refresh=failed", status_code=303)
 
 
 def _dossier_frame_context(session, competitor_id: int, error: Optional[str] = None) -> dict:
@@ -1129,6 +1156,9 @@ def _dossier_frame_context(session, competitor_id: int, error: Optional[str] = N
         "last_refreshed": get_last_refreshed(session),
         "nav_competitors": nav,
         "has_any_snapshot": False,
+        "has_snapshots": {ch: False for ch in DISPLAY_CHANNELS},
+        "display_channels": DISPLAY_CHANNELS,
+        "channel_letters": CHANNEL_LETTERS,
         "executive_summary": None,
         "executive_summary_lazy": False,
         "properties_refinement_available": False,
@@ -1193,6 +1223,48 @@ def dossier(request: Request, competitor_id: int):
     )
 
 
+@router.get("/dossier/{competitor_id}/run-status")
+def dossier_run_status(competitor_id: int):
+    """Return running and completed run logs for this competitor so the dossier can show timers and success/failure."""
+    with get_session() as session:
+        if session.get(Competitor, competitor_id) is None:
+            return JSONResponse(content={"error": "Competitor not found."}, status_code=404)
+        running = (
+            session.query(RunLog)
+            .filter(RunLog.competitor_id == competitor_id, RunLog.status == "running")
+            .order_by(RunLog.created_at.desc())
+            .all()
+        )
+        completed_logs = (
+            session.query(RunLog)
+            .filter(
+                RunLog.competitor_id == competitor_id,
+                RunLog.status.in_(["success", "error", "skipped"]),
+            )
+            .order_by(RunLog.created_at.desc())
+            .all()
+        )
+        # Latest completion per channel
+        completed_by_channel: dict[str, dict] = {}
+        for log in completed_logs:
+            if log.channel not in completed_by_channel:
+                completed_by_channel[log.channel] = {
+                    "channel": log.channel,
+                    "status": log.status,
+                    "message": log.message or "",
+                    "created_at": log.created_at.isoformat() if log.created_at else None,
+                }
+        return JSONResponse(
+            content={
+                "running": [
+                    {"channel": log.channel, "created_at": log.created_at.isoformat() if log.created_at else None}
+                    for log in running
+                ],
+                "completed": list(completed_by_channel.values()),
+            }
+        )
+
+
 @router.post("/dossier/{competitor_id}/refresh", status_code=303)
 async def dossier_refresh(request: Request, competitor_id: int):
     """
@@ -1236,12 +1308,10 @@ def dossier_seed(request: Request, competitor_id: int):
     with get_session() as session:
         competitor = session.get(Competitor, competitor_id)
         if competitor is None:
-            last_refreshed = get_last_refreshed(session)
-            all_competitors = session.query(Competitor).order_by(Competitor.created_at.desc()).all()
-            nav_competitors = [{"id": c.id, "name": c.name, "created_at": c.created_at} for c in all_competitors]
+            frame = _dossier_frame_context(session, competitor_id, error="Competitor not found.")
             return request.app.state.templates.TemplateResponse(
                 "dossier.html",
-                {"request": request, "error": "Competitor not found.", "last_refreshed": last_refreshed, "nav_competitors": nav_competitors},
+                {"request": request, **frame},
             )
 
     # Set baseline first so the run's new snapshots/events count as "since baseline"

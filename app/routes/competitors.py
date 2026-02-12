@@ -10,6 +10,8 @@ from starlette.status import HTTP_303_SEE_OTHER
 
 from sqlalchemy import func
 
+from datetime import datetime, timezone
+
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, CompetitorReviewProperty, SourceEndpoint, RunLog, Snapshot
 from ..utils import to_eastern
@@ -322,11 +324,24 @@ async def competitor_run_now(request: Request, competitor_id: int):
     if channels is None:
         channels = _parse_channels(request.query_params.get("channels"))
 
+    run_start_ts = int(datetime.now(timezone.utc).timestamp())
     with get_session() as session:
         competitor = session.get(Competitor, competitor_id)
         if competitor is None:
             return RedirectResponse(url="/competitors", status_code=HTTP_303_SEE_OTHER)
         name = competitor.name
+        # Log "running" so dossier run-status can show timers; runner will add success/error when done
+        if channels:
+            for ch in channels:
+                session.add(
+                    RunLog(
+                        competitor_id=competitor_id,
+                        channel=ch,
+                        status="running",
+                        message=None,
+                        extra_json={"started_at": run_start_ts},
+                    )
+                )
 
     def _run():
         from ..runner import run
@@ -338,7 +353,8 @@ async def competitor_run_now(request: Request, competitor_id: int):
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
-    redirect_url = f"/runs?competitor_id={competitor_id}&started=1"
+    # Send user to dossier so they see run status with timers
+    redirect_url = f"/dossier/{competitor_id}?started=1&run_start_ts={run_start_ts}"
     if channels:
         redirect_url += "&channels=" + ",".join(channels)
     return RedirectResponse(url=redirect_url, status_code=HTTP_303_SEE_OTHER)

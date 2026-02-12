@@ -60,6 +60,9 @@ LOCATIONS_TREATED_AS_OTHER = frozenset({
     "Unspecified", "Other", "Career Site", "Career site", "Cdn Cgi", "Hotels", "Privacy Policy",
 })
 
+# Display label for asset pull bullets when location is Other / sitemap / undefined / regions.
+ASSET_OTHER_DISPLAY_LABEL = "Other (regions, undefined, etc.)"
+
 # Destination slug (from URLs like /{id}/{destination}/{slug}) -> US state full name.
 # Used to tag locations/states from Avantstay-style URLs (e.g. coachella-valley -> California).
 # Slugs are normalized to lowercase with hyphens. Include -XX suffix variants (e.g. austin-tx -> Texas).
@@ -279,6 +282,11 @@ def resolve_destination_slug_to_state(slug: str) -> Optional[str]:
 def is_location_treated_as_other(loc: str) -> bool:
     """True if this raw location is non-state and should be shown under 'Other' with subbullets."""
     return (loc or "").strip() in LOCATIONS_TREATED_AS_OTHER
+
+
+def asset_location_display_label(loc: str) -> str:
+    """Return display label for asset pull bullets: use ASSET_OTHER_DISPLAY_LABEL when location is Other/sitemap/undefined."""
+    return ASSET_OTHER_DISPLAY_LABEL if is_location_treated_as_other(loc) else (loc or "").strip()
 
 
 def _normalize_state_for_display(state: str) -> str:

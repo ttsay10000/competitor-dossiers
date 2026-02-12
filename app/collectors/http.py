@@ -22,6 +22,16 @@ CHROMIUM_LAUNCH_ARGS = [
 ]
 
 
+def _normalize_url(url: str) -> str:
+    """Ensure URL has a scheme so requests/Playwright accept it (e.g. jobs.gem.com/rove -> https://jobs.gem.com/rove)."""
+    u = (url or "").strip()
+    if not u:
+        return u
+    if not u.startswith("http://") and not u.startswith("https://"):
+        return "https://" + u
+    return u
+
+
 @dataclass
 class FetchResult:
     url: str
@@ -32,6 +42,7 @@ class FetchResult:
 
 
 def fetch_url(url: str, timeout: int = 20, headers: Optional[Dict[str, str]] = None) -> FetchResult:
+    url = _normalize_url(url)
     h = headers if headers is not None else {"User-Agent": USER_AGENT_DEFAULT}
     if "User-Agent" not in h and headers is not None:
         h = {**h, "User-Agent": USER_AGENT_DEFAULT}
@@ -51,6 +62,7 @@ def fetch_url(url: str, timeout: int = 20, headers: Optional[Dict[str, str]] = N
 
 
 def fetch_url_js(url: str) -> FetchResult:
+    url = _normalize_url(url)
     from ..config import settings
     if not settings.playwright_enabled:
         raise RuntimeError("playwright is disabled; set PLAYWRIGHT_ENABLED=true")
@@ -83,6 +95,7 @@ def fetch_url_js_wait_for_spa(
 ) -> FetchResult:
     """Load URL with Playwright (domcontentloaded for speed), then wait so SPA can fetch data and render.
     Use for JS-heavy job boards (e.g. Gem) that have no public API and render jobs client-side."""
+    url = _normalize_url(url)
     from ..config import settings
     if not settings.playwright_enabled:
         raise RuntimeError("playwright is disabled; set PLAYWRIGHT_ENABLED=true")
@@ -113,6 +126,7 @@ def fetch_url_js_wait_for_spa(
 def fetch_url_js_scroll_halfway(url: str, post_scroll_wait_sec: float = 1.5) -> FetchResult:
     """Load URL with Playwright, scroll down at least halfway (so in-view/lazy content is in DOM), then return HTML.
     Use for career pages that list jobs in the initial HTML but may render or reveal them on scroll."""
+    url = _normalize_url(url)
     from ..config import settings
     if not settings.playwright_enabled:
         raise RuntimeError("playwright is disabled; set PLAYWRIGHT_ENABLED=true")
@@ -399,6 +413,7 @@ def exhaust_list_in_browser(page: Any, options: Dict[str, Any]) -> int:
 
 def fetch_url_js_exhaust(url: str, load_more_options: Dict[str, Any]) -> FetchResult:
     """Load URL with Playwright, run exhaust_list_in_browser, return final HTML."""
+    url = _normalize_url(url)
     from ..config import settings
     if not settings.playwright_enabled:
         raise RuntimeError("playwright is disabled; set PLAYWRIGHT_ENABLED=true")
