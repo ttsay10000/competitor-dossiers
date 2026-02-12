@@ -7,7 +7,7 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
-from .http import fetch_url, fetch_url_js, fetch_url_js_exhaust
+from .http import fetch_url, fetch_url_js, fetch_url_js_exhaust, fetch_url_js_wait_for_spa
 
 
 # Priority order: Lever > Greenhouse > Ashby > generic (competitor career pages).
@@ -477,26 +477,31 @@ def extract_jobs_from_headings(html: str) -> list[dict[str, Any]]:
     return jobs
 
 
-def extract_jobs_from_landing(html: str, base_url: str = "https://www.hellolanding.com") -> list[dict[str, Any]]:
-    """Extract jobs from Landing careers page. Uses a.job_title_link; location from adjacent td."""
+def extract_jobs_from_applytojob(html: str, base_url: str = "https://landing.applytojob.com") -> list[dict[str, Any]]:
+    """Extract jobs from JazzHR/applytojob.com job list (Landing's embedded careers iframe).
+    Jobs are in table rows: td with job link, adjacent td with location."""
     soup = BeautifulSoup(html, "html.parser")
     jobs = []
     seen = set()
-    for link in soup.find_all("a", class_=lambda c: c and "job_title_link" in (c if isinstance(c, str) else " ".join(c))):
+    current_dept = None
+    for tr in soup.find_all("tr"):
+        tds = tr.find_all("td")
+        # Department header row: single td, no job link
+        if len(tds) == 1:
+            txt = (tds[0].get_text() or "").strip()
+            if txt and len(txt) < 80 and not tds[0].find("a", href=lambda h: h and "/jobs/details/" in (h or "")):
+                current_dept = txt
+            continue
+        # Job row: td with link, next td with location
+        link = tr.find("a", href=lambda h: h and "/jobs/details/" in (h or ""))
+        if not link or len(tds) < 2:
+            continue
         title = (link.get_text() or "").strip()
         if not title or len(title) < 4 or len(title) > 120:
             continue
         href = link.get("href") or ""
         job_url = urljoin(base_url, href) if href else None
-        location = None
-        row = link.find_parent("tr")
-        if row:
-            tds = row.find_all("td")
-            for i, td in enumerate(tds):
-                if td.find("a", class_=lambda c: c and "job_title_link" in (c if isinstance(c, str) else " ".join(c))):
-                    if i + 1 < len(tds):
-                        location = (tds[i + 1].get_text() or "").strip() or None
-                    break
+        location = (tds[1].get_text() or "").strip() or None
         key = (title[:80], location or "")
         if key in seen:
             continue
@@ -506,37 +511,109 @@ def extract_jobs_from_landing(html: str, base_url: str = "https://www.hellolandi
             "job_id": None,
             "title": title,
             "location": _clean_location_field(location),
-            "dept": None,
+            "dept": current_dept,
             "posted_date": posted_date,
             "url": job_url,
         })
     return jobs
 
 
+def extract_jobs_from_landing(html: str, base_url: str = "https://www.hellolanding.com") -> list[dict[str, Any]]:
+    """Legacy stub. Jobs are in applytojob iframe; use fetch from applytojob URL + extract_jobs_from_applytojob."""
+    return []
+
+
+def extract_jobs_from_blueground_page_data(html: str) -> list[dict[str, Any]]:
+    """Extract jobs from Blueground careers page when job list is in embedded JSON: Blueground.pageData = {"jobs":[...]}.
+    Clean interface like Placemakr/Lever - no Playwright needed."""
+    match = re.search(r"Blueground\.pageData\s*=\s*(\{)", html)
+    if not match:
+        return []
+    start = match.start(1)
+    depth = 0
+    for i in range(start, min(start + 500000, len(html))):
+        if html[i] == "{":
+            depth += 1
+        elif html[i] == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    data = json.loads(html[start : i + 1])
+                except json.JSONDecodeError:
+                    return []
+                raw_jobs = data.get("jobs") or []
+                jobs = []
+                for j in raw_jobs:
+                    if not isinstance(j, dict):
+                        continue
+                    title = (j.get("title") or j.get("full_title") or "").strip()
+                    if not title or len(title) < 2:
+                        continue
+                    loc_obj = j.get("location")
+                    if isinstance(loc_obj, dict):
+                        location = (loc_obj.get("location_str") or "").strip() or None
+                    else:
+                        location = (loc_obj or "").strip() or None
+                    url = (j.get("url") or j.get("application_url") or "").strip() or None
+                    dept = (j.get("department") or "").strip() or None
+                    created = j.get("created_at")
+                    posted_date = created if isinstance(created, str) else None
+                    job_id = j.get("id") or j.get("shortcode")
+                    jobs.append({
+                        "job_id": str(job_id) if job_id is not None else None,
+                        "title": title,
+                        "location": _clean_location_field(location),
+                        "dept": dept,
+                        "posted_date": posted_date,
+                        "url": url or None,
+                    })
+                return jobs
+    return []
+
+
 def extract_jobs_from_blueground(html: str, base_url: str = "https://www.theblueground.com") -> list[dict[str, Any]]:
-    """Extract jobs from Blueground careers page. Uses section u-vs__top--3 u-vs__bottom--4; job_location span; dept from section titles."""
+    """Extract jobs from Blueground careers page. Prefer embedded JSON (Blueground.pageData.jobs); fall back to HTML section/link scraping."""
+    # 1) Embedded JSON (clean, no JS required) - same idea as Placemakr/Lever
+    jobs = extract_jobs_from_blueground_page_data(html)
+    if jobs:
+        return jobs
+
+    # 2) Fallback: scrape HTML section and links
     soup = BeautifulSoup(html, "html.parser")
     jobs = []
     seen = set()
     current_dept = None
-    section = soup.find(class_=lambda c: c and "u-vs__top--3" in (c if isinstance(c, str) else " ".join(c)) and "u-vs__bottom--4" in (c if isinstance(c, str) else " ".join(c)))
-    if not section:
-        section = soup
-    for elem in section.descendants:
-        if not hasattr(elem, "name"):
-            continue
-        if elem.name == "div" and elem.get("class"):
-            classes = elem.get("class")
-            cls_str = " ".join(classes) if isinstance(classes, list) else str(classes)
-            if "bg-col-xs-12" in cls_str:
-                dept_text = (elem.get_text() or "").strip()
-                if dept_text and len(dept_text) < 80 and not _is_cta_or_section_text(dept_text):
-                    current_dept = dept_text
-        if elem.name == "a" and elem.get("href"):
-            href = elem.get("href") or ""
-            if "workable.com" in href.lower() or "/jobs/" in href.lower():
+
+    def _is_job_link(href: str) -> bool:
+        if not href:
+            return False
+        h = href.lower()
+        if "workable.com" in h or "/jobs/" in h:
+            return True
+        if "theblueground.com" in h and ("career" in h or "job" in h or "opening" in h or "role" in h):
+            return True
+        return False
+
+    def _collect_from_section(section) -> None:
+        nonlocal current_dept
+        for elem in section.descendants:
+            if not hasattr(elem, "name"):
+                continue
+            if elem.name == "div" and elem.get("class"):
+                classes = elem.get("class")
+                cls_str = " ".join(classes) if isinstance(classes, list) else str(classes)
+                if "bg-col-xs-12" in cls_str:
+                    dept_text = (elem.get_text() or "").strip()
+                    if dept_text and len(dept_text) < 80 and not _is_cta_or_section_text(dept_text):
+                        current_dept = dept_text
+            if elem.name == "a" and elem.get("href"):
+                href = elem.get("href") or ""
+                if not _is_job_link(href):
+                    continue
                 title = elem.get("title") or (elem.get_text() or "").strip()
                 if not title or len(title) < 4 or len(title) > 120:
+                    continue
+                if _is_cta_or_section_text(title):
                     continue
                 job_url = href if href.startswith("http") else urljoin(base_url, href)
                 location = None
@@ -556,6 +633,94 @@ def extract_jobs_from_blueground(html: str, base_url: str = "https://www.theblue
                     "posted_date": posted_date,
                     "url": job_url,
                 })
+
+    # 1) Prefer section with known layout classes
+    section = soup.find(class_=lambda c: c and "u-vs__top--3" in (c if isinstance(c, str) else " ".join(c)) and "u-vs__bottom--4" in (c if isinstance(c, str) else " ".join(c)))
+    if section:
+        _collect_from_section(section)
+        if jobs:
+            return jobs
+
+    # 2) Fallback: find section under "openings" / "open roles" heading
+    current_dept = None
+    seen.clear()
+    for tag in soup.find_all(["h2", "h3", "h4", "h5"]):
+        text = (tag.get_text() or "").strip().lower()
+        if "open" not in text and "role" not in text:
+            continue
+        if "opening" in text or "open role" in text or "open roles" in text:
+            parent = tag.find_parent(["section", "div"])
+            if parent:
+                _collect_from_section(parent)
+                if jobs:
+                    return jobs
+
+    # 3) Last resort: whole body, any job-like link
+    current_dept = None
+    seen.clear()
+    _collect_from_section(soup.body if soup.body else soup)
+    return jobs
+
+
+def extract_jobs_from_gem(html: str, source_url: str = "https://jobs.gem.com") -> list[dict[str, Any]]:
+    """Extract jobs from Gem job board SPA (e.g. Rove). Links are like /rove/am9icG9zd... (base64 job id), not /j/."""
+    soup = BeautifulSoup(html, "html.parser")
+    jobs = []
+    seen = set()
+    # Base URL for resolving relative hrefs (e.g. /rove/xxx -> https://jobs.gem.com/rove/xxx)
+    base = "https://jobs.gem.com"
+    if source_url.startswith("http"):
+        parts = source_url.split("/")
+        if len(parts) >= 3:
+            base = parts[0] + "//" + parts[2]
+    # Board slug is last path segment of source (e.g. rove from https://jobs.gem.com/rove)
+    board_slug = ""
+    if "/" in source_url.rstrip("/"):
+        board_slug = source_url.rstrip("/").split("/")[-1].lower()
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if not href or href == "#":
+            continue
+        # Gem uses paths like /rove/am9icG9zd... (board slug + base64 id) or /j/ shortcode
+        href_lower = href.lower()
+        is_job_path = (
+            "/j/" in href_lower
+            or "job" in href_lower
+            or "position" in href_lower
+            or (board_slug and f"/{board_slug}/" in href_lower and len(href) > len(board_slug) + 10)
+        )
+        if not is_job_path:
+            continue
+        raw_text = (a.get_text() or "").strip()
+        # Gem often appends location on same line (e.g. "TitleCity•Hybrid" or "TitleCity1, City2, ...")
+        if "\n" in raw_text:
+            raw_text = raw_text.split("\n")[0].strip()
+        title = raw_text
+        location = None
+        if "•" in raw_text:
+            parts = raw_text.split("•", 1)
+            title = parts[0].strip()
+            location = (parts[1].strip() or None) if len(parts) > 1 else None
+        # If title looks like "TitleCity, City2" (no space before city), take last run of comma-separated as location
+        if len(title) > 100:
+            title = title[:97] + "..."
+        if not title or len(title) < 4:
+            continue
+        if _is_cta_or_section_text(title):
+            continue
+        job_url = href if href.startswith("http") else urljoin(base, href)
+        key = (title[:80], job_url)
+        if key in seen:
+            continue
+        seen.add(key)
+        jobs.append({
+            "job_id": None,
+            "title": title,
+            "location": _clean_location_field(location),
+            "dept": None,
+            "posted_date": None,
+            "url": job_url,
+        })
     return jobs
 
 
@@ -570,6 +735,9 @@ def _extract_jobs_from_generic_html(html: str, source_url: str) -> list[dict[str
         return jobs if jobs else extract_jobs_from_html(html)
     if "theblueground.com" in source_url.lower():
         jobs = extract_jobs_from_blueground(html, base_url="https://www.theblueground.com")
+        return jobs if jobs else extract_jobs_from_html(html)
+    if "jobs.gem.com" in source_url.lower() or "gem.com" in source_url.lower():
+        jobs = extract_jobs_from_gem(html, source_url=source_url)
         return jobs if jobs else extract_jobs_from_html(html)
     return extract_jobs_from_html(html)
 
@@ -593,7 +761,10 @@ def normalize_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def collect_talent_snapshot(source_url: str) -> dict[str, Any]:
     """Pull all current jobs for a talent source. Priority: Lever API > Greenhouse API > Ashby API > generic HTML.
-    Every run persists the full job list so we can diff later (surges, new executive postings)."""
+    Every run persists the full job list so we can diff later (surges, new executive postings).
+
+    Plain fetch (no Playwright): Placemakr (Lever), Vacasa (Greenhouse), Blueground (embedded pageData),
+    Landing (applytojob iframe). Playwright/scroll needed: Lark (WizeHire), AvantStay (Kula), Rove (Gem)."""
     provider = detect_provider(source_url)
 
     # 1. Lever
@@ -658,7 +829,39 @@ def collect_talent_snapshot(source_url: str) -> dict[str, Any]:
         # Fall through to generic if API fails
 
     # 4. Generic: competitor career page (HTML scrape).
-    # WizeHire (AvantStay): JS + scroll exhaust only — keep as-is, do not change.
+    # Landing: jobs are in JazzHR/applytojob iframe; fetch that URL directly.
+    if "hellolanding.com" in source_url.lower() and "/careers" in source_url.lower():
+        try:
+            iframe_url = "https://landing.applytojob.com/apply/jobs/"
+            fetched = fetch_url(iframe_url)
+            if fetched.status_code == 200:
+                jobs = extract_jobs_from_applytojob(fetched.text, base_url="https://landing.applytojob.com")
+                return {
+                    "provider": "generic",
+                    "source_url": source_url,
+                    "raw_content": fetched.text,
+                    "raw_hash": fetched.raw_hash,
+                    "jobs": normalize_jobs(jobs),
+                }
+        except Exception:
+            pass
+
+    # Gem (e.g. Rove): SPA with no public API; use Playwright with short wait for client-side render.
+    if "jobs.gem.com" in source_url.lower():
+        try:
+            fetched = fetch_url_js_wait_for_spa(source_url, wait_after_load_sec=8.0)
+        except (RuntimeError, Exception):
+            fetched = fetch_url(source_url)
+        jobs = _extract_jobs_from_generic_html(fetched.text, source_url)
+        return {
+            "provider": "generic",
+            "source_url": fetched.url,
+            "raw_content": fetched.text,
+            "raw_hash": fetched.raw_hash,
+            "jobs": normalize_jobs(jobs),
+        }
+
+    # WizeHire (Lark): JS + scroll exhaust only — keep as-is, do not change.
     if "wizehire.com" in source_url.lower():
         try:
             scroll_options = {

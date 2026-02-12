@@ -46,7 +46,16 @@
   </div>
 
   <div class="card">
-    <table>
+    <style>
+      .runs-table { table-layout: fixed; }
+      .runs-table th:nth-child(1), .runs-table td:nth-child(1) { width: 11em; white-space: nowrap; }
+      .runs-table th:nth-child(2), .runs-table td:nth-child(2) { width: 10%; min-width: 5em; }
+      .runs-table th:nth-child(3), .runs-table td:nth-child(3) { width: 5em; white-space: nowrap; }
+      .runs-table th:nth-child(4), .runs-table td:nth-child(4) { width: 5em; white-space: nowrap; }
+      .runs-table th:nth-child(5), .runs-table td:nth-child(5) { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .runs-table th:nth-child(6), .runs-table td:nth-child(6) { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+    </style>
+    <table class="runs-table">
       <thead>
         <tr>
           <th>Time</th>
@@ -60,12 +69,12 @@
       <tbody>
         {% for log in logs %}
         <tr>
-          <td class="muted">{{ log.created_at_str }}</td>
+          <td class="muted" title="{{ log.created_at_str }}">{{ log.created_at_str }}</td>
           <td>{{ competitor_names.get(log.competitor_id, "—") }}</td>
           <td>{{ log.channel }}</td>
           <td>{{ log.status }}</td>
-          <td class="muted">{{ log.message or "" }}</td>
-          <td class="muted" style="font-size: 12px;">{{ log.extra_str }}</td>
+          <td class="muted" title="{{ log.message or '' }}">{{ log.message or "" }}</td>
+          <td class="muted" title="{{ log.extra_str or '' }}">{{ log.extra_str }}</td>
         </tr>
         {% endfor %}
         {% if logs|length == 0 %}

@@ -1,6 +1,7 @@
 """
 Social media collector: Twitter and LinkedIn only.
-Fetches posts via RSS (e.g. Nitter for Twitter). No scraping.
+Twitter: via RSS (e.g. Nitter). LinkedIn: authenticated Playwright scraping
+(company posts require sign-in; set LINKEDIN_STORAGE_STATE_PATH).
 """
 import hashlib
 import re
@@ -35,12 +36,20 @@ def _extract_twitter_handle(profile_url: str) -> Optional[str]:
         return None
 
 
+def _is_linkedin_company_posts_url(url: str) -> bool:
+    """True if URL is a LinkedIn company posts page we can scrape."""
+    if not url or not isinstance(url, str):
+        return False
+    u = url.strip().lower()
+    return "linkedin.com/company/" in u and ("/posts" in u or "/feed" in u)
+
+
 def _resolve_feed_url(url: str, platform: str, twitter_rss_bridge_base: Optional[str] = None) -> Optional[str]:
     """
-    Return the URL we can fetch (RSS) for this source, or None if we cannot get a feed.
+    Return the URL we can fetch for this source, or None if we cannot.
     - If url is already an RSS-like URL, return it.
     - If platform is twitter and we have a bridge base, construct Nitter RSS URL.
-    - LinkedIn company pages have no public RSS; return None unless url is already a feed.
+    - LinkedIn company posts URLs: return as-is (we scrape via Playwright, not RSS).
     """
     if not url or not isinstance(url, str):
         return None
@@ -50,9 +59,9 @@ def _resolve_feed_url(url: str, platform: str, twitter_rss_bridge_base: Optional
     if platform == "twitter":
         handle = _extract_twitter_handle(url)
         if handle and twitter_rss_bridge_base:
-            # Nitter-style RSS: base/Handle/rss
             return f"{twitter_rss_bridge_base}/{handle}/rss"
-    # LinkedIn or unknown: only fetch if it looks like RSS
+    if platform == "linkedin" and _is_linkedin_company_posts_url(url):
+        return url
     return None
 
 
@@ -90,12 +99,17 @@ def _post_id(item: dict, platform: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:32]
 
 
-def collect_social_feed(url: str, platform: str, twitter_rss_bridge_base: Optional[str] = None) -> dict[str, Any]:
+def collect_social_feed(
+    url: str,
+    platform: str,
+    twitter_rss_bridge_base: Optional[str] = None,
+    linkedin_storage_state_path: Optional[str] = None,
+) -> dict[str, Any]:
     """
     Fetch one social source (Twitter or LinkedIn). Returns dict with:
     - source_url, raw_content, raw_hash
-    - items: list of { id, platform, text, url, published_at, title, source } (title/source from RSS)
-    If the URL cannot be resolved to a feed, returns empty items and empty raw_content.
+    - items: list of { id, platform, text, url, published_at, title, source }
+    If the URL cannot be resolved, returns empty items.
     """
     feed_url = _resolve_feed_url(url, platform, twitter_rss_bridge_base)
     if not feed_url:
@@ -105,6 +119,23 @@ def collect_social_feed(url: str, platform: str, twitter_rss_bridge_base: Option
             "raw_hash": "",
             "items": [],
         }
+
+    if platform == "linkedin" and _is_linkedin_company_posts_url(feed_url):
+        try:
+            from .linkedin import collect_linkedin_company_posts
+            return collect_linkedin_company_posts(
+                feed_url,
+                storage_state_path=linkedin_storage_state_path,
+                max_age_days=30,
+            )
+        except Exception:
+            return {
+                "source_url": url,
+                "raw_content": "",
+                "raw_hash": "",
+                "items": [],
+            }
+
     try:
         items, fetched = parse_rss(feed_url)
     except Exception:
@@ -114,12 +145,15 @@ def collect_social_feed(url: str, platform: str, twitter_rss_bridge_base: Option
             "raw_hash": "",
             "items": [],
         }
+    from .linkedin import _is_within_days
     out_items = []
     for entry in items:
         link = entry.get("url") or entry.get("link") or ""
         title = (entry.get("title") or "").strip()
         date = entry.get("date") or entry.get("updated")
         published_at = _normalize_date(date)
+        if not _is_within_days(published_at, 30):
+            continue
         item = {
             "id": _post_id({"url": link, "date": date, "title": title}, platform),
             "platform": platform,

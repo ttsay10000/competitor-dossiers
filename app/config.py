@@ -42,6 +42,9 @@ class Settings:
         self.google_places_api_key = (os.getenv("GOOGLE_PLACES_API_KEY") or "").strip().strip("'\"")
         # Twitter RSS bridge (e.g. Nitter instance) to turn profile URL into RSS. Example: https://nitter.example.com
         self.twitter_rss_bridge_base = (os.getenv("TWITTER_RSS_BRIDGE_BASE_URL") or "").strip().rstrip("/") or None
+        # LinkedIn: path to saved Playwright storage state from a logged-in session.
+        # Run: python3 -m scripts.save_linkedin_session  (then log in in the browser)
+        self.linkedin_storage_state_path = (os.getenv("LINKEDIN_STORAGE_STATE_PATH") or "").strip().rstrip("/") or None
 
 
 settings = Settings()

@@ -4,9 +4,9 @@ Run the full press pipeline (classify + filter + grouping) and print the
 resulting groups so you can see how articles are clustered.
 
 Usage (from project root):
-  python scripts/inspect_press_grouping.py Lark
-  python scripts/inspect_press_grouping.py Placemakr
-  python scripts/inspect_press_grouping.py AvantStay
+  python3 scripts/inspect_press_grouping.py Lark
+  python3 scripts/inspect_press_grouping.py Placemakr
+  python3 scripts/inspect_press_grouping.py AvantStay
 
 Uses same sources as --local press. Requires OPENAI_API_KEY (set in env or in .env).
 """

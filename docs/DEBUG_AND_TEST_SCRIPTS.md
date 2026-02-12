@@ -52,6 +52,6 @@ All debug and test scripts have been removed. The site does not depend on them.
 
 | Script / command | Purpose |
 |------------------|--------|
-| `python scripts/inspect_press_classification.py [Lark\|AvantStay\|Placemakr]` | Full list of press articles and what is marked **irrelevant** (or promo / not_about_company) vs included. Uses Google News + PR Newswire; requires `OPENAI_API_KEY` in `.env`. |
+| `python3 scripts/inspect_press_classification.py [Lark\|AvantStay\|Placemakr]` | Full list of press articles and what is marked **irrelevant** (or promo / not_about_company) vs included. Uses Google News + PR Newswire; requires `OPENAI_API_KEY` in `.env`. |
 
 The web service and cron on Render use only the `app` package (`uvicorn app.main:app`, `python -m app.cli`).

@@ -12,6 +12,7 @@ from sqlalchemy import func
 
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, CompetitorReviewProperty, SourceEndpoint, RunLog, Snapshot
+from ..utils import to_eastern
 from ..config import settings
 from ..collectors.reviews import resolve_place_id_from_text
 from ..validation import validate_url_format, suggest_urls_from_domain
@@ -60,7 +61,7 @@ def _competitor_status(session, competitor_id: int) -> dict:
         if log.channel not in last_runs:
             last_runs[log.channel] = {
                 "status": log.status,
-                "created_at_str": log.created_at.strftime("%Y-%m-%d %H:%M"),
+                "created_at_str": to_eastern(log.created_at),
             }
     return {"has_snapshots": has_snapshots, "last_runs": last_runs}
 
@@ -383,7 +384,7 @@ def competitors_edit(request: Request, competitor_id: int):
             if log.channel not in last_runs:
                 last_runs[log.channel] = {
                     "status": log.status,
-                    "created_at_str": log.created_at.strftime("%Y-%m-%d %H:%M"),
+                    "created_at_str": to_eastern(log.created_at),
                 }
         last_refreshed = get_last_refreshed(session)
         competitor_data = {

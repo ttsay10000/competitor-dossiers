@@ -5,6 +5,7 @@ from pathlib import Path
 from markupsafe import Markup
 
 from fastapi import FastAPI
+from .utils import to_eastern
 from fastapi.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
@@ -34,7 +35,7 @@ def _log_playwright_status():
 # Paths relative to this file so they work on Render regardless of cwd
 _app_dir = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(_app_dir / "templates"))
-templates.env.globals["utcnow"] = lambda: datetime.now(timezone.utc)
+templates.env.globals["etnow"] = lambda: to_eastern(datetime.now(timezone.utc))
 
 
 def _exec_summary_display_filter(text):
@@ -46,6 +47,7 @@ def _exec_summary_display_filter(text):
 
 
 templates.env.filters["exec_summary_display"] = _exec_summary_display_filter
+templates.env.filters["to_eastern"] = lambda dt: to_eastern(dt) if dt else ""
 app.state.templates = templates
 
 app.include_router(competitors.router)

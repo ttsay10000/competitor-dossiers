@@ -1,9 +1,10 @@
 import json
 import re
 import gzip
+import time
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse, urlencode, urlunparse, parse_qs
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 from bs4 import BeautifulSoup
@@ -96,6 +97,7 @@ def is_property_like(url: str) -> bool:
     patterns = [
         r"/properties/",   # /properties/slug not /properties
         r"/property/",     # /property/slug not /property
+        r"/unit/[0-9]+",   # e.g. Vacasa: .../unit/12345 (numeric ID only; exclude /unit/faq, etc.)
         r"/portfolio/.+",  # e.g. Lark: .../portfolio/property-slug (excludes /portfolio and /portfolio/)
         r"/locations/",
         r"/apartments/",
@@ -699,6 +701,128 @@ def normalize_properties(properties: list[dict[str, Any]]) -> list[dict[str, Any
     return normalized
 
 
+def _extract_location_from_json_ld(html: str) -> Optional[Dict[str, str]]:
+    """
+    Parse script type="application/ld+json" and return city, state, market from
+    Place or Product with address (addressLocality, addressRegion).
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    for script in soup.find_all("script", type=re.compile(r"application/ld\+json", re.I)):
+        raw = (script.string or "").strip()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+        if isinstance(data, dict):
+            data = [data]
+        if not isinstance(data, list):
+            continue
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            kind = (item.get("@type") or "").strip()
+            if isinstance(kind, list):
+                kind = (kind[0] or "").strip()
+            if kind and "Place" not in kind and "Product" not in kind and "Accommodation" not in kind:
+                continue
+            addr = item.get("address")
+            if not isinstance(addr, dict):
+                continue
+            locality = (addr.get("addressLocality") or "").strip()
+            region = (addr.get("addressRegion") or "").strip()
+            if not region and not locality:
+                continue
+            state = _US_STATE_ABBREV.get(region.lower(), region) if len(region) == 2 else region
+            city = locality or None
+            market = f"{city}, {region}" if (city and region) else (state or region or "")
+            return {"city": city or "", "state": state or "", "market": market or ""}
+    return None
+
+
+def _extract_location_from_text(html: str, max_chars: int = 8000) -> Optional[Dict[str, str]]:
+    """Look for 'City, ST' or 'City, State' in visible text; return city, state, market."""
+    text = BeautifulSoup(html, "html.parser").get_text(separator=" ", strip=True)
+    if len(text) > max_chars:
+        text = text[:max_chars]
+    match = re.search(_RE_CITY_ST, text)
+    if not match:
+        return None
+    city = (match.group(1) or "").strip()
+    state_part = (match.group(2) or "").strip()
+    if len(state_part) == 2:
+        state = _US_STATE_ABBREV.get(state_part.lower(), state_part)
+    else:
+        state = state_part
+    market = f"{city}, {state_part}" if city and state_part else (state or "")
+    return {"city": city or "", "state": state or "", "market": market or ""}
+
+
+def extract_location_from_property_page(html: str, page_url: str = "") -> Optional[Dict[str, Any]]:
+    """
+    Extract location (city, state, market) from a single property page HTML.
+    Tries JSON-LD first, then regex for 'City, ST' in text. Returns dict with
+    city, state, market (or None if nothing found).
+    """
+    out = _extract_location_from_json_ld(html)
+    if out and (out.get("state") or out.get("market")):
+        return out
+    out = _extract_location_from_text(html)
+    if out and (out.get("state") or out.get("market")):
+        return out
+    return None
+
+
+def enrich_sitemap_properties_with_locations(
+    properties: List[dict[str, Any]],
+    max_fetches: int = 300,
+    delay_sec: float = 0.3,
+    fetch_fn: Optional[Callable[[str], Any]] = None,
+) -> List[dict[str, Any]]:
+    """
+    For sitemap-sourced properties that have url but no market/state/city, fetch
+    each property page (up to max_fetches), extract location from JSON-LD or
+    page text, and merge back. Returns a new list with location fields filled where
+    we successfully extracted.
+    """
+    if not properties or max_fetches <= 0:
+        return list(properties)
+    fetch_fn = fetch_fn or (lambda u: fetch_url(u, timeout=15))
+    need_enrich = [
+        (i, p) for i, p in enumerate(properties)
+        if (p.get("url") and not (p.get("market") or (p.get("state") or "").strip()))
+    ]
+    if not need_enrich:
+        return list(properties)
+    result = [dict(p) for p in properties]
+    fetched = 0
+    for i, prop in need_enrich:
+        if fetched >= max_fetches:
+            break
+        url = (prop.get("url") or "").strip()
+        if not url:
+            continue
+        try:
+            resp = fetch_fn(url)
+            if getattr(resp, "status_code", 0) != 200:
+                continue
+            text = getattr(resp, "text", None) or getattr(resp, "content", "") or ""
+            if isinstance(text, bytes):
+                text = text.decode("utf-8", errors="replace")
+            loc = extract_location_from_property_page(text, url)
+            if loc and (loc.get("state") or loc.get("market")):
+                result[i]["state"] = (loc.get("state") or "").strip() or None
+                result[i]["city"] = (loc.get("city") or "").strip() or None
+                result[i]["market"] = (loc.get("market") or "").strip() or None
+            fetched += 1
+        except Exception:
+            continue
+        if delay_sec > 0:
+            time.sleep(delay_sec)
+    return result
+
+
 def _get_by_path(data: Any, path: str) -> Any:
     """Get nested key, e.g. 'data.items' -> data['data']['items']."""
     if not path:
@@ -800,101 +924,105 @@ def _parse_blueground_slug_city_state(slug: str) -> tuple[str, str]:
     return (city, state)
 
 
-def _fetch_blueground_destinations(source_url: str) -> tuple[str, str, List[dict[str, Any]]]:
+def _fetch_blueground_destinations(
+    source_url: str, extra_options: Optional[Dict[str, Any]] = None
+) -> tuple[str, str, List[dict[str, Any]]]:
     """
-    Blueground-specific: destinations page -> click each USA destination -> Search -> scrape units.
-    North America / USA only; excludes Canada and non-USA.
+    Blueground-specific: destinations page -> each North America USA destination page
+    (/m/furnished-apartments/acton-ma-usa) has property links (/p/furnished-apartments/bos-XXX).
+    Scrape the destination page directly for those links (no Search click needed).
+    extra_options.max_destinations: optional limit for testing (omit for full run of all USA destinations).
     Returns (raw_html, raw_hash, properties).
     """
-    import time
-    from ..config import settings
-    if not settings.playwright_enabled:
-        raise RuntimeError("Blueground destinations strategy requires PLAYWRIGHT_ENABLED=true")
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        raise RuntimeError("playwright is not installed")
-    from .http import CHROMIUM_LAUNCH_ARGS
+    opts = extra_options or {}
+    max_dest = opts.get("max_destinations")  # None = all; set to 5-10 for testing
 
     parsed = urlparse(source_url)
     base = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else source_url
     properties: List[dict[str, Any]] = []
     raw_html_parts: List[str] = []
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=CHROMIUM_LAUNCH_ARGS)
-        page = browser.new_page()
-        page.goto(source_url, wait_until="networkidle", timeout=60000)
-        time.sleep(2)
-        html = page.content()
-        raw_html_parts.append(html)
+    # Step 1: get USA destination links from /destinations (HTTP works)
+    fetched = fetch_url(source_url)
+    if fetched.status_code != 200 or not fetched.text:
+        raise RuntimeError(f"Blueground destinations fetch failed: {fetched.status_code}")
+    raw_html_parts.append(fetched.text)
+    soup = BeautifulSoup(fetched.text, "html.parser")
+    usa_links: List[tuple[str, str, str]] = []
+    seen_slugs: set[str] = set()
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if "/m/furnished-apartments/" not in href:
+            continue
+        match = re.search(r"/m/furnished-apartments/([a-z0-9-]+)", href, re.IGNORECASE)
+        if not match:
+            continue
+        slug = match.group(1).lower()
+        if not slug.endswith("-usa"):
+            continue
+        if "canada" in slug or slug.endswith("-on") or slug.endswith("-bc") or slug.endswith("-ab"):
+            continue
+        if slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
+        full_url = urljoin(base, href)
+        city, state = _parse_blueground_slug_city_state(slug)
+        usa_links.append((full_url, city, state))
 
-        soup = BeautifulSoup(html, "html.parser")
-        usa_links: List[tuple[str, str, str]] = []
-        for a in soup.find_all("a", href=True):
+    if max_dest is not None:
+        usa_links = usa_links[:max_dest]
+        print(f"[asset] Blueground: using batch of {max_dest} destinations (set max_destinations=None for full run)", flush=True)
+
+    print(f"[asset] Blueground: found {len(usa_links)} North America USA destinations to scrape", flush=True)
+    seen_units: set[tuple[str, str]] = set()
+
+    def _extract_properties_from_dest_page(html: str, dest_url: str, city: str, state: str) -> List[dict[str, Any]]:
+        """Extract property links from destination page. Links to /p/furnished-apartments/ are individual apartments."""
+        s = BeautifulSoup(html, "html.parser")
+        out: List[dict[str, Any]] = []
+        for a in s.find_all("a", href=re.compile(r"/p/furnished-apartments/")):
             href = (a.get("href") or "").strip()
-            if "/m/furnished-apartments/" not in href:
+            prop_url = urljoin(base, href)
+            raw = (a.get("title") or a.get_text() or "").strip()
+            name = None
+            m = re.search(r"(#\d+[A-Z]?\s*•\s*[^\n]+)", raw)
+            if m:
+                name = m.group(1).strip().rstrip("•").strip()
+            elif raw and len(raw) >= 5 and "Add dates" not in raw and "See all" not in raw and "Explore" not in raw:
+                name = raw
+            if not name or len(name) < 5:
                 continue
-            match = re.search(r"/m/furnished-apartments/([a-z0-9-]+)", href, re.IGNORECASE)
-            if not match:
+            key = (name[:100], city, state)
+            if key in seen_units:
                 continue
-            slug = match.group(1).lower()
-            if not slug.endswith("-usa"):
-                continue
-            if "canada" in slug or slug.endswith("-on") or slug.endswith("-bc") or slug.endswith("-ab"):
-                continue
-            full_url = urljoin(base, href)
-            city, state = _parse_blueground_slug_city_state(slug)
-            usa_links.append((full_url, city, state))
+            seen_units.add(key)
+            market = f"{city}, {state}" if city and state else None
+            out.append({
+                "url": prop_url,
+                "name": name,
+                "market": market,
+                "status": None,
+                "state": state or None,
+                "city": city or None,
+            })
+        return out
 
-        seen_units: set[tuple[str, str]] = set()
-        for dest_url, city, state in usa_links[:50]:
-            try:
-                page.goto(dest_url, wait_until="networkidle", timeout=30000)
-                time.sleep(1.5)
-                search_selectors = [
-                    "button:has-text('Search')",
-                    "button:has-text('Add dates')",
-                    "a:has-text('Search')",
-                    "[data-testid*='search']",
-                    "button[type='submit']",
-                ]
-                clicked = False
-                for sel in search_selectors:
-                    try:
-                        loc = page.locator(sel).first
-                        if loc.is_visible():
-                            loc.click()
-                            time.sleep(2.5)
-                            clicked = True
-                            break
-                    except Exception:
-                        continue
-                dest_html = page.content()
-                raw_html_parts.append(dest_html)
-                dest_soup = BeautifulSoup(dest_html, "html.parser")
-                for span in dest_soup.find_all("span", class_=lambda c: c and "listing-card_name" in (c if isinstance(c, str) else " ".join(c))):
-                    name = span.get("title") or (span.get_text() or "").strip()
-                    if not name or len(name) < 3:
-                        continue
-                    key = (name[:100], city, state)
-                    if key in seen_units:
-                        continue
-                    seen_units.add(key)
-                    market = f"{city}, {state}" if city and state else None
-                    properties.append({
-                        "url": dest_url,
-                        "name": name,
-                        "market": market,
-                        "status": None,
-                        "state": state or None,
-                        "city": city or None,
-                    })
-            except Exception:
+    for i, (dest_url, city, state) in enumerate(usa_links):
+        print(f"[asset] Blueground: destination {i + 1}/{len(usa_links)} — {city}, {state} ({dest_url})", flush=True)
+        try:
+            dest_fetched = fetch_url(dest_url)
+            if dest_fetched.status_code != 200 or not dest_fetched.text:
+                print(f"[asset] Blueground:   HTTP {dest_fetched.status_code}, skipping", flush=True)
                 continue
+            raw_html_parts.append(dest_fetched.text)
+            props = _extract_properties_from_dest_page(dest_fetched.text, dest_url, city, state)
+            properties.extend(props)
+            print(f"[asset] Blueground:   found {len(props)} properties (total so far: {len(properties)})", flush=True)
+        except Exception as e:
+            print(f"[asset] Blueground:   error: {e}", flush=True)
+            continue
 
-        browser.close()
-
+    print(f"[asset] Blueground: collected {len(properties)} properties from {len(usa_links)} destinations", flush=True)
     import hashlib
     combined = "\n".join(raw_html_parts)
     raw_hash = hashlib.sha256(combined.encode("utf-8")).hexdigest()
@@ -975,13 +1103,20 @@ def collect_asset_snapshot(
 
             # Only return sitemap result when we found property-like URLs so caller can fall back to HTML.
             if property_urls:
+                props = normalize_properties(
+                    [{"url": url, "name": url} for url in sorted(property_urls)]
+                )
+                if opts.get("enrich_sitemap_locations") and props:
+                    max_fetches = opts.get("enrich_sitemap_max_fetches", 300)
+                    delay = opts.get("enrich_sitemap_delay_sec", 0.3)
+                    props = enrich_sitemap_properties_with_locations(
+                        props, max_fetches=max_fetches, delay_sec=delay
+                    )
                 return {
                     "source_url": root_sitemap_url,
                     "raw_content": None,
                     "raw_hash": None,
-                    "properties": normalize_properties(
-                        [{"url": url, "name": url} for url in sorted(property_urls)]
-                    ),
+                    "properties": props,
                 }
 
         return None
@@ -1078,21 +1213,14 @@ def collect_asset_snapshot(
     def run_one_strategy(strategy: str) -> dict[str, Any]:
         """Run a single strategy by name; returns snapshot dict. Used for both chain and single-strategy."""
         if strategy == "blueground_destinations":
-            if _playwright_available() and "theblueground.com" in source_url.lower():
-                raw_html, raw_hash, properties = _fetch_blueground_destinations(source_url)
-                return {
-                    "source_url": source_url,
-                    "raw_content": raw_html,
-                    "raw_hash": raw_hash,
-                    "properties": normalize_properties(properties),
-                    "note": "blueground_destinations",
-                }
-            # Same Playwright as Lark/AvantStay; if we reach here, Playwright was disabled or unavailable
-            print(
-                "[asset] Blueground: Playwright not available for blueground_destinations; "
-                "using HTML fallback (expect 0 or few properties from /destinations)."
-            )
-            return _fetch_without_browser()
+            raw_html, raw_hash, properties = _fetch_blueground_destinations(source_url, opts)
+            return {
+                "source_url": source_url,
+                "raw_content": raw_html,
+                "raw_hash": raw_hash,
+                "properties": normalize_properties(properties),
+                "note": "blueground_destinations",
+            }
         if strategy == "api":
             api_cfg = opts.get("api") or {}
             properties = fetch_from_api(api_cfg, source_url)

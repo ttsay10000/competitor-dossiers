@@ -281,17 +281,27 @@ def is_location_treated_as_other(loc: str) -> bool:
     return (loc or "").strip() in LOCATIONS_TREATED_AS_OTHER
 
 
+def _normalize_state_for_display(state: str) -> str:
+    """Convert 2-letter US state abbrev to full name for consistent grouping across all competitors."""
+    s = (state or "").strip()
+    if len(s) == 2 and s.lower() in US_STATE_ABBREV:
+        return US_STATE_ABBREV[s.lower()]
+    return s
+
+
 def infer_location_for_property(prop: dict) -> str:
     """
     Derive a location label (prefer state) for grouping so dossier can show counts by state/city.
     Prefers LLM-set state/city; then market/location; else parses URL for city-state or path segment.
+    Normalizes state abbrevs (VA, CA) to full names (Virginia, California) for consistent consolidation.
     """
     state = (prop.get("state") or "").strip()
     city = (prop.get("city") or "").strip()
     if state:
+        state_display = _normalize_state_for_display(state)
         if city:
-            return f"{state} - {city}"
-        return state
+            return f"{state_display} - {city}"
+        return state_display
 
     loc = (prop.get("market") or prop.get("location") or prop.get("region") or "").strip()
     if loc:

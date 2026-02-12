@@ -386,12 +386,13 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         .order_by(Snapshot.captured_at.desc())
         .first()
     )
-    # Prefer most recent talent snapshot that has jobs (Lark/AvantStay often get 0 jobs on cron without Playwright).
+    # Prefer most recent talent snapshot that has jobs (Lark/AvantStay/Blueground often get 0 jobs on cron without Playwright).
+    # Look beyond 20 so we don't hide a good snapshot when many recent runs persisted empty (e.g. JS careers page returning 0 jobs).
     talent_candidates = (
         session.query(Snapshot)
         .filter(Snapshot.competitor_id == competitor_id, Snapshot.channel == "talent")
         .order_by(Snapshot.captured_at.desc())
-        .limit(20)
+        .limit(100)
         .all()
     )
     latest_talent = None

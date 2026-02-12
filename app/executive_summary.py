@@ -232,23 +232,16 @@ def _build_context_text(context: Dict[str, Any]) -> str:
     else:
         parts.append("Removed properties: 0.")
 
-    # 2. New roles posted / roles removed + current role mix (for significance)
+    # 2. Talent: signals only (deltas + events). Do not send full snapshot breakdown so exec summary
+    # reflects stable signals (new/removed roles, senior hires, hiring surge) rather than whatever
+    # snapshot was chosen this load (which can override when talent collector returns 0 jobs).
     jobs_added = context.get("jobs_added_since_baseline") or 0
     jobs_removed = context.get("jobs_removed_since_baseline") or 0
     parts.append(f"New roles posted since baseline: {jobs_added}.")
     parts.append(f"Roles removed since baseline: {jobs_removed}.")
-    jobs_bf = context.get("jobs_by_function") or []
-    jobs_prop = context.get("jobs_by_function_property") or []
-    if jobs_bf or jobs_prop:
-        role_parts = []
-        for row in (jobs_bf + jobs_prop)[:12]:
-            fn = row.get("function") or "Other"
-            total = row.get("total") or 0
-            senior = row.get("senior") or 0
-            s = f"{fn}: {total}" + (f" ({senior} senior)" if senior else "")
-            role_parts.append(s)
-        if role_parts:
-            parts.append("Current open roles by function (use to interpret significance of new/removed counts): " + "; ".join(role_parts))
+    talent_jobs = context.get("talent_jobs") or []
+    total_roles = len(talent_jobs)
+    parts.append(f"Current open roles (latest count we have): {total_roles}.")
 
     # 3. Recent news: feed top_news + press_90d so LLM sees full picture (new markets, expansion coverage)
     top_news = context.get("top_news") or []
@@ -332,7 +325,7 @@ PRIORITY: Lead with and prioritize (1) news/press, (2) asset/footprint changes, 
 
 Do NOT restate every datapoint. Only surface changes that materially alter competitive dynamics (market entry/exit, meaningful inventory shifts, pricing/fees moves, leadership or key functional hiring, major product/website positioning changes, digital footprint changes, notable partnerships/vendor stack changes, regulatory/legal developments, or repeated patterns over time). If an item is cosmetic or one-off and doesn't matter, drop it. Output must be clean, bullet-based, and decisive.
 
-Return in this exact structure. Do NOT start with "EXECUTIVE SUMMARY" or any top-level header—the page already has a header. Do NOT use a blank line before each section header; use only a single newline between sections.
+Return in this exact structure. Do NOT start with "EXECUTIVE SUMMARY" or any top-level header—the page already has a header. Use only single newlines between bullets and sections—no blank lines between bullets, no blank line before section headers.
 
 • (5–8 bullets): most important shifts for this competitor, why it matters, and overall risk/opportunity level (Low/Med/High). Weave in concrete changes, signals, and intent where relevant—no separate WHAT CHANGED or WHAT IT SIGNALS sections.
 
@@ -414,8 +407,53 @@ FORMATTING: Output with clear line breaks for display. Put the "Recent updates" 
         choice = resp.choices[0] if resp.choices else None
         if choice and choice.message and choice.message.content:
             raw = choice.message.content.strip()
+            polished = polish_rollup_summary(raw)
+            if polished:
+                return polished
             cleaned = clean_rollup_formatting(raw)
             return cleaned if cleaned else raw
+    except Exception:
+        pass
+    return None
+
+
+def polish_rollup_summary(text: str) -> Optional[str]:
+    """
+    Final LLM read-through: take the draft rollup and produce a clean version with a strong
+    top-line paragraph and one strong bullet per competitor (changes since last refresh),
+    in the same style as the executive summary. Returns None if LLM unavailable or fails.
+    """
+    if not text or not text.strip():
+        return text
+    from .config import get_openai_client
+    client = get_openai_client()
+    if not client:
+        return None
+    system = """You are an AI Chief of Staff for Kasa's exec team. You will receive a "Recent updates" rollup for the main competitors page. Your job is to produce one clean, final version—the same two-part structure, but with stronger wording and clear "changes since last refresh" framing.
+
+Output exactly two parts:
+
+1. **Recent updates:** — A short top-line paragraph (2–3 sentences) that synthesizes what is happening across competitors and the single most important takeaway or insight for Kasa. Be direct and executive-ready.
+
+2. **Per-competitor bullets:** — One bullet per competitor, each on its own line. Format each line as: " - **Competitor Name:** [1–2 sentence summary of changes since last refresh and why it matters for Kasa.]"
+- Use the exact competitor names that appear in the input. Do not add or remove competitors; keep the same order.
+- Write strong, concrete bullets: specific moves (hires, partnerships, openings, exits), recommended action, and implication for Kasa. No fluff or generic strategy talk.
+
+FORMATTING: Put "**Recent updates:**" and its paragraph first, then a blank line, then "**Per-competitor bullets:**" on its own line, then exactly one line per competitor bullet. Use " - **Name:**" for each bullet. Output only the recap, nothing else."""
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": text.strip()},
+            ],
+            max_tokens=1000,
+            temperature=0.2,
+        )
+        choice = resp.choices[0] if resp.choices else None
+        if choice and choice.message and choice.message.content:
+            return choice.message.content.strip()
     except Exception:
         pass
     return None
@@ -517,8 +555,8 @@ RECOMMENDED_ACTION_CSS_COLOR = "#0d6efd"
 def format_executive_summary_for_display(text: Optional[str]) -> Optional[str]:
     """
     Escape summary text, bold section headers, and highlight RECOMMENDED ACTION with color.
-    Strips a leading EXECUTIVE SUMMARY line, normalizes dashes to bullets (•), and removes
-    blank lines that appear immediately before section headers.
+    Strips a leading EXECUTIVE SUMMARY line, normalizes dashes to bullets (•), removes
+    blank lines before section headers, and collapses multiple consecutive blank lines to one.
     """
     if not text or not isinstance(text, str):
         return text
@@ -527,6 +565,20 @@ def format_executive_summary_for_display(text: Optional[str]) -> Optional[str]:
     # Strip leading "EXECUTIVE SUMMARY" or "EXECUTIVE SUMMARY:" line so the page header is the only title.
     while lines and lines[0].strip().upper() in ("EXECUTIVE SUMMARY", "EXECUTIVE SUMMARY:"):
         lines.pop(0)
+    # Collapse multiple consecutive blank lines to a single blank line (reduces spacing between bullets).
+    collapsed = []
+    prev_blank = False
+    for line in lines:
+        stripped = line.strip()
+        is_blank = stripped == ""
+        if is_blank:
+            if prev_blank:
+                continue  # skip extra blank lines
+            prev_blank = True
+        else:
+            prev_blank = False
+        collapsed.append(line)
+    lines = collapsed
     # Remove blank line immediately before a section header to tighten spacing.
     section_headers_upper = {h.upper() for h in _EXEC_SUMMARY_SECTION_HEADERS}
     tightened = []

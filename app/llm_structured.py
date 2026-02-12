@@ -153,64 +153,75 @@ def enrich_properties_with_llm(
     if not client:
         return working
 
-    # Keep batch small for speed; skip page text when property count is large to avoid huge context.
-    _ENRICH_BATCH_SIZE = 50
+    # Process in batches to handle 1000s of properties; raw page text only for first batch when count is small.
+    _ENRICH_BATCH_SIZE = 150
     _ENRICH_SKIP_RAW_CONTENT_ABOVE = 250
     use_raw = bool(raw_content and raw_content.strip() and len(working) <= _ENRICH_SKIP_RAW_CONTENT_ABOVE)
 
-    batch = working[:_ENRICH_BATCH_SIZE]
-    lines = []
-    for i, p in enumerate(batch):
-        url = (p.get("url") or "").strip()
-        name = (p.get("name") or "").strip()
-        market = (p.get("market") or "").strip()
-        lines.append(f"{i}: url={url!r} name={name!r} market={market!r}")
+    by_index: dict[int, dict] = {}
+    batch_ranges = [
+        (start, min(start + _ENRICH_BATCH_SIZE, len(working)))
+        for start in range(0, len(working), _ENRICH_BATCH_SIZE)
+    ]
 
-    if use_raw:
-        # LLM reads raw page and assigns state (and optional city) from page context
-        page_text = _html_to_text_for_enricher(raw_content.strip())
-        system = """You are a data enricher for US real estate/hospitality property lists. Locations will be summarized by state only.
+    for batch_start, batch_end in batch_ranges:
+        batch = working[batch_start:batch_end]
+        lines = []
+        for i, p in enumerate(batch):
+            url = (p.get("url") or "").strip()
+            name = (p.get("name") or "").strip()
+            market = (p.get("market") or "").strip()
+            lines.append(f"{i}: url={url!r} name={name!r} market={market!r}")
+
+        if use_raw and batch_start == 0:
+            # LLM reads raw page and assigns state (and optional city) from page context (first batch only)
+            page_text = _html_to_text_for_enricher(raw_content.strip())
+            system = """You are a data enricher for US real estate/hospitality property lists. Locations will be summarized by state only.
 Given the page text below and a list of properties (index, url, name, market), assign a state to each property using only information from the page text (e.g. cards, addresses, subheadings).
 Output a JSON array with one object per property. Each object must have: "index" (integer), "state" (full US state name only, e.g. "Texas" or "California"—no city in state field), "city" (optional, omit if unknown).
 Map US regions and cities to the correct state (e.g. Central Oregon → Oregon, Emerald Coast → Florida, Coachella Valley → California). Do NOT put US cities or regions into "Other". Only use "Other" for non-property pages (career site, privacy, legal), non-US, or genuinely unclear. Return only the JSON array, no markdown."""
-        user = f"Page text:\n\n{page_text}\n\nProperties (assign state from page text above; use Other if not clearly in a US state):\n" + "\n".join(lines)
-    else:
-        # Infer from url/name/market only (no page context)
-        system = """You are a data enricher for US real estate/hospitality property lists. Locations will be summarized by state only.
+            user = f"Page text:\n\n{page_text}\n\nProperties (assign state from page text above; use Other if not clearly in a US state):\n" + "\n".join(lines)
+        else:
+            # Infer from url/name/market only (no page context)
+            system = """You are a data enricher for US real estate/hospitality property lists. Locations will be summarized by state only.
 Given a list of properties (index, url, name, market), output a JSON array with one object per property.
 Each object must have: "index" (integer), "state" (US state full name only, e.g. "Texas"—no city), "city" (optional, omit if unknown).
 Map US regions and cities to the correct state (e.g. Central Oregon → Oregon, Emerald Coast → Florida, Coachella Valley → California). Do NOT put US cities or regions into "Other". Only use "Other" for career site, privacy, non-property URL, non-US, or genuinely unclear. Return only the JSON array, no markdown."""
-        user = "Properties:\n" + "\n".join(lines)
+            user = "Properties:\n" + "\n".join(lines)
 
-    try:
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            max_tokens=4000,
-            temperature=0.1,
-        )
-        content = (resp.choices[0].message.content or "").strip()
-        if not content:
-            return working
-        data = _parse_json_response(content)
-        if not isinstance(data, list):
-            return working
-        by_index = {int(item["index"]): item for item in data if isinstance(item, dict) and "index" in item}
-        result = []
-        for i, p in enumerate(working):
-            out = dict(p)
-            if i in by_index:
-                # Only fill state/city when missing (don't overwrite URL-derived or collector-set values with "Other")
-                enricher_state = (by_index[i].get("state") or "Other").strip() or "Other"
-                enricher_city = (by_index[i].get("city") or "").strip() or None
-                if not (out.get("state") or "").strip():
-                    out["state"] = enricher_state
-                if enricher_city and not (out.get("city") or "").strip():
-                    out["city"] = enricher_city
-            result.append(out)
-        return result
-    except Exception:
-        return working
+        try:
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                max_tokens=4000,
+                temperature=0.1,
+            )
+            content = (resp.choices[0].message.content or "").strip()
+            if not content:
+                continue
+            data = _parse_json_response(content)
+            if not isinstance(data, list):
+                continue
+            for item in data:
+                if isinstance(item, dict) and "index" in item:
+                    global_idx = batch_start + int(item["index"])
+                    by_index[global_idx] = item
+        except Exception:
+            continue
+
+    result = []
+    for i, p in enumerate(working):
+        out = dict(p)
+        if i in by_index:
+            # Only fill state/city when missing (don't overwrite URL-derived or collector-set values with "Other")
+            enricher_state = (by_index[i].get("state") or "Other").strip() or "Other"
+            enricher_city = (by_index[i].get("city") or "").strip() or None
+            if not (out.get("state") or "").strip():
+                out["state"] = enricher_state
+            if enricher_city and not (out.get("city") or "").strip():
+                out["city"] = enricher_city
+        result.append(out)
+    return result
 
 
 # Max properties to send in one LLM call for bucket-by-state (single call is fast; above this fall back to batches).

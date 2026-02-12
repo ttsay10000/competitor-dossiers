@@ -48,3 +48,8 @@ def test_infer_location_for_property_avantstay_url():
     # When state is already set, prefer it
     prop4 = {"url": "https://avantstay.com/221284/coachella-valley/firefly", "state": "Nevada"}
     assert infer_location_for_property(prop4) == "Nevada"
+    # State abbrevs normalized to full name for consistent consolidation (Blueground, etc.)
+    prop5 = {"state": "VA", "city": "Alexandria"}
+    assert infer_location_for_property(prop5) == "Virginia - Alexandria"
+    prop6 = {"state": "CA", "city": "Alameda"}
+    assert infer_location_for_property(prop6) == "California - Alameda"

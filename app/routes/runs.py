@@ -4,6 +4,7 @@ from fastapi import APIRouter, Request
 
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, RunLog
+from ..utils import to_eastern
 
 router = APIRouter()
 
@@ -39,7 +40,7 @@ def runs(
         logs_rows = query.limit(200).all()
         logs = [
             {
-                "created_at_str": log.created_at.strftime("%Y-%m-%d %H:%M"),
+                "created_at_str": to_eastern(log.created_at),
                 "competitor_id": log.competitor_id,
                 "channel": log.channel,
                 "status": log.status,

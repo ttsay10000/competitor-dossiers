@@ -399,11 +399,12 @@ def run_talent(competitor_name: Optional[str] = None) -> None:
 
             existing_job_count = 0
             if not current_jobs:
+                # Match dossier limit so we don't persist empty when a good snapshot is just beyond the window (e.g. Blueground JS careers).
                 for s in (
                     session.query(Snapshot)
                     .filter(Snapshot.competitor_id == competitor.id, Snapshot.channel == "talent")
                     .order_by(Snapshot.captured_at.desc())
-                    .limit(20)
+                    .limit(100)
                     .all()
                 ):
                     jobs_in = (s.structured_json or {}).get("jobs", [])
@@ -1308,6 +1309,7 @@ def run_social(competitor_name: Optional[str] = None) -> None:
             log_event("competitor_not_found", competitor_filter=competitor_name)
             return
         bridge = getattr(settings, "twitter_rss_bridge_base", None) or None
+        linkedin_state = getattr(settings, "linkedin_storage_state_path", None) or None
         for competitor in competitors:
             endpoints = [ep for ep in competitor.source_endpoints if ep.channel == "social"]
             if not endpoints:
@@ -1323,7 +1325,12 @@ def run_social(competitor_name: Optional[str] = None) -> None:
                 if not platform or platform not in ("twitter", "linkedin"):
                     platform = "linkedin" if "linkedin" in (ep.url or "").lower() else "twitter"
                 try:
-                    feed = collect_social_feed(ep.url, platform, twitter_rss_bridge_base=bridge)
+                    feed = collect_social_feed(
+                        ep.url,
+                        platform,
+                        twitter_rss_bridge_base=bridge,
+                        linkedin_storage_state_path=linkedin_state,
+                    )
                 except Exception as exc:
                     log_run(session, competitor.id, "social", "error", message=str(exc), extra={"url": ep.url})
                     continue

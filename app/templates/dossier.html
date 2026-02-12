@@ -254,6 +254,9 @@
       <p class="meta" style="margin-bottom: 4px;">Roles by function. Business & strategy vs property operations.</p>
       {% if talent_jobs|length %}
         <p class="staffing-total">{{ talent_jobs|length }} total role{{ 's' if talent_jobs|length != 1 else '' }}.</p>
+        {% if talent_jobs|length <= 2 %}
+        <p class="meta" style="margin: 6px 0 12px 0; padding: 8px 10px; background: #fef3cd; border-radius: 6px; border-left: 3px solid #856404;">Unusually low count—in most cases careers pages have more openings. The careers page may have failed to load (e.g. JavaScript/Playwright required). Re-run the talent collector with Playwright enabled if needed.</p>
+        {% endif %}
         <div style="margin-bottom: 12px;">
           <strong class="card-section-title">Business & strategy</strong>
           <p class="staffing-body muted" style="margin: 2px 0 6px 0;">Market managers, strategy, growth, product, engineering, etc.</p>
@@ -299,6 +302,7 @@
         {% endif %}
       {% else %}
         <p class="meta" style="margin: 0;">No talent data yet. Run the talent collector to populate.</p>
+        <p class="meta" style="margin: 8px 0 0 0; padding: 8px 10px; background: #f8d7da; border-radius: 6px; border-left: 3px solid #721c24;">Zero roles usually means the careers page didn’t load (e.g. JavaScript/Playwright required). Re-run the talent collector with Playwright enabled.</p>
       {% endif %}
     </div>
 
@@ -307,18 +311,16 @@
       <strong>Website changes / digital footprint</strong>
       <p class="meta" style="margin: 2px 0 12px 0;">Homepage, product page, or coming-soon changes that may signal strategy or pipeline shifts.</p>
       {% if digital_footprint_events|length %}
-        {% for event in digital_footprint_events %}
-        <div class="card sev-{{ event.severity }}" style="margin-top: 8px;">
-          <div><strong>{{ event.title }}</strong></div>
-          <div class="meta">{{ event.occurred_at_str or event.detected_at_str }} · {{ event.type }}</div>
-          {% if event.why_it_matters %}
-            <div class="meta">Why it matters: {{ event.why_it_matters }}</div>
-          {% endif %}
-          {% if event.evidence_json and event.evidence_json.get('source_url') %}
-            <a href="{{ event.evidence_json.source_url }}" target="_blank" rel="noopener">View page</a>
-          {% endif %}
-        </div>
-        {% endfor %}
+        <ul style="margin: 0; padding-left: 20px;">
+          {% for event in digital_footprint_events %}
+          <li style="margin-bottom: 6px;">
+            <span class="meta">{{ event.occurred_at_str or event.detected_at_str }}</span> — {{ event.title }}
+            {% if event.evidence_json and event.evidence_json.get('source_url') %}
+              <a href="{{ event.evidence_json.source_url }}" target="_blank" rel="noopener">View page</a>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
       {% else %}
         <div class="meta">No website or digital footprint changes in the past 90 days.</div>
       {% endif %}

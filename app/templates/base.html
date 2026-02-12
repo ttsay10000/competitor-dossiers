@@ -186,7 +186,7 @@
     <div class="header-left">
       <strong>Competitor Signals</strong>
       <span class="meta" style="display: block; margin-top: 4px;">
-        Data last refreshed: {% if last_refreshed %}{{ last_refreshed.strftime('%Y-%m-%d %H:%M') }} UTC{% else %}—{% endif %}
+        Data last refreshed: {% if last_refreshed %}{{ last_refreshed | to_eastern }}{% else %}—{% endif %}
       </span>
     </div>
     <nav style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
@@ -199,7 +199,7 @@
     {% block content %}{% endblock %}
   </main>
   <footer class="meta" style="text-align: center; padding: 16px; margin-top: 24px; border-top: 1px solid var(--border);">
-    Page generated: {{ utcnow().strftime('%Y-%m-%d %H:%M') }} UTC
+    Page generated: {{ etnow() }}
   </footer>
 </body>
 </html>

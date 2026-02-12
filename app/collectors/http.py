@@ -76,6 +76,76 @@ def fetch_url_js(url: str) -> FetchResult:
     )
 
 
+def fetch_url_js_wait_for_spa(
+    url: str,
+    wait_after_load_sec: float = 8.0,
+    wait_until: str = "domcontentloaded",
+) -> FetchResult:
+    """Load URL with Playwright (domcontentloaded for speed), then wait so SPA can fetch data and render.
+    Use for JS-heavy job boards (e.g. Gem) that have no public API and render jobs client-side."""
+    from ..config import settings
+    if not settings.playwright_enabled:
+        raise RuntimeError("playwright is disabled; set PLAYWRIGHT_ENABLED=true")
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise RuntimeError("playwright is not installed")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=CHROMIUM_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(url, wait_until=wait_until, timeout=30000)
+        if wait_after_load_sec > 0:
+            time.sleep(wait_after_load_sec)
+        text = page.content()
+        browser.close()
+
+    raw_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return FetchResult(
+        url=url,
+        status_code=200,
+        content_type="text/html",
+        text=text,
+        raw_hash=raw_hash,
+    )
+
+
+def fetch_url_js_scroll_halfway(url: str, post_scroll_wait_sec: float = 1.5) -> FetchResult:
+    """Load URL with Playwright, scroll down at least halfway (so in-view/lazy content is in DOM), then return HTML.
+    Use for career pages that list jobs in the initial HTML but may render or reveal them on scroll."""
+    from ..config import settings
+    if not settings.playwright_enabled:
+        raise RuntimeError("playwright is disabled; set PLAYWRIGHT_ENABLED=true")
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise RuntimeError("playwright is not installed")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=CHROMIUM_LAUNCH_ARGS)
+        page = browser.new_page()
+        page.goto(url, wait_until="networkidle", timeout=60000)
+        # Scroll to ~50% of document height so content below the fold is in the DOM
+        page.evaluate(
+            """() => {
+                const h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+                window.scrollTo(0, Math.floor(h * 0.5));
+            }"""
+        )
+        time.sleep(post_scroll_wait_sec)
+        text = page.content()
+        browser.close()
+
+    raw_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return FetchResult(
+        url=url,
+        status_code=200,
+        content_type="text/html",
+        text=text,
+        raw_hash=raw_hash,
+    )
+
+
 def _button_visible(page: Any, selectors: list) -> bool:
     """True if any of the click selectors is visible."""
     for sel in selectors:

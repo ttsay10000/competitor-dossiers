@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """
-Fetch talent data for Placemakr and AvantStay and print job titles (and dept, location)
+Fetch talent data for each competitor and print job titles (and dept, location)
 exactly as they appear before the LLM enricher (enrich_jobs_with_llm).
 This is the raw input to the functional_area / is_senior classifier.
 
 Usage (from project root):
-  python scripts/inspect_talent_titles.py
-  python scripts/inspect_talent_titles.py Placemakr
-  python scripts/inspect_talent_titles.py AvantStay
-  python scripts/inspect_talent_titles.py Lark
+  python3 scripts/inspect_talent_titles.py              # all competitors
+  python3 scripts/inspect_talent_titles.py Placemakr   # one competitor
 
-AvantStay (Kula) and Lark (WizeHire) are JS-rendered; set PLAYWRIGHT_ENABLED=true for full job lists.
+JS-rendered careers (AvantStay, Lark, Blueground, etc.): set PLAYWRIGHT_ENABLED=true for full job lists.
 """
 import os
 import sys
@@ -34,10 +32,15 @@ if _env_file.is_file():
 
 from app.collectors.talent import collect_talent_snapshot, build_structured_json as build_talent_structured
 
+# All competitors with talent/careers URLs (from seed_data.json). Order: same as seed for consistency.
 TALENT_SOURCES = [
-    ("Placemakr", "https://jobs.lever.co/placemakr"),      # Lever API
-    ("AvantStay", "https://careers.kula.ai/avantstay"),    # Kula (generic/JS)
-    ("Lark", "https://ats.wizehire.com/career-site/lark-hospitality"),  # WizeHire (generic/JS)
+    ("AvantStay", "https://careers.kula.ai/avantstay"),
+    ("Blueground", "https://www.theblueground.com/careers"),
+    ("Landing", "https://www.hellolanding.com/p/careers/"),
+    ("Lark", "https://ats.wizehire.com/career-site/lark-hospitality"),
+    ("Placemakr", "https://jobs.lever.co/placemakr"),
+    ("Rove", "https://jobs.gem.com/rove"),
+    ("Vacasa", "https://job-boards.greenhouse.io/vacasa"),
 ]
 
 
@@ -48,8 +51,9 @@ def main():
         if not filter_name or filter_name in name.lower()
     ]
     if not competitors:
-        print("Usage: python scripts/inspect_talent_titles.py [Placemakr|AvantStay|Lark]")
-        print("No competitor matching {!r}. Options: Placemakr, AvantStay, Lark.".format(filter_name or "''"))
+        options = ", ".join(name for name, _ in TALENT_SOURCES)
+        print("Usage: python3 scripts/inspect_talent_titles.py [COMPETITOR]")
+        print("No competitor matching {!r}. Options: {}.".format(filter_name or "''", options))
         sys.exit(1)
 
     for name, url in competitors:

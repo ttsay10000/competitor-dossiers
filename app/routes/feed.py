@@ -5,6 +5,7 @@ from fastapi import APIRouter, Request
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, RunLog
 from ..digest import build_weekly_digest
+from ..utils import to_eastern
 
 router = APIRouter()
 
@@ -13,7 +14,7 @@ def _run_log_summary(log) -> dict:
     """Serializable RunLog summary so templates don't touch detached ORM."""
     return {
         "status": log.status,
-        "created_at_str": log.created_at.strftime("%Y-%m-%d %H:%M"),
+        "created_at_str": to_eastern(log.created_at),
     }
 
 

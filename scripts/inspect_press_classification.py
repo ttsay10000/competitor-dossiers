@@ -4,9 +4,9 @@ Run locally to see the full list of press articles and what is marked
 irrelevant (or promo / not_about_company) vs included.
 
 Usage (from project root):
-  python scripts/inspect_press_classification.py
-  python scripts/inspect_press_classification.py Lark
-  python scripts/inspect_press_classification.py AvantStay
+  python3 scripts/inspect_press_classification.py
+  python3 scripts/inspect_press_classification.py Lark
+  python3 scripts/inspect_press_classification.py AvantStay
 
 Uses the same sources as --local press: Google News + PR Newswire (90d window).
 Requires OPENAI_API_KEY in .env for LLM classification.
