@@ -113,6 +113,21 @@ SEED_COMPETITORS = [
             },
         ],
     },
+    # Blueground: same Playwright as Lark/AvantStay (talent=JS careers, asset=blueground_destinations).
+    # Only in seed_data.json when file is used; fallback below so DB has Blueground if file is missing.
+    {
+        "name": "Blueground",
+        "primary_domain": "theblueground.com",
+        "sources": [
+            {"channel": "talent", "url": "https://www.theblueground.com/careers", "confidence": "medium", "js_required": True},
+            {
+                "channel": "asset",
+                "url": "https://www.theblueground.com/destinations",
+                "confidence": "medium",
+                "extra_options": {"strategy": "blueground_destinations"},
+            },
+        ],
+    },
 ]
 
 

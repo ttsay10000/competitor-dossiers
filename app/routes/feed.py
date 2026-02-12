@@ -20,7 +20,7 @@ def _run_log_summary(log) -> dict:
 @router.get("/feed")
 def feed(request: Request, competitor_id: Optional[int] = None, severity: Optional[str] = None, category: Optional[str] = None, show_low: int = 0):
     with get_session() as session:
-        competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        competitors = session.query(Competitor).order_by(Competitor.created_at.desc()).all()
         recent_logs = session.query(RunLog).order_by(RunLog.created_at.desc()).limit(100).all()
         last_runs: dict = {}
         for log in recent_logs:
@@ -51,7 +51,7 @@ def feed(request: Request, competitor_id: Optional[int] = None, severity: Option
             }
             for e in events_rows
         ]
-        competitors_data = [{"id": c.id, "name": c.name} for c in competitors]
+        competitors_data = [{"id": c.id, "name": c.name, "created_at": c.created_at} for c in competitors]
         nav_competitors = competitors_data
         last_refreshed = get_last_refreshed(session)
 
@@ -81,8 +81,8 @@ def digest(request: Request):
         for log in recent_logs:
             if log.channel not in last_runs:
                 last_runs[log.channel] = _run_log_summary(log)
-        all_competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
-        nav_competitors = [{"id": c.id, "name": c.name} for c in all_competitors]
+        all_competitors = session.query(Competitor).order_by(Competitor.created_at.desc()).all()
+        nav_competitors = [{"id": c.id, "name": c.name, "created_at": c.created_at} for c in all_competitors]
         last_refreshed = get_last_refreshed(session)
     return request.app.state.templates.TemplateResponse(
         "digest.html",

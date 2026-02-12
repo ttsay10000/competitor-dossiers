@@ -38,10 +38,10 @@ This doc traces **where grouped press data goes** after the LLM groups it, and *
 **Where:** `app/llm_structured.py` — `enrich_press_items_with_llm()`.
 
 **What happens (inside that function):**
-- Drops all items whose URL is on the competitor’s own domain (including press_endpoint).
+- **Company-domain filter:** Drops only *third-party* items whose URL is on the competitor’s domain. Items from the company’s own press/blog (`provider: "press_endpoint"`) are **kept** so new competitors with only a blog still get a “Company blog” group (otherwise groupings would be empty).
 - Calls `_classify_press_headlines_with_llm(competitor_name, items)` → each item gets `topic` (e.g. `irrelevant`, `promo_or_brand_marketing`, `new_hotel_opening`, `other_business`).
-- Applies business filter: for Google News (and similar), drops `irrelevant` and `promo_or_brand_marketing`; PR Newswire is always kept.
-- Result is a **filtered list** of items that will be grouped.
+- Applies business filter: for Google News (and similar), drops `irrelevant` and `promo_or_brand_marketing`; PR Newswire is always kept; press_endpoint requires `is_about_company` and drops promo.
+- Result is a **filtered list** of items that will be grouped (third-party + company blog).
 
 **Edit classification/filter:** `app/llm_structured.py` — `_classify_press_headlines_with_llm`, overrides/heuristics, and the filter block inside `enrich_press_items_with_llm` (e.g. “drop irrelevant/promo for google_news”).
 
@@ -52,11 +52,9 @@ This doc traces **where grouped press data goes** after the LLM groups it, and *
 **Where:** `app/llm_structured.py` — `_group_press_into_clusters_llm(competitor_name, rest)` inside `enrich_press_items_with_llm()`.
 
 **What happens:**
-- Splits filtered items: **PR Newswire** → one group “Press releases” (no LLM). **Everything else** → sent to LLM.
-- LLM gets lines: `INDEX | DATE | OUTLET | TITLE` for each article. It returns JSON: `{ "groups": [ { "group_title", "one_line_summary", "article_indices": [0,1,...] }, ... ] }`.
-- Code maps indices back to articles and builds:  
-  `[ { "group_title": str, "one_line_summary": str, "articles": [ { "title", "url", "date", "outlet" }, ... ] }, ... ]`.
-- PR Newswire group is appended: `{ "group_title": "Press releases", "one_line_summary": "Company press releases.", "articles": [...] }`.
+- Splits filtered items: **Company blog** (press_endpoint on company domain) → one group “Company blog” (no LLM). **Third-party** (Google News, etc.) → split **PR Newswire** → “Press releases” group; **rest** → sent to LLM for clustering.
+- LLM gets lines: `INDEX | DATE | OUTLET | TITLE` for each third-party (non-PR) article. It returns JSON: `{ "groups": [ { "group_title", "one_line_summary", "article_indices": [0,1,...] }, ... ] }`.
+- Code maps indices back to articles and builds the group list, then appends “Press releases” (PR Newswire), then “Company blog” (press_endpoint on company domain) when present.
 
 **Output:** `press_groups` — list of group dicts, each with `group_title`, `one_line_summary`, `articles` (list of article dicts with `title`, `url`, `date`, `outlet`).
 
@@ -143,6 +141,7 @@ This doc traces **where grouped press data goes** after the LLM groups it, and *
 | Groupings missing from final output JSON | Snapshot has `press_groups`; API: `GET /dossier/{id}/json` includes `press_groups` |
 | Wrong title/date/outlet/link on the page | Step 8: `app/routes/dossier.py` — `press_groups` build + `_press_display_title`; Step 9: `app/templates/dossier.html` |
 | Order of groups or articles | Step 8: groups sorted by latest article date in group (most recent first); each group tagged with `group_latest_date`; template shows that date. Competitor-domain articles filtered out at display. |
+| New competitors had empty press / no groupings | Step 3: we now keep `press_endpoint` (company blog) items and add a “Company blog” group so competitors with only a blog still get grouped press. |
 
 ---
 

@@ -74,6 +74,13 @@
       <li style="margin-bottom: 8px;"><strong>Open the dossier</strong> once runs have completed: <a href="/dossier/{{ competitor.id }}">View dossier for {{ competitor.name }}</a>.</li>
       <li>To add or change source URLs (e.g. another job board or press feed), use <a href="/competitors/{{ competitor.id }}">Edit competitor</a>.</li>
     </ol>
+
+    <div class="card" style="border-left: 4px solid var(--muted); margin-top: 16px;">
+      <h3 style="margin: 0 0 8px 0;">Add this competitor to the seed file</h3>
+      <p class="meta" style="margin: 0 0 8px 0;">The competitor is saved in the database. To include them in <code>seed_data.json</code> (so future deploys and other environments have them), run this from your machine with <code>DATABASE_URL</code> set to this app’s database:</p>
+      <pre style="margin: 0; padding: 12px; background: var(--bg-muted); border-radius: 6px; overflow-x: auto; font-size: 0.9rem;"><code>python -m app.cli --export-seed</code></pre>
+      <p class="meta" style="margin: 8px 0 0 0;">Then commit the updated <code>seed_data.json</code> in your repo. If you added the competitor on a deployed server (e.g. Render), run the command locally with that server’s <code>DATABASE_URL</code> so the file in your repo is updated.</p>
+    </div>
     <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px;">
       <a href="/dossier/{{ competitor.id }}"><button>View dossier</button></a>
       <a href="/competitors/{{ competitor.id }}"><button class="secondary">Edit competitor</button></a>

@@ -334,23 +334,14 @@ Do NOT restate every datapoint. Only surface changes that materially alter compe
 
 Return in this exact structure. Do NOT start with "EXECUTIVE SUMMARY" or any top-level header—the page already has a header. Do NOT use a blank line before each section header; use only a single newline between sections.
 
-• (5–8 bullets): most important shifts for this competitor, why it matters, and overall risk/opportunity level (Low/Med/High).
+• (5–8 bullets): most important shifts for this competitor, why it matters, and overall risk/opportunity level (Low/Med/High). Weave in concrete changes, signals, and intent where relevant—no separate WHAT CHANGED or WHAT IT SIGNALS sections.
 
-WHAT CHANGED
-• (2–5 bullets): concrete changes from the data.
-
-WHAT IT SIGNALS
-• (1–3 bullets): inferred intent/optimization; defensive vs offensive; time horizon.
-
-IMPACT ON KASA
-• (1–3 bullets): specific risks/opportunities.
-
-RECOMMENDED ACTION: [choose one: Ignore / Monitor / Copy / Counter-position / Pre-empt / Partner]
-• (1–2 bullets why)
+IMPACT ON KASA / RECOMMENDED ACTION
+• (2–4 bullets): specific risks or opportunities for Kasa and what to do about them. End with one line: RECOMMENDED ACTION: [choose one: Ignore / Monitor / Copy / Counter-position / Pre-empt / Partner], optionally followed by 1 short bullet why.
 
 INDUSTRY CONTEXT (optional, 1–3 bullets): only if this competitor's moves reflect a broader industry trend worth calling out.
 
-Format rules: use the bullet character • for every list item (never use a dash - for bullets). No blank line before section headers. No "EXECUTIVE SUMMARY" line at the top. Style: bullets only, no fluff, no generic strategy talk, concrete language and strong verbs, avoid speculation not supported by signals, ~300–500 words."""
+Format rules: use the bullet character • for every list item (never use a dash - for bullets). No blank line before section headers. No "EXECUTIVE SUMMARY" line at the top. Style: bullets only, no fluff, no generic strategy talk, concrete language and strong verbs, avoid speculation not supported by signals, ~250–400 words."""
 
     user = f"Competitor: {competitor_name}\n\nData:\n{context_text}"
 
@@ -394,7 +385,7 @@ def generate_rollup_summary(per_competitor_summaries: List[Tuple[int, str, str]]
     if not blocks:
         return None
     combined = "\n\n".join(blocks)
-    system = """You are an AI Chief of Staff for Kasa's exec team. You are given executive summaries for several competitors (each block below is one competitor, with a header "--- Name (id=...) ---"). Each summary already has sections such as EXECUTIVE SUMMARY, WHAT CHANGED, WHAT IT SIGNALS, IMPACT ON KASA, RECOMMENDED ACTION. Use those sections to produce ONE short roll-up for the main competitors page.
+    system = """You are an AI Chief of Staff for Kasa's exec team. You are given executive summaries for several competitors (each block below is one competitor, with a header "--- Name (id=...) ---"). Each summary has top-line bullets and an IMPACT ON KASA / RECOMMENDED ACTION section (and optionally INDUSTRY CONTEXT). Use those to produce ONE short roll-up for the main competitors page.
 
 Output exactly two parts:
 
@@ -404,7 +395,9 @@ Output exactly two parts:
    - **[Competitor Name]:** [1–2 sentence summary of that competitor's major news — e.g. big hires, new partnerships, new or number of openings and city names, recommended action.]
    Use the exact competitor names from the block headers (the text after "--- " and before " (id="). Do not invent or reorder competitors.
 
-Style: bullets only for the list; no fluff; concrete language; ~200–400 words total. If a competitor's summary is thin or mostly "no material changes," say so briefly rather than padding."""
+Style: bullets only for the list; no fluff; concrete language; ~200–400 words total. If a competitor's summary is thin or mostly "no material changes," say so briefly rather than padding.
+
+FORMATTING: Output with clear line breaks for display. Put the "Recent updates" paragraph first, then a blank line, then "Per-competitor bullets" on its own line, then each competitor bullet on its own line (one line per " - **Name:** ..."). Do not run everything into one paragraph."""
 
     user = f"Competitor executive summaries (each block is one competitor; use the name in the block header):\n\n{combined}"
 
@@ -417,6 +410,50 @@ Style: bullets only for the list; no fluff; concrete language; ~200–400 words 
             ],
             max_tokens=800,
             temperature=0.3,
+        )
+        choice = resp.choices[0] if resp.choices else None
+        if choice and choice.message and choice.message.content:
+            raw = choice.message.content.strip()
+            cleaned = clean_rollup_formatting(raw)
+            return cleaned if cleaned else raw
+    except Exception:
+        pass
+    return None
+
+
+def clean_rollup_formatting(text: str) -> Optional[str]:
+    """
+    Use the LLM to fix rollup formatting only: preserve all content and wording, add proper
+    line breaks so "Recent updates" and "Per-competitor bullets" are separated and each
+    competitor bullet is on its own line. Returns None if LLM unavailable or fails.
+    """
+    if not text or not text.strip():
+        return text
+    from .config import get_openai_client
+    client = get_openai_client()
+    if not client:
+        return None
+    system = """You are a formatting assistant. You will receive a competitive intelligence recap that has two parts: (1) **Recent updates:** — a paragraph, and (2) **Per-competitor bullets:** — a list of bullets like " - **CompetitorName:** ..."
+
+Your task: output the EXACT same text with only formatting changes. Do not change a single word or add/remove content.
+
+Formatting rules:
+- Put "**Recent updates:**" (and its paragraph) first. End the paragraph with a single newline.
+- Then a blank line.
+- Then "**Per-competitor bullets:**" on its own line (or "2. **Per-competitor bullets:**" if it was numbered).
+- Then each bullet on its own line: every " - **Name:** ..." must be on a separate line. Do not join multiple bullets onto one line.
+
+Keep all **bold** markers. Output only the reformatted recap, nothing else."""
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": text.strip()},
+            ],
+            max_tokens=1000,
+            temperature=0.0,
         )
         choice = resp.choices[0] if resp.choices else None
         if choice and choice.message and choice.message.content:
@@ -469,9 +506,7 @@ def format_rollup_summary_for_display(text: Optional[str]) -> Optional[str]:
 # EXECUTIVE SUMMARY is not included—we strip that line so the page header is the only title.
 _EXEC_SUMMARY_SECTION_HEADERS = frozenset({
     "Key takeaways",
-    "WHAT CHANGED",
-    "WHAT IT SIGNALS",
-    "IMPACT ON KASA",
+    "IMPACT ON KASA / RECOMMENDED ACTION",
     "INDUSTRY CONTEXT",
 })
 

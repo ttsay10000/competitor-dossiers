@@ -26,9 +26,9 @@ def runs(
     started: Optional[int] = None,
 ):
     with get_session() as session:
-        competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        competitors = session.query(Competitor).order_by(Competitor.created_at.desc()).all()
         competitor_names = {c.id: c.name for c in competitors}
-        competitor_options = [{"id": c.id, "name": c.name} for c in competitors]
+        competitor_options = [{"id": c.id, "name": c.name, "created_at": c.created_at} for c in competitors]
         query = session.query(RunLog).order_by(RunLog.created_at.desc())
         if competitor_id:
             query = query.filter(RunLog.competitor_id == competitor_id)

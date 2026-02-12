@@ -1087,6 +1087,11 @@ def collect_asset_snapshot(
                     "properties": normalize_properties(properties),
                     "note": "blueground_destinations",
                 }
+            # Same Playwright as Lark/AvantStay; if we reach here, Playwright was disabled or unavailable
+            print(
+                "[asset] Blueground: Playwright not available for blueground_destinations; "
+                "using HTML fallback (expect 0 or few properties from /destinations)."
+            )
             return _fetch_without_browser()
         if strategy == "api":
             api_cfg = opts.get("api") or {}
@@ -1158,7 +1163,14 @@ def collect_asset_snapshot(
             sitemap_snapshot = fetch_from_sitemap()
             if sitemap_snapshot:
                 return sitemap_snapshot
-            fetched = fetch_url(source_url)
+            # Landing (hellolanding.com) locations page is JS-rendered; use Playwright to get full property list.
+            if "hellolanding.com" in source_url.lower() and _playwright_available():
+                try:
+                    fetched = fetch_url_js(source_url)
+                except Exception:
+                    fetched = fetch_url(source_url)
+            else:
+                fetched = fetch_url(source_url)
             if fetched.status_code != 200:
                 raise RuntimeError(
                     f"Asset fetch failed: {fetched.url} returned HTTP {fetched.status_code}. "

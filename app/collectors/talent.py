@@ -382,6 +382,9 @@ def extract_jobs_from_kula(html: str) -> list[dict[str, Any]]:
                 continue
             if raw.startswith("USD ") or re.search(r"^\d+\.\d+-\d+\.\d+\s*/\s*(hour|year)", raw):
                 continue
+            # Skip compensation line (salary range + / year or / hour), e.g. "United StatesUSD 190,000.00-225,000.00 / yearFull Time• Remote"
+            if re.search(r"[\d,]+\.?\d*\s*[-–]\s*[\d,]+\.?\d*\s*/\s*(year|hour)", raw):
+                continue
             if "Full Time" in raw or ("Remote" in raw and "," not in raw):
                 continue
             if "; " in raw and "locations" in raw.lower():  # "Mexico; Brazil; Argentina + 1 locations"
@@ -556,6 +559,21 @@ def extract_jobs_from_blueground(html: str, base_url: str = "https://www.theblue
     return jobs
 
 
+def _extract_jobs_from_generic_html(html: str, source_url: str) -> list[dict[str, Any]]:
+    """Extract jobs from HTML using site-specific or generic extractor. Used for generic (non-API) career pages.
+    Not used for WizeHire, which has its own fetch + scroll path."""
+    if "kula.ai" in source_url.lower():
+        jobs = extract_jobs_from_kula(html)
+        return jobs if jobs else extract_jobs_from_html(html)
+    if "hellolanding.com" in source_url.lower():
+        jobs = extract_jobs_from_landing(html, base_url="https://www.hellolanding.com")
+        return jobs if jobs else extract_jobs_from_html(html)
+    if "theblueground.com" in source_url.lower():
+        jobs = extract_jobs_from_blueground(html, base_url="https://www.theblueground.com")
+        return jobs if jobs else extract_jobs_from_html(html)
+    return extract_jobs_from_html(html)
+
+
 def normalize_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized = []
     for job in jobs:
@@ -639,53 +657,50 @@ def collect_talent_snapshot(source_url: str) -> dict[str, Any]:
                 pass
         # Fall through to generic if API fails
 
-    # 4. Generic: competitor career page (HTML scrape). Kula, WizeHire, Blueground are JS-rendered.
-    use_js = "kula.ai" in source_url.lower() or "wizehire.com" in source_url.lower() or "theblueground.com" in source_url.lower()
-    playwright_fallback = False
-    if use_js:
+    # 4. Generic: competitor career page (HTML scrape).
+    # WizeHire (AvantStay): JS + scroll exhaust only — keep as-is, do not change.
+    if "wizehire.com" in source_url.lower():
         try:
-            # WizeHire: jobs load in batches. Scroll to very bottom in viewport steps so the next
-            # chunk loads; then wait for the batch before measuring. Repeat until no new content.
-            if "wizehire.com" in source_url.lower():
-                scroll_options = {
-                    "scroll_window": True,
-                    "scroll_by_viewport": True,
-                    "max_scrolls": 100,
-                    "scroll_wait_sec": 1.0,
-                    "scroll_batch_wait_sec": 4.0,
-                    "scroll_no_progress_limit": 5,
-                    "scroll_job_count_selector": 'div[class*="jss83"]',
-                    "post_load_wait_ms": 3000,
-                }
-                fetched = fetch_url_js_exhaust(source_url, scroll_options)
-            else:
-                fetched = fetch_url_js(source_url)  # Kula, Blueground
+            scroll_options = {
+                "scroll_window": True,
+                "scroll_by_viewport": True,
+                "max_scrolls": 100,
+                "scroll_wait_sec": 1.0,
+                "scroll_batch_wait_sec": 4.0,
+                "scroll_no_progress_limit": 5,
+                "scroll_job_count_selector": 'div[class*="jss83"]',
+                "post_load_wait_ms": 3000,
+            }
+            fetched = fetch_url_js_exhaust(source_url, scroll_options)
         except (RuntimeError, Exception):
             fetched = fetch_url(source_url)
-            playwright_fallback = True  # Playwright disabled or not installed; plain HTML usually gives 0 jobs
-    else:
-            fetched = fetch_url(source_url)
-    # WizeHire/Lark: job titles are in div.jss83 (e.g. "Hotel Housekeeper"); prefer that over link text
-    if "wizehire.com" in source_url.lower():
         jobs = extract_jobs_from_wizehire_title_divs(fetched.text)
         if not jobs:
             jobs = extract_jobs_from_html(fetched.text)
         if not jobs:
             jobs = extract_jobs_from_headings(fetched.text)
-    elif "kula.ai" in source_url.lower():
-        jobs = extract_jobs_from_kula(fetched.text)
-        if not jobs:
-            jobs = extract_jobs_from_html(fetched.text)
-    elif "hellolanding.com" in source_url.lower():
-        jobs = extract_jobs_from_landing(fetched.text, base_url="https://www.hellolanding.com")
-        if not jobs:
-            jobs = extract_jobs_from_html(fetched.text)
-    elif "theblueground.com" in source_url.lower():
-        jobs = extract_jobs_from_blueground(fetched.text, base_url="https://www.theblueground.com")
-        if not jobs:
-            jobs = extract_jobs_from_html(fetched.text)
-    else:
-        jobs = extract_jobs_from_html(fetched.text)
+        return {
+            "provider": "generic",
+            "source_url": fetched.url,
+            "raw_content": fetched.text,
+            "raw_hash": fetched.raw_hash,
+            "jobs": normalize_jobs(jobs),
+        }
+
+    # All other generic sites: try HTML first; if 0 or very few jobs, retry with JS.
+    _MIN_JOBS_JS_FALLBACK = 3
+    fetched = fetch_url(source_url)
+    jobs = _extract_jobs_from_generic_html(fetched.text, source_url)
+    playwright_fallback = False
+    if len(jobs) < _MIN_JOBS_JS_FALLBACK:
+        try:
+            fetched_js = fetch_url_js(source_url)
+            jobs_js = _extract_jobs_from_generic_html(fetched_js.text, source_url)
+            if len(jobs_js) > len(jobs):
+                fetched = fetched_js
+                jobs = jobs_js
+        except (RuntimeError, Exception):
+            playwright_fallback = True
     out = {
         "provider": "generic",
         "source_url": fetched.url,

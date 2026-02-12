@@ -1548,49 +1548,61 @@ def enrich_press_items_with_llm(
     End-to-end press pipeline for a single competitor.
 
     Steps:
-    - Drop ALL items whose URL is on the competitor's own domain (company_domains); no exception for press_endpoint.
+    - Company-domain filter: drop third-party items whose URL is on the competitor's domain.
+      Keep items from the company's own press/blog (provider=press_endpoint) so new competitors
+      with only a blog still get a "Company blog" group; otherwise groupings would be empty.
     - Classify all items (topic, irrelevant, promo) via LLM; apply heuristics; business-relevance filter.
-    - Split by provider: PR Newswire vs rest. Group the rest via LLM (by title, date, topic) into clusters
-      with group_title and one_line_summary; no articles dropped. Append one cluster "Press releases" for PR items.
-    - Returns a list of groups: [{ "group_title", "one_line_summary", "articles": [ { "title", "url", "date", "outlet" }, ... ] }, ...].
-    - previous_items / previous_canonical are accepted for API compatibility but not used; we re-group the full filtered list each run.
+    - Split by provider: PR Newswire vs rest. Group only third-party (non-own-domain) rest via LLM.
+      Append "Press releases" for PR items, then "Company blog" for kept press_endpoint items on company domain.
+    - Returns a list of groups: [{ "group_title", "one_line_summary", "articles": [...] }, ...].
+    - previous_items / previous_canonical are accepted for API compatibility but not used.
     """
     if not items:
         return []
 
     import sys
+    import urllib.parse
 
-    # Drop ALL items whose URL is on the competitor's own domain (including press_endpoint).
-    # We only want third-party coverage; competitor's own site (e.g. company.com/press/) is excluded from final output.
+    company_domains_normalized: set = set()
     if company_domains:
-        import urllib.parse
-        n_before_domain_filter = len(items)
         company_domains_normalized = {_normalize_domain(d) for d in company_domains if d}
-        filtered_items: List[dict] = []
+
+    def _url_on_company_domain(it: dict) -> bool:
+        if not company_domains_normalized:
+            return False
+        url = (it.get("url") or it.get("link") or "").strip()
+        if not url:
+            return False
+        try:
+            host = (urllib.parse.urlparse(url).netloc or "").strip()
+            if not host:
+                return False
+            host_norm = _normalize_domain(host)
+            if host_norm in company_domains_normalized:
+                return True
+            if any(d and (host_norm == d or host_norm.endswith("." + d)) for d in company_domains_normalized):
+                return True
+        except Exception:
+            pass
+        return False
+
+    # Drop third-party items (non press_endpoint) whose URL is on the competitor's domain.
+    # Keep press_endpoint items (company blog) so new competitors get at least one group.
+    if company_domains_normalized:
+        n_before_domain_filter = len(items)
+        filtered_items = []
         for it in items:
-            url = (it.get("url") or it.get("link") or "").strip()
-            if not url:
+            provider = (it.get("provider") or "").strip().lower()
+            if provider == "press_endpoint":
                 filtered_items.append(it)
                 continue
-            try:
-                parsed = urllib.parse.urlparse(url)
-                host = (parsed.netloc or "").strip()
-                if not host:
-                    # Relative or path-only URL: in this pipeline it comes from scraping the company's own page → drop.
-                    continue
-                host_norm = _normalize_domain(host)
-                if host_norm in company_domains_normalized:
-                    continue  # drop: on competitor's own domain (including company press page)
-                # Subdomain match: e.g. press.larkhospitality.com when domain is larkhospitality.com
-                if any(d and (host_norm == d or host_norm.endswith("." + d)) for d in company_domains_normalized):
-                    continue
-            except Exception:
-                pass
+            if _url_on_company_domain(it):
+                continue
             filtered_items.append(it)
         items = filtered_items
         dropped_domain = n_before_domain_filter - len(items)
         print(
-            f"[press] Company-domain filter: {n_before_domain_filter} -> {len(items)} items ({dropped_domain} on own domain dropped)",
+            f"[press] Company-domain filter: {n_before_domain_filter} -> {len(items)} items ({dropped_domain} third-party on own domain dropped; press_endpoint kept)",
             file=sys.stderr,
         )
         if not items:
@@ -1739,13 +1751,20 @@ def enrich_press_items_with_llm(
             "outlet": _press_outlet_from_item(it),
         }
 
-    # Split PR Newswire vs rest; group only non-PR items, then append Press releases group.
-    pr_items = [it for it in filtered if (it.get("provider") or "").strip().lower() == "prnewswire"]
-    rest = [it for it in filtered if (it.get("provider") or "").strip().lower() != "prnewswire"]
+    # Split: (1) company blog = press_endpoint on company domain; (2) rest = third-party + PR for grouping.
+    company_blog_items = [
+        it for it in filtered
+        if (it.get("provider") or "").strip().lower() == "press_endpoint" and _url_on_company_domain(it)
+    ]
+    rest = [it for it in filtered if it not in company_blog_items]
+
+    # Group third-party (rest): PR Newswire vs rest; group non-PR via LLM, then append Press releases.
+    pr_items = [it for it in rest if (it.get("provider") or "").strip().lower() == "prnewswire"]
+    rest_non_pr = [it for it in rest if (it.get("provider") or "").strip().lower() != "prnewswire"]
 
     press_groups: List[dict] = []
-    if rest:
-        press_groups = _group_press_into_clusters_llm(competitor_name, rest)
+    if rest_non_pr:
+        press_groups = _group_press_into_clusters_llm(competitor_name, rest_non_pr)
     if pr_items:
         pr_articles = [_item_to_article(it) for it in pr_items]
         pr_articles.sort(key=lambda a: (a.get("date") or "0000-00-00")[:10] if (a.get("date") or "").strip() and (a.get("date") or "").strip() != "no date" else "0000-00-00", reverse=True)
@@ -1753,6 +1772,14 @@ def enrich_press_items_with_llm(
             "group_title": "Press releases",
             "one_line_summary": "Company press releases.",
             "articles": pr_articles,
+        })
+    if company_blog_items:
+        blog_articles = [_item_to_article(it) for it in company_blog_items]
+        blog_articles.sort(key=lambda a: (a.get("date") or "0000-00-00")[:10] if (a.get("date") or "").strip() and (a.get("date") or "").strip() != "no date" else "0000-00-00", reverse=True)
+        press_groups.append({
+            "group_title": "Company blog",
+            "one_line_summary": "Press and blog posts from the company.",
+            "articles": blog_articles,
         })
 
     print(

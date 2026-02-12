@@ -76,7 +76,7 @@ def get_rollup_summary(session):
     from ..config import settings
     if not settings.openai_api_key:
         return (None, "no_api_key")
-    competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+    competitors = session.query(Competitor).order_by(Competitor.created_at.desc()).all()
     collected = []  # list of (competitor_id, name, summary_text)
     for c in competitors:
         if not getattr(c, "is_active", True):
@@ -310,7 +310,67 @@ def format_dossier_preview_text(context: dict) -> str:
     else:
         lines.append("  No recent events.")
     lines.append("")
+    lines.append("--- Website changes / digital footprint ---")
+    df_events = context.get("digital_footprint_events") or []
+    if df_events:
+        for e in df_events[:5]:
+            title = e.get("title") or "Event"
+            when = e.get("occurred_at_str") or e.get("detected_at_str") or ""
+            typ = e.get("type") or ""
+            lines.append(f"  · {when} — {title} [{typ}]")
+        if len(df_events) > 5:
+            lines.append(f"  … and {len(df_events) - 5} more")
+    else:
+        lines.append("  No website or digital footprint changes in the past 90 days.")
+    lines.append("")
+    lines.append("--- Social media updates ---")
+    social_posts = context.get("social_posts") or []
+    if social_posts:
+        lines.append(f"  Total posts: {len(social_posts)}")
+        for p in social_posts[:5]:
+            platform = p.get("platform") or "Social"
+            text = (p.get("text") or p.get("title") or "—")[:80]
+            if len((p.get("text") or p.get("title") or "")) > 80:
+                text += "…"
+            rel = " [executive-relevant]" if p.get("relevance") == "executive" else ""
+            lines.append(f"  · {platform}{rel}: {text}")
+        if len(social_posts) > 5:
+            lines.append(f"  … and {len(social_posts) - 5} more")
+    else:
+        lines.append("  No social posts yet. Add Twitter/LinkedIn on Edit competitor, run social channel.")
+    lines.append("")
+    lines.append("--- Google reviews per property ---")
+    reviews_minimal = context.get("reviews_minimal") or []
+    review_properties = context.get("review_properties") or []
+    if not review_properties:
+        lines.append("  No properties added for reviews.")
+    elif reviews_minimal:
+        for r in reviews_minimal[:10]:
+            name = r.get("display_name") or "Property"
+            line = (r.get("line") or "—")[:80]
+            trend = r.get("trend") or ""
+            if trend:
+                line = f"{line} [{trend}]"
+            lines.append(f"  · {name}: {line}")
+        if len(reviews_minimal) > 10:
+            lines.append(f"  … and {len(reviews_minimal) - 10} more")
+    else:
+        lines.append("  Run reviews channel to see sentiment.")
+    lines.append("")
     return "\n".join(lines)
+
+
+def _is_plausible_senior_display_title(title: str) -> bool:
+    """False if text is clearly a salary/location line mis-parsed as a job title (e.g. Kula AvantStay)."""
+    if not title or len(title) < 4:
+        return False
+    if "•" in title:
+        return False
+    if "/ year" in title or "/ hour" in title:
+        return False
+    if "USD" in title and ("Full Time" in title or "Remote" in title):
+        return False
+    return True
 
 
 def build_dossier_context(session, competitor_id: int, *, skip_property_llm: bool = False) -> dict:
@@ -435,8 +495,9 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         senior_count = sum(1 for j in jobs_list if j.get("is_senior"))
         row = {"function": func, "total": len(jobs_list), "senior": senior_count}
         if senior_count > 0 and len(jobs_list) <= 5:
-            senior_titles = [(j.get("title") or "").strip() for j in jobs_list if j.get("is_senior") and (j.get("title") or "").strip()]
-            row["senior_titles"] = senior_titles
+            raw_titles = [(j.get("title") or "").strip() for j in jobs_list if j.get("is_senior") and (j.get("title") or "").strip()]
+            # Exclude salary/location lines mis-parsed as titles (e.g. Kula AvantStay "United StatesUSD 190,000.../ yearFull Time• Remote")
+            row["senior_titles"] = [t for t in raw_titles if _is_plausible_senior_display_title(t)]
         if func == PROPERTY_OPERATIONS_LABEL:
             jobs_by_function_property.append(row)
         else:
@@ -917,8 +978,8 @@ def summary(request: Request, competitor_id: int, days: int = 7):
     with get_session() as session:
         context = build_summary_context(session, competitor_id, days=days)
         context["last_refreshed"] = get_last_refreshed(session)
-        all_competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
-        context["nav_competitors"] = [{"id": c.id, "name": c.name} for c in all_competitors]
+        all_competitors = session.query(Competitor).order_by(Competitor.created_at.desc()).all()
+        context["nav_competitors"] = [{"id": c.id, "name": c.name, "created_at": c.created_at} for c in all_competitors]
     if "error" in context:
         return request.app.state.templates.TemplateResponse(
             "summary.html",
@@ -1022,8 +1083,8 @@ def dossier(request: Request, competitor_id: int):
             # Fast load: skip property/location LLM; refined data lazy-loaded via JS
             context = build_dossier_context(session, competitor_id, skip_property_llm=True)
             context["last_refreshed"] = get_last_refreshed(session)
-            all_competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
-            context["nav_competitors"] = [{"id": c.id, "name": c.name} for c in all_competitors]
+            all_competitors = session.query(Competitor).order_by(Competitor.created_at.desc()).all()
+            context["nav_competitors"] = [{"id": c.id, "name": c.name, "created_at": c.created_at} for c in all_competitors]
             context["executive_summary_lazy"] = bool(settings.openai_api_key)
             context["properties_refinement_available"] = bool(settings.openai_api_key)
             context["review_error"] = request.query_params.get("review_error")
@@ -1098,8 +1159,8 @@ def dossier_seed(request: Request, competitor_id: int):
         competitor = session.get(Competitor, competitor_id)
         if competitor is None:
             last_refreshed = get_last_refreshed(session)
-            all_competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
-            nav_competitors = [{"id": c.id, "name": c.name} for c in all_competitors]
+            all_competitors = session.query(Competitor).order_by(Competitor.created_at.desc()).all()
+            nav_competitors = [{"id": c.id, "name": c.name, "created_at": c.created_at} for c in all_competitors]
             return request.app.state.templates.TemplateResponse(
                 "dossier.html",
                 {"request": request, "error": "Competitor not found.", "last_refreshed": last_refreshed, "nav_competitors": nav_competitors},

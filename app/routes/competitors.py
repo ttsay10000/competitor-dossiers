@@ -68,7 +68,7 @@ def _competitor_status(session, competitor_id: int) -> dict:
 @router.get("/competitors")
 def competitors_list(request: Request):
     with get_session() as session:
-        competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        competitors = session.query(Competitor).order_by(Competitor.created_at.desc()).all()
         competitors_data = []
         for c in competitors:
             status = _competitor_status(session, c.id)
@@ -76,11 +76,12 @@ def competitors_list(request: Request):
                 "id": c.id,
                 "name": c.name,
                 "primary_domain": c.primary_domain,
+                "created_at": c.created_at,
                 "has_snapshots": status["has_snapshots"],
                 "last_runs": status["last_runs"],
             })
         last_refreshed = get_last_refreshed(session)
-    nav_competitors = [{"id": c["id"], "name": c["name"]} for c in competitors_data]
+    nav_competitors = [{"id": c["id"], "name": c["name"], "created_at": c.get("created_at")} for c in competitors_data]
     return request.app.state.templates.TemplateResponse(
         "competitors.html",
         {
@@ -339,9 +340,9 @@ def competitor_added(request: Request, competitor_id: int):
         asset_urls = [e.url for e in endpoints if e.channel == "asset"]
         press_urls = [e.url for e in endpoints if e.channel == "press"]
         last_refreshed = get_last_refreshed(session)
-        all_competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
-        nav_competitors = [{"id": c.id, "name": c.name} for c in all_competitors]
-    competitor_data = {"id": competitor.id, "name": competitor.name, "primary_domain": competitor.primary_domain}
+        all_competitors = session.query(Competitor).order_by(Competitor.created_at.desc()).all()
+        nav_competitors = [{"id": c.id, "name": c.name, "created_at": c.created_at} for c in all_competitors]
+        competitor_data = {"id": competitor.id, "name": competitor.name, "primary_domain": competitor.primary_domain}
     return request.app.state.templates.TemplateResponse(
         "competitor_added.html",
         {
@@ -414,8 +415,8 @@ def competitors_edit(request: Request, competitor_id: int):
             .first()
         )
         reviews_snapshot = (latest_reviews.structured_json or {}) if latest_reviews else {}
-        all_competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
-        nav_competitors = [{"id": c.id, "name": c.name} for c in all_competitors]
+        all_competitors = session.query(Competitor).order_by(Competitor.created_at.desc()).all()
+        nav_competitors = [{"id": c.id, "name": c.name, "created_at": c.created_at} for c in all_competitors]
     return request.app.state.templates.TemplateResponse(
         "competitor_edit.html",
         {

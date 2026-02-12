@@ -1,51 +1,9 @@
 {
   "competitors": [
     {
-      "name": "Placemakr",
-      "primary_domain": "placemakr.com",
-      "sources": [
-        {
-          "channel": "talent",
-          "url": "https://jobs.lever.co/placemakr",
-          "confidence": "high"
-        },
-        {
-          "channel": "asset",
-          "url": "https://www.placemakr.com/locations",
-          "confidence": "high",
-          "extra_options": {
-            "strategy_chain": [
-              "html"
-            ],
-            "min_properties_accept": 1
-          }
-        },
-        {
-          "channel": "press",
-          "url": "https://www.placemakr.com/blog",
-          "confidence": "high"
-        },
-        {
-          "channel": "homepage",
-          "url": "https://www.placemakr.com",
-          "confidence": "high",
-          "extra_options": {
-            "product_paths": [
-              "/locations"
-            ]
-          }
-        }
-      ]
-    },
-    {
       "name": "AvantStay",
       "primary_domain": "avantstay.com",
       "sources": [
-        {
-          "channel": "talent",
-          "url": "https://careers.kula.ai/avantstay",
-          "confidence": "high"
-        },
         {
           "channel": "asset",
           "url": "https://avantstay.com/search",
@@ -65,6 +23,47 @@
           "channel": "press",
           "url": "https://avantstay.com/blog/",
           "confidence": "high"
+        },
+        {
+          "channel": "talent",
+          "url": "https://careers.kula.ai/avantstay",
+          "confidence": "high"
+        }
+      ]
+    },
+    {
+      "name": "Blueground",
+      "primary_domain": "theblueground.com",
+      "sources": [
+        {
+          "channel": "asset",
+          "url": "https://www.theblueground.com/destinations",
+          "confidence": "medium",
+          "extra_options": {
+            "strategy": "blueground_destinations"
+          }
+        },
+        {
+          "channel": "talent",
+          "url": "https://www.theblueground.com/careers",
+          "confidence": "medium",
+          "js_required": true
+        }
+      ]
+    },
+    {
+      "name": "Landing",
+      "primary_domain": "hellolanding.com",
+      "sources": [
+        {
+          "channel": "asset",
+          "url": "https://www.hellolanding.com/locations",
+          "confidence": "high"
+        },
+        {
+          "channel": "talent",
+          "url": "https://www.hellolanding.com/p/careers/",
+          "confidence": "medium"
         }
       ]
     },
@@ -72,11 +71,6 @@
       "name": "Lark",
       "primary_domain": "larkhospitality.com",
       "sources": [
-        {
-          "channel": "talent",
-          "url": "https://ats.wizehire.com/career-site/lark-hospitality",
-          "confidence": "high"
-        },
         {
           "channel": "asset",
           "url": "https://www.larkhospitality.com/portfolio/",
@@ -118,41 +112,63 @@
           "extra_options": {
             "press_search_name": "Lark Hotels"
           }
+        },
+        {
+          "channel": "talent",
+          "url": "https://ats.wizehire.com/career-site/lark-hospitality",
+          "confidence": "high"
         }
       ]
     },
     {
-      "name": "Blueground",
-      "primary_domain": "theblueground.com",
+      "name": "Placemakr",
+      "primary_domain": "placemakr.com",
       "sources": [
         {
-          "channel": "talent",
-          "url": "https://www.theblueground.com/careers",
-          "confidence": "medium",
-          "js_required": true
-        },
-        {
           "channel": "asset",
-          "url": "https://www.theblueground.com/destinations",
-          "confidence": "medium",
+          "url": "https://www.placemakr.com/locations",
+          "confidence": "high",
           "extra_options": {
-            "strategy": "blueground_destinations"
+            "strategy_chain": [
+              "html"
+            ],
+            "min_properties_accept": 1
           }
+        },
+        {
+          "channel": "homepage",
+          "url": "https://www.placemakr.com",
+          "confidence": "high",
+          "extra_options": {
+            "product_paths": [
+              "/locations"
+            ]
+          }
+        },
+        {
+          "channel": "press",
+          "url": "https://www.placemakr.com/blog",
+          "confidence": "high"
+        },
+        {
+          "channel": "talent",
+          "url": "https://jobs.lever.co/placemakr",
+          "confidence": "high"
         }
       ]
     },
     {
-      "name": "Landing",
-      "primary_domain": "hellolanding.com",
+      "name": "Rove",
+      "primary_domain": "rovetravel.com",
       "sources": [
         {
-          "channel": "talent",
-          "url": "https://www.hellolanding.com/p/careers/",
-          "confidence": "medium"
+          "channel": "asset",
+          "url": "rovetravel.com/search",
+          "confidence": "high"
         },
         {
-          "channel": "asset",
-          "url": "https://www.hellolanding.com/locations",
+          "channel": "talent",
+          "url": "jobs.gem.com/rove",
           "confidence": "high"
         }
       ]
@@ -162,14 +178,14 @@
       "primary_domain": "vacasa.com",
       "sources": [
         {
-          "channel": "talent",
-          "url": "https://job-boards.greenhouse.io/vacasa",
-          "confidence": "medium"
-        },
-        {
           "channel": "asset",
           "url": "https://www.vacasa.com/search?place=/usa/",
           "confidence": "high"
+        },
+        {
+          "channel": "talent",
+          "url": "https://job-boards.greenhouse.io/vacasa",
+          "confidence": "medium"
         }
       ]
     }

@@ -61,6 +61,7 @@
     })();
   </script>
   <p class="meta" style="margin: -8px 0 12px 0;"><strong>Force refresh &amp; reset baseline</strong>: clears snapshots so re-enrichment runs, sets each competitor’s comparison date to now, then runs all collectors. Use after changing press groupings or LLM logic—otherwise runs skip when URLs are unchanged.</p>
+  <p class="meta" style="margin: -8px 0 12px 0;">To add manually added competitors to <code>seed_data.json</code> (for future deploys): run <code>python -m app.cli --export-seed</code> from your machine with this app's <code>DATABASE_URL</code>, then commit the updated file.</p>
 
   <div class="card" id="rollup-card">
     <h3>Recent updates</h3>
@@ -97,6 +98,7 @@
         <tr>
           <th>Name</th>
           <th>Domain</th>
+          <th>Added</th>
           <th>Data / Status</th>
           <th></th>
         </tr>
@@ -106,6 +108,7 @@
         <tr>
           <td>{{ competitor.name }}</td>
           <td class="muted">{{ competitor.primary_domain or "" }}</td>
+          <td class="muted" style="font-size: 13px;">{% if competitor.created_at %}{{ competitor.created_at.strftime('%Y-%m-%d') }}{% else %}—{% endif %}</td>
           <td class="muted" style="font-size: 12px;">
             {% set has = competitor.has_snapshots or {} %}
             {% set runs = competitor.last_runs or {} %}
@@ -126,7 +129,7 @@
         {% endfor %}
         {% if competitors|length == 0 %}
         <tr>
-          <td colspan="4" class="muted">No competitors yet.</td>
+          <td colspan="5" class="muted">No competitors yet.</td>
         </tr>
         {% endif %}
       </tbody>

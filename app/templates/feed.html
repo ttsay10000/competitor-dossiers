@@ -23,7 +23,7 @@
           <select name="competitor_id">
             <option value="">All</option>
             {% for competitor in competitors %}
-            <option value="{{ competitor.id }}" {% if selected_competitor == competitor.id %}selected{% endif %}>{{ competitor.name }}</option>
+            <option value="{{ competitor.id }}" {% if selected_competitor == competitor.id %}selected{% endif %}>{{ competitor.name }}{% if competitor.created_at %} (added {{ competitor.created_at.strftime('%b %d, %Y') }}){% endif %}</option>
             {% endfor %}
           </select>
         </div>
