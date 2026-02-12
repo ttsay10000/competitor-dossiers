@@ -27,6 +27,10 @@
             <option value="talent" {% if selected_channel == "talent" %}selected{% endif %}>talent</option>
             <option value="asset" {% if selected_channel == "asset" %}selected{% endif %}>asset</option>
             <option value="press" {% if selected_channel == "press" %}selected{% endif %}>press</option>
+            <option value="homepage" {% if selected_channel == "homepage" %}selected{% endif %}>homepage</option>
+            <option value="social" {% if selected_channel == "social" %}selected{% endif %}>social</option>
+            <option value="public_records" {% if selected_channel == "public_records" %}selected{% endif %}>public_records</option>
+            <option value="reviews" {% if selected_channel == "reviews" %}selected{% endif %}>reviews</option>
           </select>
         </div>
         <div>
@@ -51,9 +55,14 @@
       .runs-table th:nth-child(1), .runs-table td:nth-child(1) { width: 11em; white-space: nowrap; }
       .runs-table th:nth-child(2), .runs-table td:nth-child(2) { width: 10%; min-width: 5em; }
       .runs-table th:nth-child(3), .runs-table td:nth-child(3) { width: 5em; white-space: nowrap; }
-      .runs-table th:nth-child(4), .runs-table td:nth-child(4) { width: 5em; white-space: nowrap; }
-      .runs-table th:nth-child(5), .runs-table td:nth-child(5) { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .runs-table th:nth-child(6), .runs-table td:nth-child(6) { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+      .runs-table th:nth-child(4), .runs-table td:nth-child(4) { width: 7em; white-space: nowrap; }
+      .runs-table th:nth-child(5), .runs-table td:nth-child(5) { min-width: 10em; overflow-wrap: break-word; word-break: break-word; white-space: normal; }
+      .runs-table th:nth-child(6), .runs-table td:nth-child(6) { min-width: 10em; overflow-wrap: break-word; word-break: break-word; white-space: normal; font-size: 12px; }
+      .status-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+      .status-success { background: #d4edda; color: #155724; }
+      .status-skipped { background: #fff3cd; color: #856404; }
+      .status-error { background: #f8d7da; color: #721c24; }
+      .run-details-url { word-break: break-all; color: var(--accent); }
     </style>
     <table class="runs-table">
       <thead>
@@ -72,9 +81,24 @@
           <td class="muted" title="{{ log.created_at_str }}">{{ log.created_at_str }}</td>
           <td>{{ competitor_names.get(log.competitor_id, "—") }}</td>
           <td>{{ log.channel }}</td>
-          <td>{{ log.status }}</td>
-          <td class="muted" title="{{ log.message or '' }}">{{ log.message or "" }}</td>
-          <td class="muted" title="{{ log.extra_str or '' }}">{{ log.extra_str }}</td>
+          <td>
+            <span class="status-badge status-{{ log.status }}">{{ log.status }}</span>
+          </td>
+          <td title="{{ log.message or '' }}">
+            {% if log.display_message %}
+            {{ log.display_message }}
+            {% else %}
+            <span class="muted">{{ log.message or "—" }}</span>
+            {% endif %}
+          </td>
+          <td class="muted" title="{{ log.extra_str or '' }}">
+            {% if log.status == "error" and log.extra and log.extra.url %}
+            <span class="run-details-url">{{ log.extra.url }}</span>
+            {% if log.extra.hint %}<br><span class="muted">{{ log.extra.hint }}</span>{% endif %}
+            {% else %}
+            {{ log.extra_str }}
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
         {% if logs|length == 0 %}

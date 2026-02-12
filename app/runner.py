@@ -538,7 +538,8 @@ def run_talent(competitor_name: Optional[str] = None) -> None:
                 competitor.id,
                 "talent",
                 "success",
-                extra={"added_jobs": len(added_jobs), "url": endpoint_used.url},
+                message=f"Collected {len(current_jobs)} jobs",
+                extra={"added_jobs": len(added_jobs), "jobs": len(current_jobs), "url": endpoint_used.url},
             )
 
 
@@ -734,7 +735,8 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
                 competitor.id,
                 "asset",
                 "success",
-                extra={"added_properties": len(added_props), "url": endpoint_used.url},
+                message=f"Collected {len(current_props)} properties",
+                extra={"added_properties": len(added_props), "properties": len(current_props), "url": endpoint_used.url},
             )
 
 
@@ -1045,6 +1047,7 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                 competitor.id,
                 "press",
                 "success",
+                message=f"Collected {len(filtered_items)} articles",
                 extra={"added_items": len(added_items), "raw_items": len(raw_items), "filtered_items": len(filtered_items)},
             )
 
@@ -1336,6 +1339,7 @@ def run_homepage(competitor_name: Optional[str] = None) -> None:
                     competitor.id,
                     "homepage",
                     "success",
+                    message="Homepage and product paths checked",
                     extra={"source_url": pages[0].get("source_url")},
                 )
 
@@ -1449,7 +1453,14 @@ def run_social(competitor_name: Optional[str] = None) -> None:
                     create_event(session, competitor.id, event)
                     events_created += 1
             print(f"[social] Step 2 — Done. Added {len(added)} new posts; {events_created} executive-relevant events")
-            log_run(session, competitor.id, "social", "success", extra={"posts": len(current_posts), "added": len(added), "events": events_created})
+            log_run(
+                session,
+                competitor.id,
+                "social",
+                "success",
+                message=f"Collected {len(current_posts)} posts",
+                extra={"posts": len(current_posts), "added": len(added), "events": events_created},
+            )
 
 
 def run_public_records(competitor_name: Optional[str] = None) -> None:
@@ -1528,7 +1539,8 @@ def run_public_records(competitor_name: Optional[str] = None) -> None:
                     competitor.id,
                     "public_records",
                     "success",
-                    extra={"added_items": len(added_items)},
+                    message=f"Collected {len(current_items)} filings",
+                    extra={"added_items": len(added_items), "items": len(current_items)},
                 )
 
 
@@ -1584,6 +1596,7 @@ def run_reviews(competitor_name: Optional[str] = None) -> None:
                 competitor.id,
                 "reviews",
                 "success",
+                message=f"{ok_count}/{len(props)} properties fetched",
                 extra={"properties": ok_count, "total": len(props)},
             )
             print(f"[reviews] Done. {ok_count}/{len(props)} properties.")
@@ -1614,20 +1627,41 @@ def run(
         run_press_local(competitor_name=competitor_name)
         return
     if channel in (None, *RUNNER_CHANNELS):
-        if channel in (None, "talent"):
-            run_talent(competitor_name=competitor_name)
-        if channel in (None, "asset"):
-            run_asset(competitor_name=competitor_name)
-        if channel in (None, "press"):
-            run_press(competitor_name=competitor_name)
-        if channel in (None, "homepage"):
-            run_homepage(competitor_name=competitor_name)
-        if channel in (None, "public_records"):
-            run_public_records(competitor_name=competitor_name)
-        if channel in (None, "social"):
-            run_social(competitor_name=competitor_name)
-        if channel in (None, "reviews"):
-            run_reviews(competitor_name=competitor_name)
+        if channel is None and competitor_name is None:
+            # Competitor-first: run all channels per competitor so each competitor completes
+            # before moving to the next. Makes progress visible during long force refreshes.
+            with get_session() as session:
+                competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+                competitors = [c for c in competitors if getattr(c, "is_active", True)]
+            for c in competitors:
+                name = c.name
+                print(
+                    f"\n[{datetime.now(timezone.utc).isoformat()}] === {name} (all channels) ===",
+                    flush=True,
+                )
+                run_talent(competitor_name=name)
+                run_asset(competitor_name=name)
+                run_press(competitor_name=name)
+                run_homepage(competitor_name=name)
+                run_public_records(competitor_name=name)
+                run_social(competitor_name=name)
+                run_reviews(competitor_name=name)
+        else:
+            # Channel-first: single channel or single competitor (unchanged)
+            if channel in (None, "talent"):
+                run_talent(competitor_name=competitor_name)
+            if channel in (None, "asset"):
+                run_asset(competitor_name=competitor_name)
+            if channel in (None, "press"):
+                run_press(competitor_name=competitor_name)
+            if channel in (None, "homepage"):
+                run_homepage(competitor_name=competitor_name)
+            if channel in (None, "public_records"):
+                run_public_records(competitor_name=competitor_name)
+            if channel in (None, "social"):
+                run_social(competitor_name=competitor_name)
+            if channel in (None, "reviews"):
+                run_reviews(competitor_name=competitor_name)
     if channel is not None and channel not in RUNNER_CHANNELS:
         print(f"[{datetime.now(timezone.utc).isoformat()}] unknown channel: {channel}")
 

@@ -1,10 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
+  <h1>{{ (competitor or {}).get('name', 'Dossier') }} Dossier</h1>
   {% if error %}
-    <div class="card empty">{{ error }}</div>
-  {% else %}
-    <h1>{{ competitor.name }} Dossier</h1>
-    {% if not has_any_snapshot %}
+    <div class="card" style="border-left: 6px solid #b84a2b; margin-bottom: 16px;">
+      <strong>Error loading dossier</strong>
+      <p class="meta" style="margin: 4px 0 0 0;">{{ error }}</p>
+    </div>
+  {% endif %}
+  {% if not has_any_snapshot and not error %}
     <div class="card" style="border-left: 6px solid var(--accent); margin-bottom: 16px;">
       <strong>No data yet—run collection</strong>
       <p class="meta" style="margin: 4px 0 12px 0;">This dossier has no snapshots yet. Run data collection to populate talent, asset, and press sections.</p>
@@ -21,8 +24,8 @@
       </form>
       <span class="meta" style="margin-left: 8px;">Starts collection in the background; check <a href="/runs">Runs</a> for status.</span>
     </div>
-    {% endif %}
-    <div style="margin-bottom: 12px;">
+  {% endif %}
+  <div style="margin-bottom: 12px;">
       <form method="post" action="/dossier/{{ competitor.id }}/refresh" class="refresh-form" style="display: inline-block; margin-right: 8px;">
         <label style="display: inline-flex; align-items: center; gap: 6px; margin-right: 20px; white-space: nowrap;">
           <input type="checkbox" name="force" value="1" /> Force full refresh
@@ -465,5 +468,4 @@
         <div class="meta">No recent events.</div>
       {% endif %}
     </div>
-  {% endif %}
 {% endblock %}

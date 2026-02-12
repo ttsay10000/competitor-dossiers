@@ -564,7 +564,7 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
             except Exception:
                 pass
     # Fallback: snapshot sources if endpoints not loaded (e.g. minimal query)
-    for src in (latest_press.structured_json or {}).get("sources") or []:
+    for src in ((latest_press.structured_json or {}).get("sources") or []) if latest_press else []:
         if isinstance(src, dict) and (src.get("type") == "press_endpoint" or "url" in src):
             u = (src.get("url") or "").strip()
             if u:
@@ -1117,8 +1117,46 @@ def force_refresh_and_reset_baseline(request: Request):
     return RedirectResponse(url="/competitors?refreshed=1&forced=1", status_code=303)
 
 
+def _dossier_frame_context(session, competitor_id: int, error: Optional[str] = None) -> dict:
+    """Minimal context for dossier frame so layout (h1, refresh forms, cards) always renders."""
+    competitor = session.get(Competitor, competitor_id)
+    comp = {"id": competitor_id, "name": (competitor.name if competitor else "Dossier")}
+    all_competitors = session.query(Competitor).order_by(Competitor.created_at.desc()).all()
+    nav = [{"id": c.id, "name": c.name, "created_at": c.created_at} for c in all_competitors]
+    ctx = {
+        "competitor": comp,
+        "error": error,
+        "last_refreshed": get_last_refreshed(session),
+        "nav_competitors": nav,
+        "has_any_snapshot": False,
+        "executive_summary": None,
+        "executive_summary_lazy": False,
+        "properties_refinement_available": False,
+        "top_news": [],
+        "total_properties": 0,
+        "properties_by_location": [],
+        "properties_by_state": [],
+        "properties_other": [],
+        "other_properties_display": [],
+        "location_totals_match": True,
+        "talent_jobs": [],
+        "jobs_by_function": [],
+        "jobs_by_function_property": [],
+        "talent_job_board_url": None,
+        "digital_footprint_events": [],
+        "press_groups": [],
+        "social_posts": [],
+        "review_properties": [],
+        "reviews_minimal": [],
+        "events": [],
+        "review_error": None,
+    }
+    return ctx
+
+
 @router.get("/dossier/{competitor_id}")
 def dossier(request: Request, competitor_id: int):
+    _NO_STORE_HEADERS = {"Cache-Control": "no-store, no-cache, must-revalidate"}
     try:
         from ..config import settings
         with get_session() as session:
@@ -1133,21 +1171,19 @@ def dossier(request: Request, competitor_id: int):
     except Exception as exc:
         import traceback
         traceback.print_exc()
+        with get_session() as session:
+            frame = _dossier_frame_context(session, competitor_id, error=f"Dossier failed to load: {exc!s}. Check server logs for details.")
         return request.app.state.templates.TemplateResponse(
             "dossier.html",
-            {
-                "request": request,
-                "error": f"Dossier failed to load: {exc!s}. Check server logs for details.",
-                "last_refreshed": None,
-                "nav_competitors": [],
-            },
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+            {"request": request, **frame},
+            headers=_NO_STORE_HEADERS,
         )
-    _NO_STORE_HEADERS = {"Cache-Control": "no-store, no-cache, must-revalidate"}
     if "error" in context:
+        with get_session() as session:
+            frame = _dossier_frame_context(session, competitor_id, error=context["error"])
         return request.app.state.templates.TemplateResponse(
             "dossier.html",
-            {"request": request, "error": context["error"], "last_refreshed": context.get("last_refreshed"), "nav_competitors": context.get("nav_competitors", [])},
+            {"request": request, **frame},
             headers=_NO_STORE_HEADERS,
         )
     return request.app.state.templates.TemplateResponse(

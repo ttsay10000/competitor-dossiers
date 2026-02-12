@@ -42,7 +42,7 @@ def root():
 
 
 def _competitor_status(session, competitor_id: int) -> dict:
-    """Return has_snapshots per channel and last_runs per channel for a competitor."""
+    """Return has_snapshots per channel, last_runs per channel, and last_refresh for a competitor."""
     has_snapshots = {ch: False for ch in DISPLAY_CHANNELS}
     subq = (
         session.query(Snapshot.channel, func.count(Snapshot.id))
@@ -65,7 +65,14 @@ def _competitor_status(session, competitor_id: int) -> dict:
                 "status": log.status,
                 "created_at_str": to_eastern(log.created_at),
             }
-    return {"has_snapshots": has_snapshots, "last_runs": last_runs}
+    last_refresh_row = (
+        session.query(RunLog)
+        .filter(RunLog.competitor_id == competitor_id)
+        .order_by(RunLog.created_at.desc())
+        .first()
+    )
+    last_refresh_at = last_refresh_row.created_at if last_refresh_row else None
+    return {"has_snapshots": has_snapshots, "last_runs": last_runs, "last_refresh_at": last_refresh_at}
 
 
 @router.get("/competitors")
@@ -75,6 +82,7 @@ def competitors_list(request: Request):
         competitors_data = []
         for c in competitors:
             status = _competitor_status(session, c.id)
+            last_refresh = status.get("last_refresh_at")
             competitors_data.append({
                 "id": c.id,
                 "name": c.name,
@@ -82,6 +90,8 @@ def competitors_list(request: Request):
                 "created_at": c.created_at,
                 "has_snapshots": status["has_snapshots"],
                 "last_runs": status["last_runs"],
+                "last_refresh": to_eastern(last_refresh) if last_refresh else None,
+                "baseline_set": to_eastern(c.reporting_baseline_at) if getattr(c, "reporting_baseline_at", None) else None,
             })
         last_refreshed = get_last_refreshed(session)
     nav_competitors = [{"id": c["id"], "name": c["name"], "created_at": c.get("created_at")} for c in competitors_data]

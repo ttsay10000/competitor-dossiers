@@ -71,7 +71,10 @@
       }
     })();
   </script>
-  <p class="meta" style="margin: -8px 0 12px 0;"><strong>Run seed</strong>: loads <code>seed_data.json</code> into the database (file → DB). <strong>Export seed</strong>: writes the current DB to <code>seed_data.json</code> (DB → file). <strong>Force refresh &amp; reset baseline</strong>: runs seed first (file → DB), then deletes <em>all</em> snapshots, sets each competitor’s comparison date to now, and runs all collectors. Use after editing the seed file, changing press/LLM logic, or when runs are still skipping.</p>
+  <p class="meta" style="margin: -8px 0 12px 0;">
+    <strong>Run seed</strong>: loads <code>seed_data.json</code> into the database (file → DB).<br>
+    <strong>Export seed</strong>: writes the current DB to <code>seed_data.json</code> (DB → file).<br>
+    <strong>Force refresh &amp; reset baseline</strong>: runs seed first (file → DB), then deletes <em>all</em> snapshots, sets each competitor’s comparison date to now, and runs all collectors. Use after editing the seed file, changing press/LLM logic, or when runs are still skipping.</p>
   <div class="card" id="rollup-card">
     <h3>Recent updates</h3>
     <div id="rollup-content" class="rollup-box" style="max-height: 280px; overflow-y: auto; white-space: pre-wrap; font-size: 14px; line-height: 1.5;">Loading…</div>
@@ -108,6 +111,8 @@
           <th>Name</th>
           <th>Domain</th>
           <th>Added</th>
+          <th>Last refresh</th>
+          <th>Baseline set</th>
           <th>Data / Status</th>
           <th></th>
         </tr>
@@ -118,6 +123,8 @@
           <td>{{ competitor.name }}</td>
           <td class="muted">{{ competitor.primary_domain or "" }}</td>
           <td class="muted" style="font-size: 13px;">{% if competitor.created_at %}{{ competitor.created_at.strftime('%Y-%m-%d') }}{% else %}—{% endif %}</td>
+          <td class="muted" style="font-size: 13px;">{{ competitor.last_refresh or "—" }}</td>
+          <td class="muted" style="font-size: 13px;">{{ competitor.baseline_set or "—" }}</td>
           <td class="muted" style="font-size: 12px;">
             {% set has = competitor.has_snapshots or {} %}
             {% set runs = competitor.last_runs or {} %}
@@ -138,7 +145,7 @@
         {% endfor %}
         {% if competitors|length == 0 %}
         <tr>
-          <td colspan="5" class="muted">No competitors yet.</td>
+          <td colspan="7" class="muted">No competitors yet.</td>
         </tr>
         {% endif %}
       </tbody>
