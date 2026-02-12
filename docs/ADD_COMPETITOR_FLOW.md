@@ -56,6 +56,17 @@ This doc describes the end-to-end flow when adding a competitor from the UI, whe
 
 ---
 
+## Adding via seed_data.json (instead of UI)
+
+If you add a competitor (and sources) by editing `seed_data.json`:
+
+- **Render:** On each deploy, `python -m app.seed` runs, so the file is upserted into the DB. Push the updated file and the next deploy will add the competitor to the DB.
+- **Local:** Run `python -m app.cli --seed` (or `python -m app.seed`) so the new competitor is in the DB before running channels. Otherwise channel runners won’t see them (they read from the DB only).
+
+See **ADD_COMPETITOR_REVIEW.md** for full sync (seed ↔ DB), channel logic, and troubleshooting (e.g. new competitor not appearing in runs).
+
+---
+
 ## Channel-level run control
 
 - **Populate now** can run all channels (default) or only selected ones.

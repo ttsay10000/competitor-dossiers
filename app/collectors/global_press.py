@@ -812,6 +812,81 @@ def collect_prnewswire_items(
         if len(results) >= max_items:
             return results
 
+    # 1b) Also fetch the company's PR Newswire news page (e.g. https://www.prnewswire.com/news/blueground/).
+    #     This reliably surfaces releases when the search page is JS-heavy or returns few results.
+    company_slug = re.sub(r"[^a-z0-9]", "", company_name.lower())
+    company_html: Optional[str] = None
+    if company_slug and len(results) < max_items:
+        company_page_url = f"https://www.prnewswire.com/news/{company_slug}/"
+        try:
+            company_fetched = fetch_url(company_page_url, timeout=25, headers={"User-Agent": USER_AGENT_BROWSER})
+            if company_fetched.status_code == 200 and company_fetched.text and len(company_fetched.text) > 1000:
+                company_html = company_fetched.text
+        except Exception:
+            pass
+        if not company_html and company_slug:
+            try:
+                from ..config import settings
+                if getattr(settings, "playwright_enabled", False):
+                    from .http import fetch_url_js
+                    js_fetched = fetch_url_js(company_page_url)
+                    if js_fetched.text and len(js_fetched.text) > 1000:
+                        company_html = js_fetched.text
+            except Exception:
+                pass
+        if company_html:
+            soup2 = BeautifulSoup(company_html, "html.parser")
+            for a in soup2.find_all("a", href=True):
+                href = (a.get("href") or "").strip()
+                if "/news-releases/" not in href or "prnewswire.com" not in href:
+                    continue
+                if not href.startswith("http"):
+                    href = urljoin("https://www.prnewswire.com", href)
+                if href in seen_urls:
+                    continue
+                title = (a.get_text() or "").strip()
+                if not title or len(title) < 10:
+                    parent = a.parent
+                    if parent:
+                        title = (parent.get_text() or "").strip()[:200]
+                    if not title or len(title) < 10:
+                        continue
+                dt = _date_from_card(a)
+                if dt is None:
+                    date_match = re.search(
+                        r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s*\d{4}",
+                        title,
+                        re.IGNORECASE,
+                    )
+                    if date_match:
+                        try:
+                            dt = datetime.strptime(date_match.group(0), "%b %d, %Y")
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=timezone.utc)
+                        except Exception:
+                            pass
+                if dt is None and href:
+                    dt = _date_from_article_url(href)
+                if dt and dt < cutoff:
+                    continue
+                if re.search(r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s*\d{4}", title, re.IGNORECASE):
+                    title = re.sub(r"^[A-Za-z]{3}\s+\d{1,2},\s*\d{4}[^:]*:\s*", "", title).strip()
+                if not _title_mentions_company(title, href):
+                    if not _article_mentions_partnership_with_company(href, company_name):
+                        continue
+                seen_urls.add(href)
+                results.append(
+                    {
+                        "title": title[:300],
+                        "url": href,
+                        "date": dt.isoformat() if dt else None,
+                        "source": "PR Newswire",
+                        "provider": "prnewswire",
+                    }
+                )
+                if len(results) >= max_items:
+                    return results
+
     # 2) Fallback: PR Newswire injects result links via JS but often embeds URLs in the HTML (e.g. in script/data).
     #    Extract relative paths /news-releases/...html and build items so we get articles without Playwright.
     #    Slug is lowercase and ends with -<id>; strip the ID and title-case for display.
@@ -844,34 +919,41 @@ def collect_prnewswire_items(
             return _parse_iso_date(match.group(0))
         return None
 
-    if len(results) < 2 and html_content:
-        path_pattern = re.compile(r"/news-releases/([^\s\"'<>?]+\.html)")
-        for m in path_pattern.finditer(html_content):
-            path = "/news-releases/" + m.group(1).split("?")[0].strip()
-            href = urljoin("https://www.prnewswire.com", path)
-            if href in seen_urls:
-                continue
-            slug = m.group(1).replace(".html", "").replace("-", " ")
-            slug = re.sub(r"\s+\d{7,}$", "", slug).strip()  # strip trailing numeric ID (e.g. 302576370)
-            title = slug[:300].title() if len(slug) >= 10 else f"Press release: {company_name}"
-            if not _title_mentions_company(title, href):
-                if not _article_mentions_partnership_with_company(href, company_name):
+    # Run fallback on search HTML and, if we have it, company page HTML.
+    html_sources = [html_content]
+    if company_slug and company_html:
+        html_sources.append(company_html)
+    for _html in html_sources:
+        if len(results) >= max_items:
+            break
+        if len(results) < 2 and _html:
+            path_pattern = re.compile(r"/news-releases/([^\s\"'<>?]+\.html)")
+            for m in path_pattern.finditer(_html):
+                path = "/news-releases/" + m.group(1).split("?")[0].strip()
+                href = urljoin("https://www.prnewswire.com", path)
+                if href in seen_urls:
                     continue
-            dt_fb = _date_near_match(html_content, m.start(), m.end())
-            if dt_fb is None and _date_fetches_left > 0:
-                dt_fb = _date_from_article_url(href)
-            seen_urls.add(href)
-            results.append(
-                {
-                    "title": title[:300],
-                    "url": href,
-                    "date": dt_fb.isoformat() if dt_fb else None,
-                    "source": "PR Newswire",
-                    "provider": "prnewswire",
-                }
-            )
-            if len(results) >= max_items:
-                break
+                slug = m.group(1).replace(".html", "").replace("-", " ")
+                slug = re.sub(r"\s+\d{7,}$", "", slug).strip()  # strip trailing numeric ID (e.g. 302576370)
+                title = slug[:300].title() if len(slug) >= 10 else f"Press release: {company_name}"
+                if not _title_mentions_company(title, href):
+                    if not _article_mentions_partnership_with_company(href, company_name):
+                        continue
+                dt_fb = _date_near_match(_html, m.start(), m.end())
+                if dt_fb is None and _date_fetches_left > 0:
+                    dt_fb = _date_from_article_url(href)
+                seen_urls.add(href)
+                results.append(
+                    {
+                        "title": title[:300],
+                        "url": href,
+                        "date": dt_fb.isoformat() if dt_fb else None,
+                        "source": "PR Newswire",
+                        "provider": "prnewswire",
+                    }
+                )
+                if len(results) >= max_items:
+                    break
 
     return results
 

@@ -69,7 +69,8 @@ def _extract_properties_by_location_array(text: str) -> Optional[List[Dict[str, 
 
 # Caps for exec summary prompt size (location/news/delta); events are not capped.
 MAX_LOCATION_ROWS_FOR_SUMMARY = 25
-MAX_NEWS_FOR_SUMMARY = 15  # Include more press to surface new markets, expansion coverage
+MAX_NEWS_FOR_SUMMARY = 15  # Top news only (latest 2-3 weeks); no raw press_90d in exec summary
+TOP_NEWS_DAYS = 21  # Only include news from past 2-3 weeks in executive summary
 MAX_DELTA_BY_CITY_ROWS = 15
 MAX_REVIEW_PROPERTIES_FOR_SUMMARY = 10  # Sample of review sentiment sent to LLM (only when significant)
 
@@ -203,50 +204,87 @@ def aggregate_state_and_state_city_rows(
 
 
 def _build_context_text(context: Dict[str, Any]) -> str:
-    """Turn dossier context into a concise text block for the LLM."""
+    """
+    Turn dossier context into a concise text block for the LLM.
+    Executive summary uses only: (1) top news (last 2-3 weeks), (2) asset changes vs baseline
+    or baseline footprint if no refresh, (3) job changes vs baseline or baseline count if no refresh,
+    (4) website/digital footprint changes (events), (5) social/review updates (events + significant reviews).
+    When only baseline exists (no refresh), we send baseline state; otherwise changes only.
+    """
+    from datetime import datetime, timedelta, timezone
+
     parts = []
-    name = context.get("competitor", {}).get("name", "Competitor")
-
-    # Comparison baseline: only changes/news *after* this date should be summarized.
     comparison_baseline = context.get("comparison_baseline_date")
+    has_asset_refresh = context.get("has_asset_refresh_since_baseline", False)
+    has_talent_refresh = context.get("has_talent_refresh_since_baseline", False)
+    has_any_refresh = has_asset_refresh or has_talent_refresh
+
+    # Baseline instruction: summarize only changes when we have a refresh; otherwise baseline is acceptable.
     if comparison_baseline:
-        parts.append(
-            f"Comparison baseline date: {comparison_baseline}. "
-            "All data below is post-baseline: property/role deltas and news are changes or additions since baseline."
-        )
+        if has_any_refresh:
+            parts.append(
+                f"Comparison baseline date: {comparison_baseline}. "
+                "Summarize only CHANGES since baseline (property/job deltas, new events). Do not restate baseline state."
+            )
+        else:
+            parts.append(
+                f"Comparison baseline date: {comparison_baseline}. "
+                "Only baseline data available (no refresh since). Summarize current state where applicable."
+            )
 
-    # 1. New properties: count + areas (from delta_by_city where added > 0)
-    added = context.get("asset_added_since_baseline") or 0
-    removed = context.get("asset_removed_since_baseline") or 0
-    delta_by_city = context.get("asset_delta_by_city") or []
-    added_areas = [f"{r['location']}: {r['added']}" for r in delta_by_city if r.get("added", 0) > 0]
-    removed_areas = [f"{r['location']}: {r['removed']}" for r in delta_by_city if r.get("removed", 0) > 0]
-    if added > 0:
-        n_areas = len(added_areas) or 1
-        parts.append(f"New properties: {added} properties in {n_areas} areas — " + "; ".join(added_areas[:MAX_DELTA_BY_CITY_ROWS]))
+    # 1. Asset: changes vs baseline (added/removed per state) when we have a refresh; else baseline footprint only.
+    if has_asset_refresh:
+        added = context.get("asset_added_since_baseline") or 0
+        removed = context.get("asset_removed_since_baseline") or 0
+        delta_by_city = context.get("asset_delta_by_city") or []
+        added_areas = [f"{r['location']}: {r['added']}" for r in delta_by_city if r.get("added", 0) > 0]
+        removed_areas = [f"{r['location']}: {r['removed']}" for r in delta_by_city if r.get("removed", 0) > 0]
+        if added > 0:
+            n_areas = len(added_areas) or 1
+            parts.append(f"Property changes since baseline — New: {added} in {n_areas} areas: " + "; ".join(added_areas[:MAX_DELTA_BY_CITY_ROWS]))
+        else:
+            parts.append("Property changes since baseline — New: 0.")
+        if removed > 0:
+            n_areas = len(removed_areas) or 1
+            parts.append(f"Property changes since baseline — Removed: {removed} in {n_areas} areas: " + "; ".join(removed_areas[:MAX_DELTA_BY_CITY_ROWS]))
+        else:
+            parts.append("Property changes since baseline — Removed: 0.")
     else:
-        parts.append("New properties: 0.")
-    if removed > 0:
-        n_areas = len(removed_areas) or 1
-        parts.append(f"Removed properties: {removed} properties in {n_areas} areas — " + "; ".join(removed_areas[:MAX_DELTA_BY_CITY_ROWS]))
+        total_properties = context.get("total_properties") or 0
+        properties_by_location = context.get("properties_by_location") or []
+        if total_properties > 0 and properties_by_location:
+            loc_summary = "; ".join(f"{r.get('location', '')}: {r.get('count', 0)}" for r in properties_by_location[:MAX_DELTA_BY_CITY_ROWS])
+            parts.append(f"Property footprint (baseline; no refresh yet): {total_properties} properties — {loc_summary}")
+        else:
+            parts.append(f"Property footprint (baseline): {total_properties} properties.")
+
+    # 2. Talent: job count changes since baseline when we have a refresh; else baseline count only.
+    if has_talent_refresh:
+        jobs_added = context.get("jobs_added_since_baseline") or 0
+        jobs_removed = context.get("jobs_removed_since_baseline") or 0
+        total_roles = len(context.get("talent_jobs") or [])
+        parts.append(f"Job changes since baseline: {jobs_added} new roles posted, {jobs_removed} removed. Current open roles: {total_roles}.")
     else:
-        parts.append("Removed properties: 0.")
+        total_roles = len(context.get("talent_jobs") or [])
+        parts.append(f"Open roles (baseline; no refresh yet): {total_roles}. No job count changes.")
 
-    # 2. Talent: signals only (deltas + events). Do not send full snapshot breakdown so exec summary
-    # reflects stable signals (new/removed roles, senior hires, hiring surge) rather than whatever
-    # snapshot was chosen this load (which can override when talent collector returns 0 jobs).
-    jobs_added = context.get("jobs_added_since_baseline") or 0
-    jobs_removed = context.get("jobs_removed_since_baseline") or 0
-    parts.append(f"New roles posted since baseline: {jobs_added}.")
-    parts.append(f"Roles removed since baseline: {jobs_removed}.")
-    talent_jobs = context.get("talent_jobs") or []
-    total_roles = len(talent_jobs)
-    parts.append(f"Current open roles (latest count we have): {total_roles}.")
-
-    # 3. Recent news: feed top_news + press_90d so LLM sees full picture (new markets, expansion coverage)
+    # 3. Top news: only latest 2-3 weeks (top_news only; no raw press_90d).
     top_news = context.get("top_news") or []
-    press_90d = context.get("press_90d") or []
-    news_pool = top_news if top_news else press_90d[:MAX_NEWS_FOR_SUMMARY]
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=TOP_NEWS_DAYS)).date()
+    news_in_window = []
+    for n in top_news[:MAX_NEWS_FOR_SUMMARY]:
+        date_str = (n.get("date") or "").strip()[:10]
+        if date_str and len(date_str) >= 10:
+            try:
+                d = datetime.strptime(date_str, "%Y-%m-%d").date()
+                if d >= cutoff:
+                    news_in_window.append(n)
+            except ValueError:
+                news_in_window.append(n)  # keep if unparseable
+        else:
+            news_in_window.append(n)  # no date: include
+    news_pool = news_in_window if news_in_window else top_news[:MAX_NEWS_FOR_SUMMARY]
     if news_pool:
         lines = []
         for n in news_pool[:MAX_NEWS_FOR_SUMMARY]:
@@ -254,33 +292,32 @@ def _build_context_text(context: Dict[str, Any]) -> str:
             date_str = n.get("date")
             group = n.get("group_title")
             lines.append(f"({date_str}) {title}" + (f" [{group}]" if group else ""))
-        parts.append("Recent news (derive bullets from these): " + " | ".join(lines))
+        parts.append("Top news (last 2-3 weeks; derive bullets from these): " + " | ".join(lines))
     else:
-        parts.append("Recent news: none.")
+        parts.append("Top news: none.")
 
-    # 4. Review sentiment — only when there are major/significant changes (e.g. declining trend, negative sentiment)
+    # 4. Review sentiment — new/significant updates (current snapshot when no review diff; include only when significant).
     reviews_minimal = context.get("reviews_minimal") or []
     significant_reviews = [r for r in reviews_minimal if _is_significant_review(r)]
     if significant_reviews:
         lines = []
         rest = [r for r in reviews_minimal if r not in significant_reviews]
         for r in (significant_reviews + rest)[:MAX_REVIEW_PROPERTIES_FOR_SUMMARY]:
-            name = (r.get("display_name") or "Property")[:50]
+            rname = (r.get("display_name") or "Property")[:50]
             line = (r.get("line") or "").strip() or "—"
             trend = r.get("trend")
-            s = f"{name}: {line}"
+            s = f"{rname}: {line}"
             if trend:
                 s += f" (trend: {trend})"
             lines.append(s)
         if lines:
-            parts.append("Review sentiment (sample; significant changes): " + " | ".join(lines))
+            parts.append("Review sentiment (significant changes / current snapshot): " + " | ".join(lines))
 
-    # 5. Events this week. Precedent first (talent, asset, news-related, digital footprint), then secondary (social).
+    # 5. Events: website changes [digital footprint], social [social], and other signals since last refresh.
     events_week = context.get("events_this_week") or []
     if events_week:
         def _event_date_key(e: dict) -> str:
             return e.get("occurred_at_str") or e.get("detected_at_str") or "0000-00-00"
-        # Newest first, then by priority (precedent first); stable sort keeps newest-first within each priority
         events_week = sorted(events_week, key=_event_date_key, reverse=True)
         events_week = sorted(
             events_week,
@@ -295,13 +332,13 @@ def _build_context_text(context: Dict[str, Any]) -> str:
             if etype == "narrative.social_signal":
                 event_bits.append(f"{title} [social]")
             elif etype and etype.startswith("narrative."):
-                event_bits.append(f"{title} [digital footprint]")
+                event_bits.append(f"{title} [website/digital footprint]")
             elif etype:
                 event_bits.append(f"{title} [{etype}]")
             else:
                 event_bits.append(title)
         if event_bits:
-            parts.append("Events detected this week: " + "; ".join(event_bits))
+            parts.append("Signals since last refresh (website changes, social, talent/asset events): " + "; ".join(event_bits))
 
     return "\n\n".join(parts)
 
@@ -319,22 +356,22 @@ def generate_executive_summary(context: Dict[str, Any]) -> Optional[str]:
     context_text = _build_context_text(context)
     competitor_name = context.get("competitor", {}).get("name", "Competitor")
 
-    system = """You are an AI Chief of Staff writing a competitive intelligence brief for Kasa's CEO and exec team. Your job is to filter noise, cluster related updates, interpret what this competitor is optimizing for, and translate changes into clear implications and actions.
+    system = """You are an AI Chief of Staff writing a competitive intelligence brief for Kasa's CEO and exec team. Be concise and executive-level: scannable in 30 seconds. Filter noise, cluster related updates, and translate changes into clear implications and actions.
 
-PRIORITY: Lead with and prioritize (1) news/press, (2) asset/footprint changes, (3) talent/hiring, and (4) digital footprint (homepage, coming-soon, product page changes). Include social media and Google review sentiment only when they reflect major or significant changes (e.g. notable negative trend, executive-relevant social post about strategy/partnership/expansion). Do not emphasize routine social posts or neutral review sentiment.
+The data you receive contains ONLY: (1) Top news from the past 2-3 weeks; (2) Asset/property changes vs baseline (or baseline footprint if no refresh); (3) Job count changes vs baseline (or baseline count if no refresh); (4) Website/digital footprint changes since last refresh; (5) Social media and review updates (new or significant). When the input says "only baseline" or "no refresh yet", summarize current state; when it says "changes since baseline", summarize only those changes.
 
-Do NOT restate every datapoint. Only surface changes that materially alter competitive dynamics (market entry/exit, meaningful inventory shifts, pricing/fees moves, leadership or key functional hiring, major product/website positioning changes, digital footprint changes, notable partnerships/vendor stack changes, regulatory/legal developments, or repeated patterns over time). If an item is cosmetic or one-off and doesn't matter, drop it. Output must be clean, bullet-based, and decisive.
+PRIORITY: Lead with (1) news/press, (2) asset/footprint, (3) talent/hiring, (4) digital footprint. Include social/review sentiment only when it reflects major change. Do not restate every datapoint—only changes that materially alter competitive dynamics (market entry/exit, meaningful inventory, pricing/fees, key hiring, major product/positioning, partnerships, regulatory). Drop cosmetic or one-off items.
 
-Return in this exact structure. Do NOT start with "EXECUTIVE SUMMARY" or any top-level header—the page already has a header. Use only single newlines between bullets and sections—no blank lines between bullets, no blank line before section headers.
+Return in this exact structure. Do NOT start with "EXECUTIVE SUMMARY" or any top-level header—the page already has a header. Use only single newlines between bullets and sections.
 
-• (5–8 bullets): most important shifts for this competitor, why it matters, and overall risk/opportunity level (Low/Med/High). Weave in concrete changes, signals, and intent where relevant—no separate WHAT CHANGED or WHAT IT SIGNALS sections.
+• (3–5 bullets): most important shifts, why it matters, risk/opportunity (Low/Med/High). One line per bullet where possible; no paragraph-length bullets. Concrete and decisive.
 
 IMPACT ON KASA / RECOMMENDED ACTION
-• (2–4 bullets): specific risks or opportunities for Kasa and what to do about them. End with one line: RECOMMENDED ACTION: [choose one: Ignore / Monitor / Copy / Counter-position / Pre-empt / Partner], optionally followed by 1 short bullet why.
+• (1–2 bullets): specific risk or opportunity for Kasa. End with one line: RECOMMENDED ACTION: [Ignore / Monitor / Copy / Counter-position / Pre-empt / Partner], plus one short phrase why.
 
-INDUSTRY CONTEXT (optional, 1–3 bullets): only if this competitor's moves reflect a broader industry trend worth calling out.
+INDUSTRY CONTEXT (optional, 0–2 bullets): only if this competitor's moves reflect a broader trend worth calling out.
 
-Format rules: use the bullet character • for every list item (never use a dash - for bullets). No blank line before section headers. No "EXECUTIVE SUMMARY" line at the top. Style: bullets only, no fluff, no generic strategy talk, concrete language and strong verbs, avoid speculation not supported by signals, ~250–400 words."""
+Format: bullet character • for every list item (never dash -). No "EXECUTIVE SUMMARY" at top. Style: bullets only, no fluff, concrete language, strong verbs, ~120–200 words total."""
 
     user = f"Competitor: {competitor_name}\n\nData:\n{context_text}"
 
@@ -345,7 +382,7 @@ Format rules: use the bullet character • for every list item (never use a dash
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            max_tokens=900,
+            max_tokens=550,
             temperature=0.3,
         )
         choice = resp.choices[0] if resp.choices else None
@@ -409,6 +446,10 @@ FORMATTING: Output with clear line breaks for display. Put the "Recent updates" 
             raw = choice.message.content.strip()
             polished = polish_rollup_summary(raw)
             if polished:
+                # If the model still returned one dense paragraph, force formatting pass.
+                if polished.count("\n") < 4 and " - **" in polished:
+                    cleaned = clean_rollup_formatting(polished)
+                    return cleaned if cleaned else polished
                 return polished
             cleaned = clean_rollup_formatting(raw)
             return cleaned if cleaned else raw
@@ -517,27 +558,56 @@ def _strip_subbullets(text: str) -> str:
     return "\n".join(lines)
 
 
+def _normalize_rollup_line_breaks(text: str) -> str:
+    """
+    If the rollup is one long paragraph with " - **Name:**" bullets run together,
+    split so each bullet is on its own line for display.
+    """
+    if not text or " - **" not in text:
+        return text
+    lines = text.splitlines()
+    # Already has enough structure (multiple lines).
+    if len(lines) >= 4:
+        return text
+    # One or few lines but contains bullet pattern: split on " - **" so each bullet gets a line.
+    import re
+    # Replace " - **" with newline + " - **" so bullets break onto separate lines (keep first occurrence as-is to preserve "Recent updates" paragraph).
+    parts = re.split(r"(?= - \*\*)", text, flags=re.DOTALL)
+    if len(parts) <= 1:
+        return text
+    # First part is lead paragraph (may end with " - **"); rest are " - **Name:** ..."
+    result = parts[0].rstrip()
+    for p in parts[1:]:
+        p = p.lstrip()
+        if not p:
+            continue
+        if not (p.startswith("- **") or p.startswith(" - **")):
+            result += " " + p
+            continue
+        result += "\n\n" + p if result else p
+    return result
+
+
 def format_rollup_summary_for_display(text: Optional[str]) -> Optional[str]:
     """
-    Escape roll-up summary for HTML and bold **Recent updates:** and **[Competitor Name]:** style lines.
+    Escape roll-up summary for HTML, convert **markdown** to <strong>, and preserve
+    line breaks with <br> so the output renders like a normal formatted summary.
     """
     if not text or not isinstance(text, str):
         return text
+    text = _normalize_rollup_line_breaks(text)
     import html
+    import re
     out = []
     for line in text.splitlines():
         s = line.rstrip()
-        if not s:
-            out.append("")
-            continue
         escaped = html.escape(s)
-        # Bold **Recent updates:** or **...:** at start (markdown-style).
-        if escaped.startswith("**") and ":**" in escaped:
-            end = escaped.index(":**") + 3
-            out.append("<strong>" + escaped[2:end] + "</strong>" + escaped[end:])
-        else:
-            out.append(escaped)
-    return "\n".join(out)
+        # Replace all **...** (e.g. **Recent updates:**, **Vacasa:**) with <strong>...</strong>
+        # so bolding works even when the LLM returns one long paragraph.
+        escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
+        out.append(escaped)
+    # Use <br> so line breaks render in HTML (white-space: normal would otherwise collapse them).
+    return "<br>\n".join(out)
 
 
 # Section headers to bold in the executive summary display (competitive brief structure).
@@ -595,18 +665,23 @@ def format_executive_summary_for_display(text: Optional[str]) -> Optional[str]:
         tightened.append(line)
     lines = tightened
     out = []
-    for line in lines:
+    for i, line in enumerate(lines):
         stripped = line.strip()
         # Normalize dash bullets to bullet character for display.
         if line.startswith("- ") and not line.startswith("• "):
             line = "• " + line[2:]
         escaped = html.escape(line)
-        if stripped.upper().startswith("RECOMMENDED ACTION:"):
+        # One blank line before section headers and RECOMMENDED ACTION for consistent spacing.
+        is_section_header = stripped in _EXEC_SUMMARY_SECTION_HEADERS
+        is_recommended_action = stripped.upper().startswith("RECOMMENDED ACTION:")
+        if (is_section_header or is_recommended_action) and out:
+            out.append("")
+        if is_recommended_action:
             out.append(
                 "<strong><span style=\"color: " + RECOMMENDED_ACTION_CSS_COLOR + ";\">"
                 + html.escape(stripped) + "</span></strong>"
             )
-        elif stripped in _EXEC_SUMMARY_SECTION_HEADERS:
+        elif is_section_header:
             out.append("<strong>" + html.escape(stripped) + "</strong>")
         else:
             out.append(escaped)

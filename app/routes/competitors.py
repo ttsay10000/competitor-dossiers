@@ -25,13 +25,15 @@ DISPLAY_CHANNELS = ("talent", "asset", "press", "homepage", "social", "reviews")
 CHANNEL_LETTERS = {"talent": "T", "asset": "A", "press": "P", "homepage": "W", "social": "S", "reviews": "R"}
 
 
-def _sync_seed_file() -> None:
-    """After any competitor/source change, write DB to seed_data.json so UI additions persist. Never fail the request."""
+def _sync_seed_file() -> bool:
+    """After any competitor/source change, write DB to seed_data.json so UI additions persist. Never fail the request. Returns True if sync succeeded."""
     try:
         from ..seed import export_seed_to_file
         export_seed_to_file()
+        return True
     except Exception as e:
         logging.warning("Failed to sync seed_data.json after competitor change: %s", e, exc_info=True)
+        return False
 
 
 @router.get("/")
@@ -267,8 +269,11 @@ async def competitors_create(request: Request):
                 )
 
             new_id = competitor.id
-        _sync_seed_file()
-        return RedirectResponse(url=f"/competitors/{new_id}/added", status_code=HTTP_303_SEE_OTHER)
+        seed_synced = _sync_seed_file()
+        url = f"/competitors/{new_id}/added"
+        if not seed_synced:
+            url += "?seed_sync=failed"
+        return RedirectResponse(url=url, status_code=HTTP_303_SEE_OTHER)
     except IntegrityError:
         return RedirectResponse(
             url="/competitors/new?" + urlencode({"error": "duplicate"}),
@@ -332,6 +337,7 @@ async def competitor_run_now(request: Request, competitor_id: int):
 @router.get("/competitors/{competitor_id}/added")
 def competitor_added(request: Request, competitor_id: int):
     """Landing page after adding a new competitor: summary of uploaded data and next-step instructions."""
+    seed_sync_failed = request.query_params.get("seed_sync") == "failed"
     with get_session() as session:
         competitor = session.get(Competitor, competitor_id)
         if competitor is None:
@@ -354,6 +360,7 @@ def competitor_added(request: Request, competitor_id: int):
             "press_urls": press_urls,
             "last_refreshed": last_refreshed,
             "nav_competitors": nav_competitors,
+            "seed_sync_failed": seed_sync_failed,
         },
     )
 

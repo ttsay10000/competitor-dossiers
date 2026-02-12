@@ -8,7 +8,7 @@ A living list of features and improvements for the competitor signals platform. 
 
 ### Add Competitor (existing → improve)
 
-**Current behavior:** Users add a competitor at `/competitors/new` (name, primary domain, talent/asset/press URLs). The competitor is stored in the DB only until someone runs `python -m app.cli --export-seed`, which overwrites `seed_data.json` so the new competitor is included on future deploys.
+**Current behavior:** Users add a competitor at `/competitors/new` (name, primary domain, talent/asset/press URLs). The competitor is stored in the DB and `_sync_seed_file()` immediately overwrites `seed_data.json` on the server. To include the new competitor in the repo (and thus on future deploys and other envs), run `python -m app.cli --export-seed` locally with that DB, then commit and push `seed_data.json`.
 
 **Improvements to consider:**
 

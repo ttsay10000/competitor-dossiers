@@ -5,14 +5,19 @@ resulting groups so you can see how articles are clustered.
 
 Usage (from project root):
   python3 scripts/inspect_press_grouping.py Lark
-  python3 scripts/inspect_press_grouping.py Placemakr
-  python3 scripts/inspect_press_grouping.py AvantStay
+  python3 scripts/inspect_press_grouping.py Blueground
+  python3 scripts/inspect_press_grouping.py Landing
+  python3 scripts/inspect_press_grouping.py Vacasa
 
-Uses same sources as --local press. Requires OPENAI_API_KEY (set in env or in .env).
+Competitors are loaded from seed_data.json (or fallback list). Uses same sources
+as --local press (Google News + PR Newswire, including company PR Newswire page).
+Requires OPENAI_API_KEY (set in env or in .env).
 """
+import json
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -36,12 +41,51 @@ from datetime import datetime, timedelta, timezone
 from app.config import settings
 from app.collectors.global_press import collect_google_news_items, collect_prnewswire_items
 from app.llm_structured import enrich_press_items_with_llm
+from app.runner import get_press_competitors_list, LOCAL_PRESS_COMPETITORS
 
-LOCAL_PRESS_COMPETITORS = [
-    ("Lark", "Lark Hotels"),
-    ("AvantStay", "AvantStay"),
-    ("Placemakr", "Placemakr"),
-]
+
+def _load_competitors(competitor_name: Optional[str] = None):
+    """
+    Load (display_name, press_search_name) for press: DB first (supports UI-added competitors),
+    then seed_data.json, then LOCAL_PRESS_COMPETITORS. Optional competitor_name filters the list.
+    """
+    # 1) Prefer DB so UI-added competitors are included
+    from_db = get_press_competitors_list(competitor_name)
+    if from_db:
+        return from_db
+    # 2) Seed file (e.g. when DB not configured or empty)
+    try:
+        with open(ROOT / "seed_data.json") as f:
+            data = json.load(f)
+        competitors = data.get("competitors", [])
+        if not competitors:
+            raise ValueError("no competitors in seed_data")
+        out = []
+        for c in competitors:
+            name = (c.get("name") or "").strip()
+            if not name:
+                continue
+            press_search = name
+            for src in c.get("sources") or []:
+                if (src.get("channel") or "").strip().lower() == "press":
+                    opts = src.get("extra_options") or {}
+                    if isinstance(opts, dict) and opts.get("press_search_name"):
+                        press_search = (opts.get("press_search_name") or "").strip() or name
+                    break
+            out.append((name, press_search))
+        if competitor_name:
+            name_lower = (competitor_name or "").strip().lower()
+            out = [(d, s) for d, s in out if name_lower in d.lower() or name_lower in s.lower()]
+        if out:
+            return out
+    except Exception:
+        pass
+    # 3) Hardcoded fallback
+    out = list(LOCAL_PRESS_COMPETITORS)
+    if competitor_name:
+        name_lower = (competitor_name or "").strip().lower()
+        out = [(d, s) for d, s in out if name_lower in d.lower() or name_lower in s.lower()]
+    return out
 
 
 def _parse_press_date(value):
@@ -67,13 +111,13 @@ def _parse_press_date(value):
 
 def main():
     competitor_name = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
-    name_lower = competitor_name.lower()
-    competitors = [
-        (disp, search) for disp, search in LOCAL_PRESS_COMPETITORS
-        if not name_lower or name_lower in disp.lower() or name_lower in search.lower()
-    ]
+    competitors = _load_competitors(competitor_name)
     if not competitors:
-        print("No competitor matching {!r}. Options: Lark, AvantStay, Placemakr.".format(competitor_name or "''"))
+        all_competitors = _load_competitors(None)
+        opts = ", ".join(disp for disp, _ in (all_competitors or [])[:10])
+        if (all_competitors or []) and len(all_competitors) > 10:
+            opts += ", ..."
+        print("No competitor matching {!r}. Options: {}.".format(competitor_name or "''", opts or "none"))
         sys.exit(1)
 
     window_days = 90

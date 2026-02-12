@@ -8,6 +8,12 @@
       <p class="meta" style="margin-top: 4px;">Manage the list of competitors and open their dossiers.</p>
     </div>
     <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+      <form method="post" action="/dossier/run-seed" style="display: inline-block;" title="Load seed_data.json into the database (file → DB).">
+        <button type="submit" class="secondary">Run seed</button>
+      </form>
+      <form method="post" action="/dossier/export-seed" style="display: inline-block;" title="Write current DB to seed_data.json (DB → file).">
+        <button type="submit" class="secondary">Export seed</button>
+      </form>
       <form method="post" action="/dossier/force-refresh-and-reset-baseline" class="refresh-form" style="display: inline-block;">
         <button type="submit">Force refresh &amp; reset baseline</button>
       </form>
@@ -48,19 +54,24 @@
         });
       });
 
-      if (new URLSearchParams(window.location.search).get('refreshed') && statusEl) {
+      var params = new URLSearchParams(window.location.search);
+      if ((params.get('refreshed') || params.get('seed_run') || params.get('export_seed')) && statusEl) {
         if (refreshTimerId) clearInterval(refreshTimerId);
-        statusEl.textContent = 'Refresh complete.';
-        statusEl.style.color = 'var(--accent)';
+        if (params.get('refreshed')) statusEl.textContent = 'Refresh complete.';
+        else if (params.get('seed_run')) statusEl.textContent = 'Seed run complete (file → DB).';
+        else if (params.get('export_seed') === '1') statusEl.textContent = 'Export seed complete (DB → file).';
+        else if (params.get('export_seed') === 'failed') { statusEl.textContent = 'Export seed failed (check server logs).'; statusEl.style.color = 'var(--warning, #b8860b)'; }
+        else statusEl.textContent = '';
+        if (params.get('refreshed') || params.get('seed_run') || params.get('export_seed') === '1') statusEl.style.color = 'var(--accent)';
         setTimeout(function() { statusEl.textContent = ''; statusEl.style.color = ''; }, 5000);
         if (window.history && window.history.replaceState) {
-          var q = window.location.search.replace(/[?&]refreshed=1/, '').replace(/[?&]forced=1/, '').replace(/^\?&/, '?').replace(/&$/, '');
+          var q = window.location.search.replace(/[?&]refreshed=1/, '').replace(/[?&]forced=1/, '').replace(/[?&]seed_run=1/, '').replace(/[?&]export_seed=[^&]+/, '').replace(/^\?&/, '?').replace(/&$/, '');
           window.history.replaceState({}, '', window.location.pathname + (q || ''));
         }
       }
     })();
   </script>
-  <p class="meta" style="margin: -8px 0 12px 0;"><strong>Force refresh &amp; reset baseline</strong>: clears snapshots so re-enrichment runs, sets each competitor’s comparison date to now, then runs all collectors. Use after changing press groupings or LLM logic—otherwise runs skip when URLs are unchanged.</p>
+  <p class="meta" style="margin: -8px 0 12px 0;"><strong>Run seed</strong>: loads <code>seed_data.json</code> into the database (file → DB). <strong>Export seed</strong>: writes the current DB to <code>seed_data.json</code> (DB → file). <strong>Force refresh &amp; reset baseline</strong>: runs seed first (file → DB), then deletes <em>all</em> snapshots, sets each competitor’s comparison date to now, and runs all collectors. Use after editing the seed file, changing press/LLM logic, or when runs are still skipping.</p>
   <div class="card" id="rollup-card">
     <h3>Recent updates</h3>
     <div id="rollup-content" class="rollup-box" style="max-height: 280px; overflow-y: auto; white-space: pre-wrap; font-size: 14px; line-height: 1.5;">Loading…</div>

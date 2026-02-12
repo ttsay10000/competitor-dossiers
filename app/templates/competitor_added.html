@@ -76,6 +76,9 @@
     </ol>
 
     <div class="card" style="border-left: 4px solid var(--muted); margin-top: 16px;">
+      {% if seed_sync_failed %}
+      <p class="meta" style="margin: 0 0 12px 0; color: var(--warning, #b8860b);"><strong>Note:</strong> We couldn’t update <code>seed_data.json</code> on this server (e.g. read-only filesystem). The competitor is in the database and all flows (Populate, dossier, runs) will use it. Run <code>python -m app.cli --export-seed</code> locally with this app’s <code>DATABASE_URL</code> to write the file, then commit it.</p>
+      {% endif %}
       <h3 style="margin: 0 0 8px 0;">Add this competitor to the seed file</h3>
       <p class="meta" style="margin: 0 0 8px 0;">The competitor is saved in the database. To include them in <code>seed_data.json</code> (so future deploys and other environments have them), run this from your machine with <code>DATABASE_URL</code> set to this app’s database:</p>
       <pre style="margin: 0; padding: 12px; background: var(--bg-muted); border-radius: 6px; overflow-x: auto; font-size: 0.9rem;"><code>python -m app.cli --export-seed</code></pre>

@@ -1,3 +1,4 @@
+import logging
 import re
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -45,7 +46,9 @@ def _exec_summary_cache_key(competitor_id: int, context: dict) -> tuple:
     asset_removed = context.get("asset_removed_since_baseline") or 0
     jobs_added = context.get("jobs_added_since_baseline") or 0
     jobs_removed = context.get("jobs_removed_since_baseline") or 0
-    return (competitor_id, base, n_events, n_news, asset_added, asset_removed, jobs_added, jobs_removed)
+    has_asset_refresh = context.get("has_asset_refresh_since_baseline", False)
+    has_talent_refresh = context.get("has_talent_refresh_since_baseline", False)
+    return (competitor_id, base, n_events, n_news, asset_added, asset_removed, jobs_added, jobs_removed, has_asset_refresh, has_talent_refresh)
 
 
 def _location_clean_cache_key(name: str, props: list, deltas: list, other_bullets: Optional[str] = None) -> tuple:
@@ -675,9 +678,9 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     for p in press_90d:
         p.pop("_sort_dt", None)
 
-    # Top news: LLM summarizes the most interesting business news from final press groupings (past ~30 days).
-    # Reads each group topic + recent press; outputs 3-5 key bullets with relevant dates.
-    top_news_raw = summarize_top_news_llm(competitor.name, press_groups, days=30)
+    # Top news: LLM summarizes the most interesting business news from final press groupings (past 2-3 weeks).
+    # Executive summary should only include latest news; we use 21 days and send only top_news (no raw press_90d).
+    top_news_raw = summarize_top_news_llm(competitor.name, press_groups, days=21)
     top_news = (top_news_raw or [])
     # Sort by date descending (most recent first); missing dates appear last
     def _top_news_date_key(item):
@@ -726,6 +729,7 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     asset_added_since_baseline = 0
     asset_removed_since_baseline = 0
     asset_delta_by_city = []
+    has_asset_refresh_since_baseline = False
     if latest_asset:
         baseline_asset = None
         if getattr(competitor, "reporting_baseline_at", None):
@@ -754,10 +758,12 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
             asset_removed_since_baseline = len(diff["removed"])
             asset_baseline_date = baseline_asset.captured_at.strftime("%Y-%m-%d")
             asset_delta_by_city = delta_by_city(diff["added"], diff["removed"])
+            has_asset_refresh_since_baseline = baseline_asset.id != latest_asset.id
 
     # Talent comparison vs baseline: roles added and removed since baseline.
     jobs_added_since_baseline = 0
     jobs_removed_since_baseline = 0
+    has_talent_refresh_since_baseline = False
     if latest_talent and talent_jobs:
         baseline_talent = None
         if getattr(competitor, "reporting_baseline_at", None):
@@ -784,6 +790,7 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
             talent_diff = diff_jobs(baseline_jobs, talent_jobs)
             jobs_added_since_baseline = len(talent_diff["added"])
             jobs_removed_since_baseline = len(talent_diff["removed"])
+            has_talent_refresh_since_baseline = True
 
     # Expand "Other" (non-state) into subbullets for display and for LLM (URL path hints: temecula, central-oregon, etc.).
     other_properties_display = []
@@ -919,8 +926,10 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         "asset_added_since_baseline": asset_added_since_baseline,
         "asset_removed_since_baseline": asset_removed_since_baseline,
         "asset_delta_by_city": asset_delta_by_city,
+        "has_asset_refresh_since_baseline": has_asset_refresh_since_baseline,
         "jobs_added_since_baseline": jobs_added_since_baseline,
         "jobs_removed_since_baseline": jobs_removed_since_baseline,
+        "has_talent_refresh_since_baseline": has_talent_refresh_since_baseline,
         "other_properties_display": other_properties_display,
         "comparison_baseline_date": reporting_baseline_date,
         "reviews_minimal": reviews_minimal,
@@ -1059,18 +1068,50 @@ def dossier_executive_summary(competitor_id: int):
     }
 
 
+@router.post("/dossier/run-seed", status_code=303)
+def run_seed_from_ui(request: Request):
+    """
+    Load seed_data.json and upsert competitors, sources, and review properties into the DB.
+    Use after editing seed_data.json or to sync file → DB before a refresh.
+    """
+    from ..seed import run_seed
+    run_seed()
+    logging.info("Seed run from UI: upserted competitors/sources from seed_data.json.")
+    return RedirectResponse(url="/competitors?seed_run=1", status_code=303)
+
+
+@router.post("/dossier/export-seed", status_code=303)
+def export_seed_from_ui(request: Request):
+    """
+    Write current DB competitors and sources to seed_data.json.
+    Use after adding/editing competitors in the UI so the file is updated (e.g. for commit/deploy).
+    """
+    from ..seed import export_seed_to_file
+    try:
+        export_seed_to_file()
+        logging.info("Export seed from UI: wrote seed_data.json.")
+        return RedirectResponse(url="/competitors?export_seed=1", status_code=303)
+    except Exception as e:
+        logging.warning("Export seed from UI failed: %s", e, exc_info=True)
+        return RedirectResponse(url="/competitors?export_seed=failed", status_code=303)
+
+
 @router.post("/dossier/force-refresh-and-reset-baseline", status_code=303)
 def force_refresh_and_reset_baseline(request: Request):
     """
-    Clear latest snapshots for all channels so the run re-enriches everything (no skipping).
-    Use after changing press groupings or LLM logic—otherwise runs skip when URL set is unchanged.
-    Then runs all collectors and advances baseline.
+    Run seed first (seed_data.json → DB), then clear all snapshots (every channel, every
+    competitor), set each competitor's reporting_baseline_at to now, then run all channels
+    for all active competitors. Ensures DB is in sync with seed before full re-enrich.
     """
-    from ..runner import run as run_all_channels, advance_baseline_after_full_refresh, clear_latest_snapshots
+    from ..runner import run as run_all_channels, advance_baseline_after_full_refresh, clear_all_snapshots
     from ..db import get_session
+    from ..seed import run_seed
 
+    run_seed()
+    logging.info("Force refresh: ran seed (seed_data.json → DB).")
     with get_session() as session:
-        deleted = clear_latest_snapshots(session, channel=None)
+        deleted = clear_all_snapshots(session, channel=None)
+    logging.info("Force refresh: cleared %d snapshot(s) (all channels, all competitors).", deleted)
     advance_baseline_after_full_refresh()
     run_all_channels()
     return RedirectResponse(url="/competitors?refreshed=1&forced=1", status_code=303)

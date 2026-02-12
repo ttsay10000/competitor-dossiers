@@ -1271,7 +1271,7 @@ def summarize_top_news_llm(competitor_name: str, press_groups: List[dict], *, da
         except ValueError:
             return None
 
-    # Only include groups with at least one article in the past ~30 days
+    # Only include groups with at least one article in the past `days` (e.g. 21 = 2-3 weeks for exec summary)
     recent_groups = []
     for g in press_groups:
         gdate = _parse_group_date(g)
@@ -1310,7 +1310,7 @@ def summarize_top_news_llm(competitor_name: str, press_groups: List[dict], *, da
     )
     user = (
         f"Company: {competitor_name}\n\n"
-        "Below are press groups from the past ~30 days. Summarize the most interesting business news as 3-5 bullets with dates.\n\n"
+        f"Below are press groups from the past {days} days. Summarize the most interesting business news as 3-5 bullets with dates.\n\n"
         + "\n\n".join(lines)
         + '\n\nReturn only valid JSON: {"bullets": [{"bullet": "...", "date": "YYYY-MM-DD"}, ...]}'
     )

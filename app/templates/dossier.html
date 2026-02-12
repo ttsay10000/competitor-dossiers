@@ -63,7 +63,7 @@
       <p class="meta" style="margin: 2px 0 12px 0;">AI-generated executive summary focused on what has changed recently across talent, markets, assets, and news.</p>
       <div id="executive-summary-content">
         {% if executive_summary %}
-          <div class="exec-summary-body" style="margin: 0; font-size: 15px; line-height: 1.75; white-space: pre-line;">{{ executive_summary | exec_summary_display }}</div>
+          <div class="exec-summary-body" style="margin: 0; font-size: 15px; line-height: 1.9; white-space: pre-line;">{{ executive_summary | exec_summary_display }}</div>
         {% elif executive_summary_lazy %}
           <p class="meta" style="margin: 0;">Loading executive summary…</p>
         {% else %}
@@ -81,7 +81,7 @@
             if (data.summary_display || data.summary) {
               var div = document.createElement('div');
               div.className = 'exec-summary-body';
-              div.style.cssText = 'margin: 0; font-size: 15px; line-height: 1.75; white-space: pre-line;';
+              div.style.cssText = 'margin: 0; font-size: 15px; line-height: 1.9; white-space: pre-line;';
               if (data.summary_display) {
                 div.innerHTML = data.summary_display;
               } else {

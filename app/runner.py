@@ -89,6 +89,21 @@ def clear_latest_snapshots(session, channel: Optional[str] = None) -> int:
     return deleted
 
 
+def clear_all_snapshots(session, channel: Optional[str] = None) -> int:
+    """
+    Delete every snapshot for the given channel (or all channels if channel is None).
+    Use for "force reset and establish baselines" so the next run has no previous
+    snapshot to compare to—no hash-based skip and no re-use of older snapshots.
+    Returns number of snapshots deleted.
+    """
+    q = session.query(Snapshot)
+    if channel is not None:
+        q = q.filter(Snapshot.channel == channel)
+    count = q.count()
+    q.delete(synchronize_session=False)
+    return count
+
+
 def capability_seen(session, competitor_id: int, capability: str) -> bool:
     return (
         session.query(Capability)
@@ -312,9 +327,9 @@ def run_talent(competitor_name: Optional[str] = None) -> None:
             competitors = _filter_competitors_by_name(competitors, competitor_name)
         else:
             competitors = [c for c in competitors if getattr(c, "is_active", True)]
-            if not competitors:
-                log_event("competitor_not_found", competitor_filter=competitor_name)
-                return
+        if not competitors:
+            log_event("competitor_not_found", competitor_filter=competitor_name)
+            return
         for competitor in competitors:
             endpoints_ordered = _endpoints_ordered([
                 e for e in competitor.source_endpoints if e.channel == "talent"
@@ -534,9 +549,9 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
             competitors = _filter_competitors_by_name(competitors, competitor_name)
         else:
             competitors = [c for c in competitors if getattr(c, "is_active", True)]
-            if not competitors:
-                log_event("competitor_not_found", competitor_filter=competitor_name)
-                return
+        if not competitors:
+            log_event("competitor_not_found", competitor_filter=competitor_name)
+            return
         for competitor in competitors:
             endpoints_ordered = _endpoints_ordered([
                 e for e in competitor.source_endpoints if e.channel == "asset"
@@ -730,9 +745,9 @@ def run_press(competitor_name: Optional[str] = None) -> None:
             competitors = _filter_competitors_by_name(competitors, competitor_name)
         else:
             competitors = [c for c in competitors if getattr(c, "is_active", True)]
-            if not competitors:
-                log_event("competitor_not_found", competitor_filter=competitor_name)
-                return
+        if not competitors:
+            log_event("competitor_not_found", competitor_filter=competitor_name)
+            return
         for competitor in competitors:
             endpoints = [
                 endpoint
@@ -1034,30 +1049,73 @@ def run_press(competitor_name: Optional[str] = None) -> None:
             )
 
 
-# Hardcoded list for --local press run (no database).
+# Fallback when DB is unavailable (e.g. --local with no DB). Also used by inspect scripts.
 LOCAL_PRESS_COMPETITORS = [
     ("Lark", "Lark Hotels"),
     ("AvantStay", "AvantStay"),
     ("Placemakr", "Placemakr"),
+    ("Blueground", "Blueground"),
+    ("Landing", "Landing"),
+    ("Vacasa", "Vacasa"),
+    ("Rove", "Rove"),
 ]
+
+
+def get_press_competitors_list(competitor_name: Optional[str] = None) -> Optional[list[tuple[str, str]]]:
+    """
+    Load competitors for press (display_name, press_search_name) from the database.
+    Supports UI-added competitors. Returns None if DB is unavailable or fails.
+    Used by run_press_local and inspect scripts so press flow supports any added competitor.
+    """
+    try:
+        with get_session() as session:
+            competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+            competitors = [c for c in competitors if getattr(c, "is_active", True)]
+            if competitor_name:
+                competitors = _filter_competitors_by_name(competitors, competitor_name)
+            out: list[tuple[str, str]] = []
+            for c in competitors:
+                press_search_name = c.name
+                from_endpoint = False
+                for ep in (c.source_endpoints or []):
+                    if (getattr(ep, "channel", None) or "").strip().lower() == "press":
+                        opts = getattr(ep, "extra_options", None) if ep else None
+                        if isinstance(opts, dict) and opts.get("press_search_name"):
+                            press_search_name = (opts.get("press_search_name") or "").strip() or press_search_name
+                            from_endpoint = True
+                            break
+                if not from_endpoint and press_search_name:
+                    _press_search_fallback = {"lark": "Lark Hotels"}
+                    key = press_search_name.strip().lower()
+                    if key in _press_search_fallback:
+                        press_search_name = _press_search_fallback[key]
+                out.append((c.name, press_search_name))
+            return out if out else None
+    except Exception:
+        return None
 
 
 def run_press_local(competitor_name: Optional[str] = None) -> None:
     """
-    Run press pipeline (Google News + PR Newswire, enrich, dedupe) without database.
-    Uses LOCAL_PRESS_COMPETITORS; always fetches fresh (no snapshot skip).
+    Run press pipeline (Google News + PR Newswire, enrich, dedupe).
+    Prefers competitors from DB (including UI-added); falls back to LOCAL_PRESS_COMPETITORS if DB unavailable.
     Use: python -m app.cli --local --channel press [--competitor NAME]
     """
-    competitors = list(LOCAL_PRESS_COMPETITORS)
-    if competitor_name:
-        name_lower = (competitor_name or "").strip().lower()
-        competitors = [
-            (disp, search) for disp, search in competitors
-            if name_lower in disp.lower() or name_lower in search.lower()
-        ]
+    competitors = get_press_competitors_list(competitor_name)
+    if competitors is None:
+        competitors = list(LOCAL_PRESS_COMPETITORS)
+        if competitor_name:
+            name_lower = (competitor_name or "").strip().lower()
+            competitors = [
+                (disp, search) for disp, search in competitors
+                if name_lower in disp.lower() or name_lower in search.lower()
+            ]
         if not competitors:
-            print(f"[press] No local competitor matching {competitor_name!r}. Options: Lark, AvantStay, Placemakr.")
+            print(f"[press] No competitor matching {competitor_name!r}. Options: Lark, AvantStay, Placemakr, Blueground, Landing, Vacasa, Rove.")
             return
+    elif competitor_name and not competitors:
+        print(f"[press] No competitor matching {competitor_name!r} in database.")
+        return
 
     window_days = 90
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
@@ -1164,9 +1222,9 @@ def run_homepage(competitor_name: Optional[str] = None) -> None:
             competitors = _filter_competitors_by_name(competitors, competitor_name)
         else:
             competitors = [c for c in competitors if getattr(c, "is_active", True)]
-            if not competitors:
-                log_event("competitor_not_found", competitor_filter=competitor_name)
-                return
+        if not competitors:
+            log_event("competitor_not_found", competitor_filter=competitor_name)
+            return
         for competitor in competitors:
             runs = _homepage_runs_for_competitor(competitor)
             for base_url, js_required, paths in runs:

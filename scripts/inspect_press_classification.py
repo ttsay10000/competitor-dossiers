@@ -11,6 +11,7 @@ Usage (from project root):
 Uses the same sources as --local press: Google News + PR Newswire (90d window).
 Requires OPENAI_API_KEY in .env for LLM classification.
 """
+import json
 import sys
 from pathlib import Path
 
@@ -24,13 +25,47 @@ from datetime import datetime, timedelta, timezone
 from app.config import settings
 from app.collectors.global_press import collect_google_news_items, collect_prnewswire_items
 from app.llm_structured import get_press_classification_for_inspection
+from app.runner import get_press_competitors_list, LOCAL_PRESS_COMPETITORS
 
-# Same list as runner.run_press_local (no DB)
-LOCAL_PRESS_COMPETITORS = [
-    ("Lark", "Lark Hotels"),
-    ("AvantStay", "AvantStay"),
-    ("Placemakr", "Placemakr"),
-]
+
+def _load_competitors(competitor_name=None):
+    """
+    Load (display_name, press_search_name): DB first (UI-added competitors), then seed_data, then fallback.
+    """
+    from_db = get_press_competitors_list(competitor_name)
+    if from_db:
+        return from_db
+    try:
+        with open(ROOT / "seed_data.json") as f:
+            data = json.load(f)
+        competitors = data.get("competitors", [])
+        if not competitors:
+            raise ValueError("no competitors")
+        out = []
+        for c in competitors:
+            name = (c.get("name") or "").strip()
+            if not name:
+                continue
+            press_search = name
+            for src in c.get("sources") or []:
+                if (src.get("channel") or "").strip().lower() == "press":
+                    opts = src.get("extra_options") or {}
+                    if isinstance(opts, dict) and opts.get("press_search_name"):
+                        press_search = (opts.get("press_search_name") or "").strip() or name
+                    break
+            out.append((name, press_search))
+        if competitor_name:
+            name_lower = (competitor_name or "").strip().lower()
+            out = [(d, s) for d, s in out if name_lower in d.lower() or name_lower in s.lower()]
+        if out:
+            return out
+    except Exception:
+        pass
+    out = list(LOCAL_PRESS_COMPETITORS)
+    if competitor_name:
+        name_lower = (competitor_name or "").strip().lower()
+        out = [(d, s) for d, s in out if name_lower in d.lower() or name_lower in s.lower()]
+    return out
 
 
 def _parse_press_date(value):
@@ -62,13 +97,13 @@ def _parse_press_date(value):
 
 def main():
     competitor_name = (sys.argv[1] if len(sys.argv) > 1 else "").strip()
-    name_lower = competitor_name.lower()
-    competitors = [
-        (disp, search) for disp, search in LOCAL_PRESS_COMPETITORS
-        if not name_lower or name_lower in disp.lower() or name_lower in search.lower()
-    ]
+    competitors = _load_competitors(competitor_name)
     if not competitors:
-        print("No competitor matching {!r}. Options: Lark, AvantStay, Placemakr.".format(competitor_name or "''"))
+        all_competitors = _load_competitors(None)
+        opts = ", ".join(disp for disp, _ in (all_competitors or [])[:10])
+        if (all_competitors or []) and len(all_competitors) > 10:
+            opts += ", ..."
+        print("No competitor matching {!r}. Options: {}.".format(competitor_name or "''", opts or "none"))
         sys.exit(1)
 
     window_days = 90
