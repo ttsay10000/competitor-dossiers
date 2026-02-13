@@ -395,6 +395,16 @@ def _is_landing_image_collector(text: str) -> bool:
     return bool(t and "view all homes" in t)
 
 
+def _is_landing_locations_url(url: str) -> bool:
+    """True if URL is Landing's locations page (hellolanding.com/locations). Used to force landing_locations strategy."""
+    if not url:
+        return False
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "").rstrip("/") or "/"
+    return "hellolanding.com" in host and path == "/locations"
+
+
 # Pattern for Landing location headers: "City, ST" or "Washington D.C." (section headers, not property names).
 _RE_LANDING_LOCATION = re.compile(
     r"^([^,]*[^\s,])\s*,\s*([A-Z]{2}|D\.C\.)$|^Washington\s+D\.C\.?$",
@@ -1632,6 +1642,9 @@ def collect_asset_snapshot(
         s = opts.get("strategy")
         if s:
             return s
+        # Landing locations page: always use dedicated extractor so cities are not treated as properties.
+        if _is_landing_locations_url(source_url):
+            return "landing_locations"
         if js_required and opts.get("load_more"):
             return "js_exhaust"
         if use_sitemap_first:
@@ -1649,12 +1662,21 @@ def collect_asset_snapshot(
         inspected the top-level sitemap and could therefore return a heavily
         truncated property list. Here we walk nested sitemap URLs on the same
         origin and aggregate all links that look like property/location pages.
-        """
 
-        for root_sitemap_url in discover_sitemap(source_url):
+        For Vacasa (~32k /unit/ URLs), we process all root sitemaps (sitemap.xml
+        and sitemap.xml.gz) in one pass so the full set is collected; otherwise
+        returning after the first root can yield only ~25k from one index.
+        """
+        roots = discover_sitemap(source_url)
+        vacasa_full_pull = _is_vacasa_source(source_url)
+        # Vacasa: one pass with all roots so we aggregate from both sitemap.xml and sitemap.xml.gz (full ~32k).
+        root_iter: list[str] = [roots[0]] if (vacasa_full_pull and roots) else (roots if roots else [])
+        ref_root = roots[0] if roots else ""
+
+        for root_sitemap_url in root_iter:
             visited: set[str] = set()
             property_urls: set[str] = set()
-            stack: list[str] = [root_sitemap_url]
+            stack: list[str] = list(roots) if vacasa_full_pull else [root_sitemap_url]
 
             while stack:
                 sitemap_url = stack.pop()
@@ -1691,7 +1713,7 @@ def collect_asset_snapshot(
                     path = (urlparse(url).path or "").lower()
                     if path.endswith(".xml") or path.endswith(".xml.gz"):
                         parsed_child = urlparse(url)
-                        parsed_root = urlparse(root_sitemap_url)
+                        parsed_root = urlparse(ref_root)
                         if (
                             parsed_child.netloc
                             and _same_site_netloc(parsed_child.netloc, parsed_root.netloc)
@@ -1711,11 +1733,13 @@ def collect_asset_snapshot(
                         props, max_fetches=max_fetches, delay_sec=delay
                     )
                 return {
-                    "source_url": root_sitemap_url,
+                    "source_url": ref_root,
                     "raw_content": None,
                     "raw_hash": None,
                     "properties": props,
                 }
+            if vacasa_full_pull:
+                break
 
         return None
 
@@ -1991,6 +2015,9 @@ def collect_asset_snapshot(
     if opts.get("strategy") is None:
         if chain is None or (isinstance(chain, list) and len(chain) == 0):
             chain = _DEFAULT_ASSET_STRATEGY_CHAIN
+        # Landing locations page: try landing_locations first so we never run generic HTML/link extraction (which can let cities through).
+        if chain and _is_landing_locations_url(source_url) and (chain[0] if chain else None) != "landing_locations":
+            chain = ["landing_locations"] + list(chain)
     # Seed-added competitors often have no extra_options; accept any non-empty result (min_accept=1).
     # Explicit strategy_chain in opts keeps stricter min (5) unless they set min_properties_accept.
     using_default_chain = chain == _DEFAULT_ASSET_STRATEGY_CHAIN
