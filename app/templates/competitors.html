@@ -60,7 +60,12 @@
     .competitors-status-legend { font-size: 10px; color: var(--muted, #6c757d); margin-bottom: 12px; }
     .run-status-table { width: 100%; border-collapse: collapse; font-size: 13px; }
     .run-status-table th, .run-status-table td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border, #e5e7eb); }
-    .run-status-table th { font-weight: 600; color: var(--muted, #6c757d); font-size: 11px; text-transform: uppercase; }
+    .run-status-table th { font-weight: 600; color: var(--muted, #6c757d); font-size: 11px; text-transform: uppercase; text-align: center; }
+    .run-status-table th:first-child { text-align: left; }
+    .run-status-table td { text-align: left; }
+    .run-status-table td.channel-cell { text-align: center; }
+    .run-status-table th.col-date-added, .run-status-table th.col-last-refresh { font-size: 10px; }
+    .run-status-table td.col-date-added, .run-status-table td.col-last-refresh { font-size: 11px; color: var(--muted, #6c757d); }
     .run-status-table .channel-cell { min-width: 48px; white-space: nowrap; }
     .run-status-table .channel-status.success { color: #0d8a0d; }
     .run-status-table .channel-status.error { color: #b84a2b; }
@@ -115,6 +120,7 @@
     <section class="competitor-card" data-competitor-id="{{ competitor.id }}">
       <p class="aka">{% if competitor.primary_domain %}<a href="{{ competitor.primary_domain if competitor.primary_domain.startswith('http') else 'https://' ~ competitor.primary_domain }}" target="_blank" rel="noopener" title="Open company site">{{ competitor.name }}</a>{% else %}{{ competitor.name }}{% endif %}</p>
       <p class="domain">{{ competitor.primary_domain or "—" }}</p>
+      <p class="stats-line meta" style="margin: 4px 0 0 0; font-size: 12px;">Total properties: {{ competitor.total_properties or 0 }} | Available jobs: {{ competitor.total_jobs or 0 }} | Website changes: {{ competitor.recent_website_changes_count or 0 }}</p>
 
       <div class="latest-news">
         <h4>Latest news</h4>
@@ -192,11 +198,11 @@
         <thead>
           <tr>
             <th>Competitor</th>
-            <th>Date added</th>
-            <th>Last refresh</th>
+            <th class="col-date-added">Date added</th>
+            <th class="col-last-refresh">Last refresh</th>
             <th>Baseline set</th>
             {% for ch in display_channels %}
-            <th>{{ channel_letters.get(ch, ch[0]|upper) }}</th>
+            <th>{{ channel_names.get(ch, ch) }}</th>
             {% endfor %}
           </tr>
         </thead>
@@ -207,8 +213,8 @@
               {% if competitor.primary_domain %}<a href="{{ competitor.primary_domain if competitor.primary_domain.startswith('http') else 'https://' ~ competitor.primary_domain }}" target="_blank" rel="noopener">{{ competitor.name }}</a>{% else %}{{ competitor.name }}{% endif %}
               <br><a href="/dossier/{{ competitor.id }}" class="meta" style="font-size: 11px;">View dossier</a>
             </td>
-            <td>{% if competitor.created_at %}{{ competitor.created_at.strftime('%Y-%m-%d') }}{% else %}—{% endif %}</td>
-            <td>{{ competitor.last_refresh or "—" }}</td>
+            <td class="col-date-added">{% if competitor.created_at %}{{ competitor.created_at.strftime('%Y-%m-%d') }}{% else %}—{% endif %}</td>
+            <td class="col-last-refresh">{{ competitor.last_refresh or "—" }}</td>
             <td>{{ competitor.baseline_set or "—" }}</td>
             {% for ch in display_channels %}
             {% set has = competitor.has_snapshots or {} %}

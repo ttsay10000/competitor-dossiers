@@ -767,10 +767,13 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     for p in press_90d:
         p.pop("_sort_dt", None)
 
-    # Top news: LLM summarizes the most interesting business news from final press groupings (past 2-3 weeks).
-    # Executive summary should only include latest news; we use 21 days and send only top_news (no raw press_90d).
-    top_news_raw = summarize_top_news_llm(competitor.name, press_groups, days=21)
-    top_news = (top_news_raw or [])
+    # Top news: use stored bullets from press snapshot when available (30 days); else LLM summarize from groupings.
+    stored_top_news = (latest_press.structured_json or {}).get("top_news") if latest_press else None
+    if isinstance(stored_top_news, list) and stored_top_news:
+        top_news = list(stored_top_news)
+    else:
+        top_news_raw = summarize_top_news_llm(competitor.name, press_groups, days=30)
+        top_news = (top_news_raw or [])
     # Sort by date descending (most recent first); missing dates appear last
     def _top_news_date_key(item):
         d = (item.get("date") or "").strip()

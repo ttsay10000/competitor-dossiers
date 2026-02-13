@@ -43,6 +43,7 @@ def _sort_channels_by_run_order(channels: list[str]) -> list[str]:
     return sorted(channels, key=lambda c: order.get(c, len(CHANNEL_RUN_ORDER)))
 # Single-letter labels for Data/Status column: W=website/digital footprint, S=social, R=reviews
 CHANNEL_LETTERS = {"talent": "T", "asset": "A", "press": "P", "homepage": "W", "public_records": "Pr", "reviews": "R", "social": "S"}
+CHANNEL_NAMES = {"talent": "Talent", "asset": "Asset", "press": "Press", "homepage": "Website", "public_records": "Public Records", "social": "Social", "reviews": "Reviews"}
 
 
 def _sync_seed_file() -> bool:
@@ -141,27 +142,39 @@ def _competitor_topline_summary(session, c: Competitor) -> dict:
     )
     if latest_press:
         struct = latest_press.structured_json or {}
-        # Prefer press_groups (grouped output) when available (e.g. Kasa) — flatten to get articles.
-        press_groups = struct.get("press_groups") or []
-        if press_groups:
-            items = []
-            for g in press_groups:
-                for art in (g.get("articles") or []) if isinstance(g, dict) else []:
-                    if isinstance(art, dict):
-                        items.append(art)
+        # Recent news = top-news bullets from dossier (no hyperlinks). Use stored top_news when available.
+        stored_top_news = struct.get("top_news")
+        if isinstance(stored_top_news, list) and stored_top_news:
+            for b in stored_top_news[:5]:
+                if isinstance(b, dict):
+                    bullet = (b.get("bullet") or b.get("title") or "").strip() or None
+                    if bullet:
+                        latest_news_items.append({"title": bullet, "url": None})
+            latest_news_count = len(latest_news_items)
+            if latest_news_items:
+                latest_news_headline = latest_news_items[0].get("title")
         else:
-            items = struct.get("canonical_items") or struct.get("items", [])
-        items = [i for i in items if isinstance(i, dict)]
-        latest_news_count = len(items)
-        for item in items[:5]:
-            title = (item.get("title") or item.get("display_title") or "").strip() or None
-            if not title:
-                continue
-            url = (item.get("url") or item.get("link") or item.get("source_url") or "").strip() or None
-            latest_news_items.append({"title": title, "url": url})
-        if items:
-            first = items[0]
-            latest_news_headline = (first.get("title") or first.get("display_title") or "").strip() or None
+            # Fallback: flatten articles (old snapshots without top_news).
+            press_groups = struct.get("press_groups") or []
+            if press_groups:
+                items = []
+                for g in press_groups:
+                    for art in (g.get("articles") or []) if isinstance(g, dict) else []:
+                        if isinstance(art, dict):
+                            items.append(art)
+            else:
+                items = struct.get("canonical_items") or struct.get("items", [])
+            items = [i for i in items if isinstance(i, dict)]
+            latest_news_count = len(items)
+            for item in items[:5]:
+                title = (item.get("title") or item.get("display_title") or "").strip() or None
+                if not title:
+                    continue
+                url = (item.get("url") or item.get("link") or item.get("source_url") or "").strip() or None
+                latest_news_items.append({"title": title, "url": url})
+            if items:
+                first = items[0]
+                latest_news_headline = (first.get("title") or first.get("display_title") or "").strip() or None
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=90)
     q = session.query(Event).filter(
@@ -233,6 +246,7 @@ def competitors_list(request: Request):
             "last_refreshed": last_refreshed,
             "display_channels": DISPLAY_CHANNELS,
             "channel_letters": CHANNEL_LETTERS,
+            "channel_names": CHANNEL_NAMES,
             "run_blocked": run_blocked,
             "run_blocked_running": run_blocked_running,
             "remove_error": remove_error,

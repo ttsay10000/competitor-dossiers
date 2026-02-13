@@ -27,6 +27,7 @@ from .llm_structured import (
     enrich_press_items_with_llm,
     enrich_social_posts_with_llm,
     interpret_website_change,
+    summarize_top_news_llm,
 )
 from .utils import parse_url_context
 from .diff.press_diff import diff_items
@@ -979,7 +980,7 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                     session,
                     competitor.id,
                     "press",
-                    "skipped",
+                    "error",
                     message="no_press_items",
                     extra={"search_name": press_search_name},
                 )
@@ -1103,6 +1104,30 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                 print(f"[press]      {url}")
             if display_count > 10:
                 print(f"[press]   ... and {display_count - 10} more")
+
+            # Build top_news (30-day bullets) for dossier and list view; store in snapshot.
+            groups_with_dates = []
+            for g in press_groups:
+                group_latest_dt = None
+                for a in g.get("articles") or []:
+                    raw = (a.get("date") or "").strip()
+                    if raw and len(raw) >= 10:
+                        try:
+                            dt = datetime.strptime(raw[:10], "%Y-%m-%d")
+                            if group_latest_dt is None or dt > group_latest_dt:
+                                group_latest_dt = dt
+                        except ValueError:
+                            pass
+                group_latest_date = group_latest_dt.strftime("%Y-%m-%d") if group_latest_dt else None
+                groups_with_dates.append({
+                    "group_title": g.get("group_title"),
+                    "one_line_summary": g.get("one_line_summary"),
+                    "articles": g.get("articles") or [],
+                    "group_latest_date": group_latest_date,
+                })
+            top_news = summarize_top_news_llm(competitor.name, groups_with_dates, days=30)
+            if top_news:
+                structured["top_news"] = top_news
 
             print(f"[press] Step 8 — Persisting snapshot for {competitor.name}")
 
