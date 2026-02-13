@@ -26,7 +26,7 @@
   <div class="card">
     <h3>Competitor details</h3>
     <form method="post" action="/competitors" id="competitor-form">
-      <div class="row">
+      <div class="row" style="align-items: start;">
         <div>
           <label>Name</label>
           <input name="name" required value="{{ form_data.name if form_data else '' }}" />
@@ -36,8 +36,9 @@
           <input name="primary_domain" id="primary_domain" placeholder="example.com" value="{{ form_data.primary_domain if form_data else '' }}" />
           <p class="meta" style="margin: 4px 0 0 0;">Use the raw domain (e.g. <code>example.com</code>). Full URLs like <code>https://www.example.com/</code> are accepted and will be normalized to the domain.</p>
           <p class="meta" style="margin: 4px 0 0 0;">
-            <button type="button" id="suggest-urls-btn" class="secondary">Suggest URLs from domain</button>
+            <button type="button" id="suggest-urls-btn" class="secondary" title="Find likely careers, locations, and blog URLs (e.g. example.com/careers) and add them to the lists below">Suggest URLs from domain</button>
             <span id="suggest-status" class="meta" style="margin-left: 8px;"></span>
+            <span class="meta" style="display: block; margin-top: 4px; color: var(--muted);">Finds likely careers, locations, and blog URLs—click a suggestion to add it below.</span>
           </p>
           <div id="suggestions-box" style="display: none; margin-top: 12px; padding: 12px; background: var(--bg-secondary); border-radius: 8px;">
             <p class="meta" style="margin: 0 0 8px 0;">Click a URL to add it to the list below.</p>
@@ -99,11 +100,11 @@
         <button type="button" id="add-asset" class="secondary">+ Add another asset link</button>
       </div>
 
-      <!-- Press: keywords for Google News (all must appear in article) -->
+      <!-- Press: Google News search = quoted name + optional broad keywords -->
       <div style="margin-top: 20px;">
         <label style="font-weight: 600;">Press / news</label>
-        <p class="meta" style="margin: 4px 0 8px 0;">
-          Press is collected from <strong>Google News</strong> and <strong>PR Newswire</strong>. Company name always appears in the search. Optional <strong>keywords</strong> (e.g. furnished rentals) improve relevance; comma-separated.
+        <p class="meta" style="margin: 4px 0 8px 0; max-width: 56em;">
+          Press is collected from <strong>Google News</strong> and <strong>PR Newswire</strong>. The competitor name is always searched in quotes (exact match). You can add optional broad keywords below to improve relevance (e.g. furnished rentals), comma-separated.
         </p>
         <div class="row" style="align-items: center;">
           <input name="press_keywords" placeholder="e.g. landing, furnished rentals" style="flex: 1; max-width: 400px;" value="{{ form_data.press_keywords if form_data and form_data.press_keywords else '' }}" />

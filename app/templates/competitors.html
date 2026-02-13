@@ -25,19 +25,22 @@
     button.danger:hover:not(:disabled) { background: #9a3d24; }
     button.danger:disabled { opacity: 0.5; cursor: not-allowed; }
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-    .competitors-existing-table { font-size: 13px; }
-    .competitors-existing-table .cell-date { white-space: nowrap; font-size: 12px; }
-    .competitors-existing-table .cell-status { font-size: 11px; line-height: 1.2; }
-    .competitors-existing-table th, .competitors-existing-table td { padding: 6px 8px; }
-    .competitors-existing-table .name-link { font-weight: 600; text-decoration: none; color: var(--accent, #0d6efd); }
-    .competitors-existing-table .name-link:hover { text-decoration: underline; }
-    .competitors-existing-table .actions-cell { white-space: nowrap; }
-    .competitors-existing-table .actions-cell .action-sep { color: var(--muted, #6c757d); margin: 0 4px; user-select: none; }
-    .competitors-existing-table .actions-cell .action-remove { color: #b84a2b; }
-    .competitors-existing-table .actions-cell .action-remove:hover { text-decoration: underline; }
-    .competitors-existing-table .status-legend { font-size: 10px; color: var(--muted, #6c757d); margin-bottom: 6px; }
-    .competitors-topline-table { table-layout: fixed; width: 100%; }
-    .competitors-topline-table .view-dossier-cell { text-align: center; width: 120px; }
+    .competitor-card { font-size: 13px; padding: 20px; border: 1px solid var(--border, #d0d0d0); border-radius: 12px; margin-bottom: 16px; }
+    .competitor-card .aka { font-weight: 600; font-size: 18px; text-align: center; margin: 0; }
+    .competitor-card .aka a { text-decoration: none; color: var(--accent, #0d6efd); }
+    .competitor-card .aka a:hover { text-decoration: underline; }
+    .competitor-card .domain { text-align: center; color: var(--muted, #6c757d); margin: 4px 0 0 0; }
+    .competitor-card .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 24px; margin-top: 16px; max-width: 480px; margin-left: auto; margin-right: auto; }
+    .competitor-card .stats-left, .competitor-card .stats-right { font-size: 13px; }
+    .competitor-card .stat-line { margin: 4px 0; }
+    .competitor-card .stat-label { color: var(--muted, #6c757d); }
+    .competitor-card .latest-news { margin-top: 16px; }
+    .competitor-card .latest-news h4 { font-size: 12px; color: var(--muted, #6c757d); margin: 0 0 6px 0; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; }
+    .competitor-card .latest-news ul { margin: 0; padding-left: 20px; }
+    .competitor-card .latest-news li { margin: 4px 0; }
+    .competitor-card .latest-news li a { color: var(--accent, #0d6efd); text-decoration: none; }
+    .competitor-card .latest-news li a:hover { text-decoration: underline; }
+    .competitor-card .view-dossier-wrap { text-align: center; margin: 16px 0; }
     .view-dossier-btn {
       display: inline-block;
       padding: 8px 16px;
@@ -49,11 +52,12 @@
       font-size: 13px;
     }
     .view-dossier-btn:hover { opacity: 0.9; color: white; }
-    .competitor-detail-cell { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
-    .competitors-topline-table tr.collapsed .competitor-detail-cell {
-      max-width: 0; width: 0; padding-left: 0; padding-right: 0; overflow: hidden; border-left-width: 0; border-right-width: 0;
-    }
-    .toggle-detail-btn { font-size: 11px; padding: 0 4px; }
+    .competitor-card .data-status { font-size: 11px; line-height: 1.2; color: var(--muted, #6c757d); margin: 8px 0; }
+    .competitor-card .actions-cell { white-space: nowrap; margin-top: 8px; }
+    .competitor-card .actions-cell .action-sep { color: var(--muted, #6c757d); margin: 0 4px; user-select: none; }
+    .competitor-card .actions-cell .action-remove { color: #b84a2b; }
+    .competitor-card .actions-cell .action-remove:hover { text-decoration: underline; }
+    .competitors-status-legend { font-size: 10px; color: var(--muted, #6c757d); margin-bottom: 12px; }
   </style>
   <h1>Dossiers</h1>
 
@@ -95,84 +99,66 @@
   {% endif %}
   <div class="card">
     <h3>Existing</h3>
-    <p class="status-legend competitors-existing-table">Data / Status: T=Talent, A=Asset, P=Press, W=Website, S=Social, R=Reviews. Click row header to collapse/expand topline.</p>
-    <table class="competitors-existing-table competitors-topline-table">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Domain</th>
-          <th>Added</th>
-          <th>Last refresh</th>
-          <th>Baseline set</th>
-          <th>Description</th>
-          <th>Properties</th>
-          <th>Markets (states)</th>
-          <th>Jobs</th>
-          <th>Latest news</th>
-          <th>Website changes</th>
-          <th>Operating model</th>
-          <th class="view-dossier-cell"></th>
-          <th>Data / Status</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for competitor in competitors %}
-        <tr class="competitor-main-row" data-competitor-id="{{ competitor.id }}">
-          <td class="competitor-name-cell">
-            <a href="/dossier/{{ competitor.id }}" class="name-link" title="Open dossier">{{ competitor.name }}</a>
-          </td>
-          <td class="muted competitor-detail-cell">{{ competitor.primary_domain or "" }}</td>
-          <td class="muted cell-date competitor-detail-cell">{% if competitor.created_at %}{{ competitor.created_at.strftime('%Y-%m-%d') }}{% else %}—{% endif %}</td>
-          <td class="muted cell-date competitor-detail-cell">{{ competitor.last_refresh or "—" }}</td>
-          <td class="muted cell-date competitor-detail-cell">{{ competitor.baseline_set or "—" }}</td>
-          <td class="competitor-detail-cell topline-desc">{{ competitor.short_description or "—" }}</td>
-          <td class="competitor-detail-cell topline-num">{{ competitor.total_properties or 0 }}</td>
-          <td class="competitor-detail-cell topline-num">{{ competitor.total_markets_states or 0 }}</td>
-          <td class="competitor-detail-cell topline-num">{{ competitor.total_jobs or 0 }}</td>
-          <td class="competitor-detail-cell topline-news">
-            {% if competitor.latest_news_count and competitor.latest_news_count > 0 %}
-              {{ competitor.latest_news_count }} article{{ 's' if competitor.latest_news_count != 1 else '' }}{% if competitor.latest_news_headline %} · {{ competitor.latest_news_headline[:60] }}{% if (competitor.latest_news_headline or '')|length > 60 %}…{% endif %}{% endif %}
-            {% else %}—{% endif %}
-          </td>
-          <td class="competitor-detail-cell topline-num">{{ competitor.recent_website_changes_count or 0 }}</td>
-          <td class="competitor-detail-cell topline-operating">
-            {% if competitor.operating_model_description %}
-              <span title="{{ competitor.operating_model_description }}">{{ (competitor.operating_model_description or '')[:80] }}{% if (competitor.operating_model_description or '')|length > 80 %}…{% endif %}</span>
-            {% else %}
-              <form method="post" action="/competitors/{{ competitor.id }}/research-operating-model" style="display: inline;">
-                <button type="submit" class="btn-link" style="font-size: 12px;">Research operating model</button>
-              </form>
-            {% endif %}
-          </td>
-          <td class="view-dossier-cell">
-            <a href="/dossier/{{ competitor.id }}" class="view-dossier-btn">View dossier</a>
-          </td>
-          <td class="muted cell-status competitor-detail-cell">
-            {% set has = competitor.has_snapshots or {} %}
-            {% set runs = competitor.last_runs or {} %}
-            {% for ch in display_channels %}
-            {% set letter = channel_letters.get(ch, ch[0]|upper) %}
-            <span title="{{ ch }}: {% if has.get(ch) %}has data{% else %}no data{% endif %}{% if runs.get(ch) %}; last run: {{ runs[ch].status }}{% endif %}">
-              {{ letter }}:{% if has.get(ch) %}✓{% else %}—{% endif %}
-              {% if runs.get(ch) %}<span style="{% if runs[ch].status == 'success' %}color: #0d8a0d;{% elif runs[ch].status == 'running' %}color: #b8860b;{% elif runs[ch].status == 'error' %}color: #b84a2b;{% endif %}">({{ runs[ch].status }})</span>{% endif %}
-            </span>
-            {% if not loop.last %} · {% endif %}
-            {% endfor %}
-          </td>
-          <td class="actions-cell">
-            <button type="button" class="toggle-detail-btn btn-link" title="Collapse/expand topline" aria-label="Collapse row">▼</button>
-            <a href="/competitors/{{ competitor.id }}">Edit</a><span class="action-sep">·</span><button type="button" class="remove-competitor-btn btn-link action-remove" data-id="{{ competitor.id }}" data-name="{{ competitor.name|e }}" data-required="{{ ('remove ' ~ competitor.name ~ ' from site')|e }}">Remove</button>
-          </td>
-        </tr>
-        {% endfor %}
-        {% if competitors|length == 0 %}
-        <tr>
-          <td colspan="15" class="muted">No competitors yet.</td>
-        </tr>
+    <p class="competitors-status-legend">Data / Status: T=Talent, A=Asset, P=Press, W=Website, S=Social, R=Reviews.</p>
+    {% if competitors|length == 0 %}
+    <p class="muted">No competitors yet.</p>
+    {% else %}
+    {% for competitor in competitors %}
+    <section class="competitor-card" data-competitor-id="{{ competitor.id }}">
+      <p class="aka"><a href="/dossier/{{ competitor.id }}" title="Open dossier">{{ competitor.name }}</a></p>
+      <p class="domain">{{ competitor.primary_domain or "—" }}</p>
+
+      <div class="stats-grid">
+        <div class="stats-left">
+          <div class="stat-line"><span class="stat-label">Date added:</span> {% if competitor.created_at %}{{ competitor.created_at.strftime('%Y-%m-%d') }}{% else %}—{% endif %}</div>
+          <div class="stat-line"><span class="stat-label">Last refresh:</span> {{ competitor.last_refresh or "—" }}</div>
+          <div class="stat-line"><span class="stat-label">Baseline set:</span> {{ competitor.baseline_set or "—" }}</div>
+        </div>
+        <div class="stats-right">
+          <div class="stat-line"><span class="stat-label">Total properties:</span> {{ competitor.total_properties or 0 }}</div>
+          <div class="stat-line"><span class="stat-label">Total markets (states):</span> {{ competitor.total_markets_states or 0 }}</div>
+          <div class="stat-line"><span class="stat-label">Jobs available:</span> {{ competitor.total_jobs or 0 }}</div>
+          <div class="stat-line"><span class="stat-label">Website changes:</span> {{ competitor.recent_website_changes_count or 0 }}</div>
+        </div>
+      </div>
+
+      <div class="latest-news">
+        <h4>Latest news</h4>
+        {% set news_items = competitor.latest_news_items or [] %}
+        {% if news_items %}
+        <ul>
+          {% for item in news_items %}
+          <li>{% if item.url %}<a href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}</li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="muted" style="margin: 0; font-size: 13px;">No news yet.</p>
         {% endif %}
-      </tbody>
-    </table>
+      </div>
+
+      <div class="view-dossier-wrap">
+        <a href="/dossier/{{ competitor.id }}" class="view-dossier-btn">View dossier</a>
+      </div>
+
+      <div class="data-status">
+        {% set has = competitor.has_snapshots or {} %}
+        {% set runs = competitor.last_runs or {} %}
+        {% for ch in display_channels %}
+        {% set letter = channel_letters.get(ch, ch[0]|upper) %}
+        <span title="{{ ch }}: {% if has.get(ch) %}has data{% else %}no data{% endif %}{% if runs.get(ch) %}; last run: {{ runs[ch].status }}{% endif %}">
+          {{ letter }}:{% if has.get(ch) %}✓{% else %}—{% endif %}
+          {% if runs.get(ch) %}<span style="{% if runs[ch].status == 'success' %}color: #0d8a0d;{% elif runs[ch].status == 'running' %}color: #b8860b;{% elif runs[ch].status == 'error' %}color: #b84a2b;{% endif %}">({{ runs[ch].status }})</span>{% endif %}
+        </span>
+        {% if not loop.last %} · {% endif %}
+        {% endfor %}
+      </div>
+
+      <div class="actions-cell">
+        <a href="/competitors/{{ competitor.id }}">Edit</a><span class="action-sep">·</span><button type="button" class="remove-competitor-btn btn-link action-remove" data-id="{{ competitor.id }}" data-name="{{ competitor.name|e }}" data-required="{{ ('remove ' ~ competitor.name ~ ' from site')|e }}">Remove</button>
+      </div>
+    </section>
+    {% endfor %}
+    {% endif %}
   </div>
 
   <div id="remove-competitor-modal" class="modal-overlay" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="remove-modal-title">
@@ -201,6 +187,7 @@
         <label><input type="checkbox" name="channels" value="asset" /> Asset</label>
         <label><input type="checkbox" name="channels" value="press" /> Press</label>
         <label><input type="checkbox" name="channels" value="homepage" /> Website</label>
+        <label><input type="checkbox" name="channels" value="public_records" /> Public Records</label>
         <label><input type="checkbox" name="channels" value="reviews" /> Reviews</label>
         <label><input type="checkbox" name="channels" value="social" /> Social</label>
       </div>
@@ -210,7 +197,12 @@
 
   <div class="card mt-16" style="border-left: 4px solid var(--warning, #b8860b);">
     <h3>Global reset — only use if sure</h3>
-    <p class="meta" style="margin-top: 4px;">Run seed: loads seed_data.json into the database (file → DB). Export seed: writes the current DB to seed_data.json (DB → file). Force refresh runs seed, then deletes all snapshots, runs all collectors, and sets each competitor’s comparison date to now. Use after editing the seed file, changing press/LLM logic, or when runs are still skipping.</p>
+    <p class="meta" style="margin-top: 4px;">The <strong>seed file</strong> (<code>seed_data.json</code>) is the canonical list of competitors and sources in your repo. It’s used on deploy and when you want to sync between the database and the file.</p>
+    <ul class="meta" style="margin: 8px 0 0 0; padding-left: 20px;">
+      <li><strong>Run seed</strong> — <em>File → DB.</em> Use when the seed file was updated (e.g. you pulled from git or edited <code>seed_data.json</code> by hand) and you want to load that into the database. Loads <code>seed_data.json</code> into the DB.</li>
+      <li><strong>Export seed</strong> — <em>DB → file.</em> Use when you’ve added or edited competitors in the UI and you want to save that into the seed file so it’s in the repo and on other envs. Writes the current DB to <code>seed_data.json</code>. You do <em>not</em> need to click Run seed after this.</li>
+      <li><strong>Force refresh &amp; reset baseline</strong> — Runs seed (file → DB), then deletes all snapshots, runs all collectors, and sets each competitor’s comparison date to now. Use after editing the seed file, changing press/LLM logic, or when runs are still skipping.</li>
+    </ul>
     <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px;">
       <form method="post" action="/dossier/run-seed" style="display: inline-block;" title="Load seed_data.json into the database (file → DB).">
         <button type="submit" class="secondary">Run seed</button>
@@ -297,7 +289,7 @@
       var channelsParam = params.get('channels');
       var requestedChannels = channelsParam ? channelsParam.split(',').map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean) : [];
 
-      var CHANNEL_LABELS = { talent: 'Talent', asset: 'Asset', press: 'Press', homepage: 'Website', social: 'Social', reviews: 'Reviews' };
+      var CHANNEL_LABELS = { talent: 'Talent', asset: 'Asset', press: 'Press', homepage: 'Website', public_records: 'Public Records', social: 'Social', reviews: 'Reviews' };
       function channelLabel(ch) { return CHANNEL_LABELS[ch] || ch.charAt(0).toUpperCase() + ch.slice(1); }
 
       if (runStatusCard && runStatusList && started && runStartTs && requestedChannels.length) {
@@ -417,17 +409,6 @@
           var name = btn.getAttribute('data-name');
           var required = btn.getAttribute('data-required');
           if (id && name && required) openModal(id, name, required);
-        });
-      });
-
-      document.querySelectorAll('.toggle-detail-btn').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var row = btn.closest('tr');
-          if (!row) return;
-          row.classList.toggle('collapsed');
-          btn.textContent = row.classList.contains('collapsed') ? '\u25B6' : '\u25BC';
-          btn.setAttribute('title', row.classList.contains('collapsed') ? 'Expand row' : 'Collapse row');
-          btn.setAttribute('aria-label', row.classList.contains('collapsed') ? 'Expand row' : 'Collapse row');
         });
       });
 

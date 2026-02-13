@@ -724,6 +724,76 @@ def extract_jobs_from_gem(html: str, source_url: str = "https://jobs.gem.com") -
     return jobs
 
 
+def extract_jobs_from_open_positions_section(
+    html: str,
+    base_url: str,
+    anchor_phrases: tuple[str, ...] = ("open positions", "current openings", "open roles", "openings"),
+) -> list[dict[str, Any]]:
+    """Extract jobs from the section that starts at a heading like 'Open positions'.
+    Avoids header/filler content above the job list. Used for Kasa Living and similar branded careers pages."""
+    soup = BeautifulSoup(html, "html.parser")
+    jobs = []
+    seen = set()
+
+    def _collect_from_section(section) -> None:
+        href_ok_segs = ("job", "career", "position", "opening", "role", "greenhouse", "lever", "ashby")
+        for link in section.find_all("a", href=True):
+            href = link.get("href") or ""
+            h = href.lower()
+            href_ok = any(seg in h for seg in href_ok_segs) or h in ("#", "") or h.startswith("#")
+            raw_title = (link.get_text() or "").strip()
+            if _is_cta_link_text(raw_title) or not raw_title or len(raw_title) < 2:
+                title = _title_from_apply_link(link)
+            else:
+                title = raw_title
+            if not title or len(title) < 4 or len(title) > 120:
+                continue
+            if _is_cta_link_text(title):
+                continue
+            if not _looks_like_job_title(title):
+                continue
+            job_url = href if href.startswith("http") else urljoin(base_url, href) if href and href != "#" else None
+            url_norm = (job_url or "").split("?")[0].rstrip("/") if job_url else ("title:" + title[:80])
+            if url_norm in seen:
+                continue
+            seen.add(url_norm)
+            posted_date = _posted_date_from_element(link)
+            jobs.append({
+                "job_id": None,
+                "title": title,
+                "location": None,
+                "dept": None,
+                "posted_date": posted_date,
+                "url": job_url,
+            })
+
+    for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5"]):
+        text = (tag.get_text() or "").strip().lower()
+        if not any(phrase in text for phrase in anchor_phrases):
+            continue
+        parent = tag.find_parent(["section", "main", "article"])
+        if not parent:
+            parent = tag.find_parent("div")
+        if not parent:
+            parent = tag
+        _collect_from_section(parent)
+        if jobs:
+            return jobs
+
+    return []
+
+
+def extract_jobs_from_kasa_careers(html: str, base_url: str = "https://kasa.com") -> list[dict[str, Any]]:
+    """Extract jobs from Kasa Living careers page. Finds 'open positions' section and extracts from there only.
+    Avoids header, hero, culture, and other filler content above the job list."""
+    jobs = extract_jobs_from_open_positions_section(
+        html,
+        base_url,
+        anchor_phrases=("open positions", "current openings", "open roles", "openings", "join our team"),
+    )
+    return jobs
+
+
 def _extract_jobs_from_generic_html(html: str, source_url: str) -> list[dict[str, Any]]:
     """Extract jobs from HTML using site-specific or generic extractor. Used for generic (non-API) career pages.
     Not used for WizeHire, which has its own fetch + scroll path."""
@@ -738,6 +808,10 @@ def _extract_jobs_from_generic_html(html: str, source_url: str) -> list[dict[str
         return jobs if jobs else extract_jobs_from_html(html)
     if "jobs.gem.com" in source_url.lower() or "gem.com" in source_url.lower():
         jobs = extract_jobs_from_gem(html, source_url=source_url)
+        return jobs if jobs else extract_jobs_from_html(html)
+    if "kasa.com" in source_url.lower() or "kasaliving.com" in source_url.lower():
+        base = "https://kasa.com" if "kasa.com" in source_url.lower() else "https://www.kasaliving.com"
+        jobs = extract_jobs_from_kasa_careers(html, base_url=base)
         return jobs if jobs else extract_jobs_from_html(html)
     return extract_jobs_from_html(html)
 

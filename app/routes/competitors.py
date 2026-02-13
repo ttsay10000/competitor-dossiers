@@ -132,6 +132,7 @@ def _competitor_topline_summary(session, c: Competitor) -> dict:
 
     latest_news_count = 0
     latest_news_headline = None
+    latest_news_items: list[dict] = []
     latest_press = (
         session.query(Snapshot)
         .filter(Snapshot.competitor_id == c.id, Snapshot.channel == "press")
@@ -142,6 +143,12 @@ def _competitor_topline_summary(session, c: Competitor) -> dict:
         items = (latest_press.structured_json or {}).get("canonical_items") or (latest_press.structured_json or {}).get("items", [])
         items = [i for i in items if isinstance(i, dict)]
         latest_news_count = len(items)
+        for item in items[:5]:
+            title = (item.get("title") or item.get("display_title") or "").strip() or None
+            if not title:
+                continue
+            url = (item.get("url") or item.get("link") or item.get("source_url") or "").strip() or None
+            latest_news_items.append({"title": title, "url": url})
         if items:
             first = items[0]
             latest_news_headline = (first.get("title") or first.get("display_title") or "").strip() or None
@@ -165,6 +172,7 @@ def _competitor_topline_summary(session, c: Competitor) -> dict:
         "total_jobs": total_jobs,
         "latest_news_count": latest_news_count,
         "latest_news_headline": latest_news_headline,
+        "latest_news_items": latest_news_items,
         "recent_website_changes_count": recent_website_changes_count,
         "short_description": getattr(c, "short_description", None) or None,
         "operating_model_description": getattr(c, "operating_model_description", None) or None,
@@ -194,6 +202,7 @@ def competitors_list(request: Request):
                 "total_jobs": topline["total_jobs"],
                 "latest_news_count": topline["latest_news_count"],
                 "latest_news_headline": topline["latest_news_headline"],
+                "latest_news_items": topline.get("latest_news_items") or [],
                 "recent_website_changes_count": topline["recent_website_changes_count"],
                 "short_description": topline["short_description"],
                 "operating_model_description": topline["operating_model_description"],

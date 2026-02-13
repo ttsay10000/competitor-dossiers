@@ -46,31 +46,34 @@
     {% endif %}
 
     {% if not talent_urls and not asset_urls and not press_urls %}
-    <p class="meta">No source URLs were added. You can add talent, asset, and press URLs from the competitor edit page.</p>
+    <p class="meta">No source URLs were added. You can add Talent, Asset, and Press URLs from the competitor edit page.</p>
     {% endif %}
   </div>
 
   <div class="card">
-    <h3>Next steps: populate this competitor</h3>
+    <h3>Next Steps: Populate This Competitor</h3>
     <p class="meta" style="margin: 0 0 12px 0;">
-      The competitor is saved but has no data yet. Data collection (talent, asset, press) runs separately—either now or later.
+      The competitor is saved but has no data yet. Data collection runs separately—either now or later.
     </p>
     <div style="margin: 16px 0;">
       <form method="post" action="/competitors/{{ competitor.id }}/run-now" style="display: inline-block;">
-        <label style="display: inline-flex; align-items: center; gap: 8px; margin-right: 12px;">
+        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 8px;">
           <span class="meta">Channels:</span>
           <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="talent" checked /> Talent</label>
           <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="asset" checked /> Asset</label>
           <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="press" checked /> Press</label>
+          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="homepage" /> Website</label>
+          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="public_records" /> Public Records</label>
           <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="reviews" /> Reviews</label>
-        </label>
+          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="social" /> Social</label>
+        </div>
         <button type="submit">Populate this competitor now</button>
       </form>
-      <span class="meta" style="margin-left: 8px;">Starts collection in the background; check <a href="/runs">Runs</a> for status.</span>
+      <span class="meta" style="margin-left: 0;">Starts collection in the background; check <a href="/runs">Runs</a> for status.</span>
     </div>
     <ol style="margin: 0 0 16px 1.25rem; padding: 0;">
       <li style="margin-bottom: 8px;">Use <strong>Populate this competitor now</strong> above, or run a full refresh from <a href="/runs">Runs</a> or <strong>Force refresh &amp; reset baseline</strong> on <a href="/competitors">Dossiers</a>.</li>
-      <li style="margin-bottom: 8px;"><strong>Check run status</strong> on the <a href="/runs">Runs</a> page. Each channel (talent, asset, press) should show success before the dossier is useful.</li>
+      <li style="margin-bottom: 8px;"><strong>Check run status</strong> on the <a href="/runs">Runs</a> page. Each selected channel should show success before the dossier is useful.</li>
       <li style="margin-bottom: 8px;"><strong>Open the dossier</strong> once runs have completed: <a href="/dossier/{{ competitor.id }}">View dossier for {{ competitor.name }}</a>.</li>
       <li>To add or change source URLs (e.g. another job board or press feed), use <a href="/competitors/{{ competitor.id }}">Edit competitor</a>.</li>
     </ol>
@@ -85,13 +88,14 @@
       <p class="meta" style="margin: 0 0 12px 0; color: var(--warning, #b8860b);"><strong>Export failed.</strong> We couldn’t write <code>seed_data.json</code> (e.g. read-only filesystem). The competitor is in the database. Run <code>python -m app.cli --export-seed</code> locally with this app’s <code>DATABASE_URL</code>, then commit the file.</p>
       {% endif %}
       <h3 style="margin: 0 0 8px 0;">Add this competitor to the seed file</h3>
-      <p class="meta" style="margin: 0 0 8px 0;">The competitor is saved in the database. To include them in <code>seed_data.json</code> (so future deploys and other environments have them), you can run the export here or run this from your machine with <code>DATABASE_URL</code> set to this app’s database:</p>
+      <p class="meta" style="margin: 0 0 8px 0;"><strong>Where you’re adding:</strong> The competitor is already saved in the <strong>database</strong>. Clicking below writes the <strong>whole DB</strong> (including <strong>{{ competitor.name }}</strong>) to the <strong>seed file</strong> (<code>seed_data.json</code>) in this app’s project. That way the new competitor is in the repo and will be there on future deploys and when anyone runs seed.</p>
+      <p class="meta" style="margin: 0 0 8px 0;"><strong>Why click:</strong> Do this once after adding (or editing) a competitor in the UI so the seed file stays in sync. You don’t need to click “Run seed” on the Dossiers page after this — that’s for the opposite direction (file → DB).</p>
       <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 12px 0;">
         <form method="post" action="/dossier/export-seed" style="display: inline-block;">
           <input type="hidden" name="next" value="/competitors/{{ competitor.id }}/added" />
           <button type="submit">Add this to the seed</button>
         </form>
-        <span class="meta">or run:</span>
+        <span class="meta">or run locally:</span>
       </div>
       <pre style="margin: 0; padding: 12px; background: var(--bg-muted); border-radius: 6px; overflow-x: auto; font-size: 0.9rem;"><code>python -m app.cli --export-seed</code></pre>
       <p class="meta" style="margin: 8px 0 0 0;">Then commit the updated <code>seed_data.json</code> in your repo. If you added the competitor on a deployed server (e.g. Render), run the command locally with that server’s <code>DATABASE_URL</code> so the file in your repo is updated.</p>
