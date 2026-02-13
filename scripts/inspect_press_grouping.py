@@ -125,25 +125,35 @@ def main():
     max_per_source = getattr(settings, "press_max_items_per_source", 30)
     max_raw = getattr(settings, "press_max_raw_items_per_competitor", 120)
 
-    for display_name, press_search_name in competitors:
+    for row in competitors:
+        display_name = row[0]
+        press_search_name = row[1]
+        google_news_search_phrases = row[2] if len(row) > 2 else None
         print("\n" + "=" * 80)
         print("PRESS GROUPING: {} (search: {})".format(display_name, press_search_name))
         print("=" * 80)
 
         raw_items = []
-        if getattr(settings, "press_enable_google_news", True):
+        if getattr(settings, "press_enable_google_news", True) and (google_news_search_phrases or press_search_name):
             try:
                 gn = collect_google_news_items(
-                    press_search_name, max_items=min(50, max_per_source * 2), window_days=window_days
+                    press_search_name,
+                    max_items=min(50, max_per_source * 2),
+                    window_days=window_days,
+                    search_phrases=google_news_search_phrases,
                 )
                 raw_items.extend(gn)
             except Exception as e:
                 print("Google News failed: {}".format(e))
-        try:
-            prn = collect_prnewswire_items(press_search_name, max_items=100, window_days=window_days)
-            raw_items.extend(prn)
-        except Exception as e:
-            print("PR Newswire failed: {}".format(e))
+        _prnewswire_skip = {"landing", "rove"}
+        if (display_name or "").strip().lower() not in _prnewswire_skip:
+            try:
+                prn = collect_prnewswire_items(press_search_name, max_items=100, window_days=window_days)
+                raw_items.extend(prn)
+            except Exception as e:
+                print("PR Newswire failed: {}".format(e))
+        else:
+            print("PR Newswire skipped (ambiguous name: {})".format(display_name))
 
         filtered = []
         for it in raw_items:

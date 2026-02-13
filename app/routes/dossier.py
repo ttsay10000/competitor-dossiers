@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Form
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import or_
 
@@ -20,6 +20,7 @@ from ..executive_summary import (
     format_executive_summary_for_display,
     format_rollup_summary_for_display,
     clean_location_display_for_dossier,
+    clean_senior_role_bullets_for_dossier,
     aggregate_state_and_state_city_rows,
     US_STATES_LIST,
 )
@@ -76,17 +77,51 @@ _ROLLUP_CACHE: dict[tuple, str] = {}
 _ROLLUP_CACHE_MAX = 20
 
 
+def _collect_news_items_for_rollup(competitor_name: str, context: dict) -> list[dict]:
+    """Extract news items with title, one-line summary, and URL from press_groups for the email report."""
+    from datetime import datetime, timedelta, timezone
+
+    items = []
+    press_groups = context.get("press_groups") or []
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=21)).date()
+    for g in press_groups:
+        group_summary = (g.get("one_line_summary") or "").strip()
+        for art in g.get("articles") or []:
+            url = (art.get("url") or art.get("link") or "").strip()
+            if not url or not url.startswith("http"):
+                continue
+            title = (art.get("display_title") or art.get("title") or "Untitled").strip()
+            date_str = (art.get("date") or "").strip()[:10]
+            try:
+                art_date = datetime.strptime(date_str, "%Y-%m-%d").date() if len(date_str) >= 10 else None
+            except ValueError:
+                art_date = None
+            if art_date and art_date < cutoff:
+                continue
+            items.append({
+                "competitor_name": competitor_name,
+                "title": title[:200],
+                "one_line_summary": group_summary[:300] if group_summary else "",
+                "url": url,
+                "date": date_str or "no date",
+            })
+    return items
+
+
 def get_rollup_summary(session):
     """
-    Collect executive summaries for all competitors (from cache or generate), then produce one roll-up
-    via LLM. Returns (rollup_text, empty_reason). empty_reason is "no_summaries" when no exec summaries
-    exist yet, "no_api_key" when OPENAI_API_KEY unset, "rollup_failed" when LLM failed; None when success.
+    Collect executive summaries, top news (with links), and property counts for all competitors,
+    then produce one roll-up via LLM. Returns (rollup_text, empty_reason).
+    empty_reason: "no_summaries" when no exec summaries exist, "no_api_key", "rollup_failed"; None on success.
     """
     from ..config import settings
+    import hashlib
     if not settings.openai_api_key:
         return (None, "no_api_key")
     competitors = session.query(Competitor).order_by(Competitor.created_at.desc()).all()
     collected = []  # list of (competitor_id, name, summary_text)
+    all_news = []
+    property_counts = []
     for c in competitors:
         if not getattr(c, "is_active", True):
             continue
@@ -103,15 +138,32 @@ def get_rollup_summary(session):
                 _EXEC_SUMMARY_CACHE[cache_key] = summary
         if summary:
             collected.append((c.id, c.name, summary))
+        all_news.extend(_collect_news_items_for_rollup(c.name, context))
+        total = context.get("total_properties") or 0
+        added = context.get("asset_added_since_baseline") or 0
+        removed = context.get("asset_removed_since_baseline") or 0
+        has_refresh = context.get("has_asset_refresh_since_baseline", False)
+        property_counts.append({
+            "name": c.name,
+            "total": total,
+            "added": added,
+            "removed": removed,
+            "has_refresh": has_refresh,
+        })
     if not collected:
         return (None, "no_summaries")
-    import hashlib
-    rollup_cache_key = tuple((cid, hashlib.sha256(s.encode()).hexdigest()) for cid, _n, s in collected)
+    news_sig = hashlib.sha256(str(sorted((n.get("url", ""), n.get("date", "")) for n in all_news)).encode()).hexdigest()
+    props_sig = hashlib.sha256(str([(p["name"], p["total"], p["added"], p["removed"]) for p in property_counts]).encode()).hexdigest()
+    rollup_cache_key = (
+        tuple((cid, hashlib.sha256(s.encode()).hexdigest()) for cid, _n, s in collected),
+        news_sig,
+        props_sig,
+    )
     if rollup_cache_key in _ROLLUP_CACHE:
         return (_ROLLUP_CACHE[rollup_cache_key], None)
     if len(_ROLLUP_CACHE) >= _ROLLUP_CACHE_MAX:
         _ROLLUP_CACHE.clear()
-    rollup = generate_rollup_summary(collected)
+    rollup = generate_rollup_summary(collected, all_news=all_news, property_counts=property_counts)
     if not rollup:
         return (None, "rollup_failed")
     _ROLLUP_CACHE[rollup_cache_key] = rollup
@@ -505,9 +557,26 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         senior_count = sum(1 for j in jobs_list if j.get("is_senior"))
         row = {"function": func, "total": len(jobs_list), "senior": senior_count}
         if senior_count > 0 and len(jobs_list) <= 5:
-            raw_titles = [(j.get("title") or "").strip() for j in jobs_list if j.get("is_senior") and (j.get("title") or "").strip()]
+            def _job_location_str(j):
+                loc = j.get("location")
+                if isinstance(loc, str) and loc.strip():
+                    return loc.strip()
+                if isinstance(loc, dict):
+                    return (loc.get("name") or loc.get("location_str") or "").strip() or ""
+                return ""
+            raw_titles = []
+            for j in jobs_list:
+                if not j.get("is_senior"):
+                    continue
+                title = (j.get("title") or "").strip()
+                if not title:
+                    continue
+                loc_str = _job_location_str(j)
+                bullet = f"{title} ({loc_str})" if loc_str else title
+                raw_titles.append(bullet)
             # Exclude salary/location lines mis-parsed as titles (e.g. Kula AvantStay "United StatesUSD 190,000.../ yearFull Time• Remote")
-            row["senior_titles"] = [t for t in raw_titles if _is_plausible_senior_display_title(t)]
+            filtered = [t for t in raw_titles if _is_plausible_senior_display_title(t)]
+            row["senior_titles"] = clean_senior_role_bullets_for_dossier(filtered) if filtered else []
         if func == PROPERTY_OPERATIONS_LABEL:
             jobs_by_function_property.append(row)
         else:
@@ -580,6 +649,20 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
                         _company_domains_norm.add(_normalize_domain(netloc))
                 except Exception:
                     pass
+    # Extra company domains from first press endpoint (e.g. extra_options.company_domains) and known aliases
+    for ep in getattr(competitor, "source_endpoints", []) or []:
+        if getattr(ep, "channel", None) != "press":
+            continue
+        opts = getattr(ep, "extra_options", None) or {}
+        if isinstance(opts, dict) and opts.get("company_domains"):
+            for d in opts["company_domains"]:
+                if isinstance(d, str) and d.strip():
+                    _company_domains_norm.add(_normalize_domain(d.strip()))
+        break
+    _company_domain_aliases = {"lark": ["lark.com"], "lark hotels": ["lark.com"]}
+    comp_key = (competitor.name or "").strip().lower()
+    for alias in _company_domain_aliases.get(comp_key, []):
+        _company_domains_norm.add(_normalize_domain(alias))
 
     def _is_url_on_competitor_domain(url: str) -> bool:
         """True if URL is on the competitor's own site (or has no host, e.g. relative) — exclude from output."""
@@ -693,6 +776,14 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         d = (item.get("date") or "").strip()
         return (d[:10] if len(d) >= 10 else d) or "0000-00-00"
     top_news = sorted(top_news, key=_top_news_date_key, reverse=True)
+    # If top news is empty but we have press items, pull in 1-2 most recent as fallback
+    if not top_news and press_90d:
+        for art in press_90d[:2]:
+            top_news.append({
+                "bullet": art.get("display_title") or art.get("title") or "—",
+                "date": (art.get("date") or "").strip()[:10] or None,
+            })
+        top_news = sorted(top_news, key=_top_news_date_key, reverse=True)
 
     # Properties by location (state/city) for high-level week-over-week tracking.
     # Aggregate count and total keys per location (keys parsed from property details).
@@ -1140,19 +1231,22 @@ def run_seed_from_ui(request: Request):
 
 
 @router.post("/dossier/export-seed", status_code=303)
-def export_seed_from_ui(request: Request):
+def export_seed_from_ui(request: Request, next_url: Optional[str] = Form(None, alias="next")):
     """
     Write current DB competitors and sources to seed_data.json.
     Use after adding/editing competitors in the UI so the file is updated (e.g. for commit/deploy).
+    If next_url is provided (e.g. from competitor-added page), redirect there with export_seed=1 or failed.
     """
     from ..seed import export_seed_to_file
+    base = (next_url or "/competitors").strip()
+    sep = "&" if "?" in base else "?"
     try:
         export_seed_to_file()
         logging.info("Export seed from UI: wrote seed_data.json.")
-        return RedirectResponse(url="/competitors?export_seed=1", status_code=303)
+        return RedirectResponse(url=f"{base}{sep}export_seed=1", status_code=303)
     except Exception as e:
         logging.warning("Export seed from UI failed: %s", e, exc_info=True)
-        return RedirectResponse(url="/competitors?export_seed=failed", status_code=303)
+        return RedirectResponse(url=f"{base}{sep}export_seed=failed", status_code=303)
 
 
 @router.post("/dossier/force-refresh-and-reset-baseline", status_code=303)
@@ -1163,7 +1257,7 @@ def force_refresh_and_reset_baseline(request: Request):
     reporting_baseline_at to now. The first refresh establishes the baseline; subsequent
     refreshes compare against it so executive summaries surface what changed.
     """
-    from ..runner import run as run_all_channels, advance_baseline_after_full_refresh, clear_all_snapshots
+    from ..runner import run as run_all_channels, advance_baseline_after_full_refresh, clear_all_snapshots, clear_all_events
     from ..db import get_session
     from ..seed import run_seed
 
@@ -1172,7 +1266,8 @@ def force_refresh_and_reset_baseline(request: Request):
         logging.info("Force refresh: ran seed (seed_data.json → DB).")
         with get_session() as session:
             deleted = clear_all_snapshots(session, channel=None)
-        logging.info("Force refresh: cleared %d snapshot(s) (all channels, all competitors).", deleted)
+            events_deleted = clear_all_events(session)
+        logging.info("Force refresh: cleared %d snapshot(s) and %d event(s) (all channels, all competitors).", deleted, events_deleted)
         run_all_channels()
         advance_baseline_after_full_refresh()  # Set baseline AFTER run so new snapshots become the baseline
         return RedirectResponse(url="/competitors?refreshed=1&forced=1", status_code=303)
@@ -1338,11 +1433,11 @@ async def dossier_refresh(request: Request, competitor_id: int):
 @router.post("/dossier/{competitor_id}/seed", status_code=303)
 def dossier_seed(request: Request, competitor_id: int):
     """
-    Set every competitor's comparison baseline to now, then run a full refresh (all
-    channels). Use to reset the timeline: the baseline is "before this run", so the
-    page after redirect shows the new data as changes since that baseline.
+    Clear all snapshots (so the next run re-collects everything), run a full refresh (all
+    channels), then set every competitor's comparison baseline to now. The run's new data
+    becomes the baseline; the next refresh will show only changes since this run.
     """
-    from ..runner import run as run_all_channels, advance_baseline_after_full_refresh
+    from ..runner import run as run_all_channels, advance_baseline_after_full_refresh, clear_all_snapshots
 
     with get_session() as session:
         competitor = session.get(Competitor, competitor_id)
@@ -1352,10 +1447,10 @@ def dossier_seed(request: Request, competitor_id: int):
                 "dossier.html",
                 {"request": request, **frame},
             )
+        clear_all_snapshots(session, channel=None)
 
-    # Set baseline first so the run's new snapshots/events count as "since baseline"
-    advance_baseline_after_full_refresh()
     run_all_channels()
+    advance_baseline_after_full_refresh()
     clear_dossier_caches_for_competitor(competitor_id)
     ts = int(datetime.now(timezone.utc).timestamp())
     return RedirectResponse(url=f"/dossier/{competitor_id}?r={ts}&refreshed=1", status_code=303)

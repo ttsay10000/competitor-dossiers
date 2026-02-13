@@ -141,7 +141,12 @@ SEED_COMPETITORS = [
                 "confidence": "high",
                 "extra_options": {"strategy": "landing_locations"},
             },
-            {"channel": "press", "url": "https://www.hellolanding.com/blog", "confidence": "medium"},
+            {
+                "channel": "press",
+                "url": "https://www.hellolanding.com/blog",
+                "confidence": "medium",
+                "extra_options": {"google_news_search_phrases": ["landing furnished rentals"]},
+            },
             {"channel": "talent", "url": "https://www.hellolanding.com/p/careers/", "confidence": "medium"},
         ],
     },
@@ -150,9 +155,16 @@ SEED_COMPETITORS = [
         "primary_domain": "rovetravel.com",
         "sources": [
             {"channel": "asset", "url": "https://rovetravel.com/search", "confidence": "high"},
+            {
+                "channel": "press",
+                "url": "https://rovetravel.com",
+                "confidence": "medium",
+                "extra_options": {"google_news_search_phrases": ["rove travel furnished rentals"]},
+            },
             {"channel": "talent", "url": "https://jobs.gem.com/rove", "confidence": "high"},
         ],
     },
+    # Vacasa: html-only (search page has ~26k properties in static HTML; sitemap+js_exhaust caused 20-60+ min runs).
     {
         "name": "Vacasa",
         "primary_domain": "vacasa.com",
@@ -161,21 +173,7 @@ SEED_COMPETITORS = [
                 "channel": "asset",
                 "url": "https://www.vacasa.com/search?place=/usa/",
                 "confidence": "high",
-                "js_required": True,
-                "extra_options": {
-                    "strategy_chain": ["sitemap_first", "js_exhaust", "html"],
-                    "min_properties_accept": 5,
-                    "enrich_sitemap_locations": True,
-                    "enrich_sitemap_max_fetches": 500,
-                    "enrich_sitemap_delay_sec": 0.3,
-                    "load_more": {
-                        "scroll_window": True,
-                        "max_scrolls": 2000,
-                        "scroll_wait_sec": 1.5,
-                        "scroll_no_progress_limit": 5,
-                        "scroll_batch_wait_sec": 0.5,
-                    },
-                },
+                "extra_options": {"strategy_chain": ["html"], "min_properties_accept": 1},
             },
             {"channel": "press", "url": "https://www.vacasa.com/blog", "confidence": "medium"},
             {"channel": "talent", "url": "https://job-boards.greenhouse.io/vacasa", "confidence": "medium"},

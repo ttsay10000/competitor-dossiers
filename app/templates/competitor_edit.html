@@ -25,7 +25,8 @@
         </div>
         <div>
           <label>Primary Domain</label>
-          <input name="primary_domain" value="{{ competitor.primary_domain or '' }}" />
+          <input name="primary_domain" value="{{ competitor.primary_domain or '' }}" placeholder="example.com" />
+          <p class="meta" style="margin: 4px 0 0 0;">Use the raw domain (e.g. <code>example.com</code>). Full URLs are accepted and will be normalized.</p>
         </div>
         <div style="display: flex; align-items: flex-end;">
           <label style="display: inline-flex; align-items: center; gap: 6px; margin-right: 12px;">
@@ -80,12 +81,16 @@
           </select>
         </div>
         <div>
+          <label>Keywords <span class="meta">(press only; comma-separated — all must appear in article)</span></label>
+          <input name="google_news_search_phrases" placeholder="e.g. landing, furnished rentals" />
+        </div>
+        <div>
           <button type="submit">Add Source</button>
         </div>
       </div>
     </form>
 
-    <p class="meta" style="margin: 0 0 12px 0;">For talent and asset, the first source (Primary) is used; if it fails or returns no data, the system tries the next (Secondary).</p>
+    <p class="meta" style="margin: 0 0 12px 0;">For talent and asset, the first source (Primary) is used; if it fails or returns no data, the system tries the next (Secondary). For press: optional <strong>keywords</strong> (comma-separated) are used for Google News; all keywords must appear in the article. Leave blank to use company name.</p>
     <table>
       <thead>
         <tr>
@@ -140,6 +145,12 @@
                     <option value="1" {% if endpoint.use_sitemap_first %}selected{% endif %}>Yes</option>
                   </select>
                 </div>
+                {% if endpoint.channel == "press" %}
+                <div>
+                  {% set phrases = (endpoint.extra_options or {}).get('google_news_search_phrases') %}
+                  <input name="google_news_search_phrases" placeholder="Keywords (comma-separated; all must appear)" value="{{ phrases | join(', ') if phrases else '' }}" />
+                </div>
+                {% endif %}
                 <div>
                   <button class="secondary" type="submit">Update</button>
                 </div>

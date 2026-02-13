@@ -217,7 +217,8 @@
       margin-bottom: 20px;
     }
     .page-header h1 { margin: 0; }
-    /* Jump-to nav (sticky, dossier) */
+    /* Jump-to nav (sticky, dossier): prevent scroll from going past the section header */
+    .dossier-section { scroll-margin-top: 1.25rem; }
     .dossier-layout { display: flex; gap: 32px; align-items: flex-start; }
     .dossier-nav {
       flex-shrink: 0;
@@ -281,7 +282,7 @@
     </div>
     <nav style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
       <a href="/competitors">Home</a>
-      <a href="/digest">Email report</a>
+      <a href="/digest">Dashboard</a>
       <a href="/runs">Runs</a>
     </nav>
   </header>

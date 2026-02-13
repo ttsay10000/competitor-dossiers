@@ -933,6 +933,14 @@ def _classify_press_headlines_with_llm(
             elif (out.get("topic") or "").strip().lower() == "irrelevant" and _headline_looks_like_hospitality_or_real_estate(competitor_name, out.get("title") or ""):
                 out["is_about_company"] = True
                 out["topic"] = "other_business"
+            # Rescue: Blueground (furnished apartments) — avoid over-filtering; headlines with blueground + housing terms are relevant
+            elif (out.get("topic") or "").strip().lower() == "irrelevant" and (competitor_name or "").strip().lower() == "blueground":
+                title_lower = ((out.get("title") or "") + " " + (out.get("outlet") or "") + " " + (out.get("source") or "")).lower()
+                if "blueground" in title_lower and any(
+                    term in title_lower for term in ("apartment", "rental", "furnished", "property", "real estate", "expansion", "partnership", "hire", "funding", "series")
+                ):
+                    out["is_about_company"] = True
+                    out["topic"] = "other_business"
             result.append(out)
         return result
     except Exception:
@@ -1038,6 +1046,14 @@ def _classify_press_headlines_fallback(competitor_name: str, items: List[dict]) 
         if topic == "irrelevant" and _headline_looks_like_hospitality_or_real_estate(competitor_name, it.get("title") or ""):
             is_about = True
             topic = "other_business"
+        # Rescue: Blueground — headlines with blueground + housing/business terms are relevant
+        if topic == "irrelevant" and (competitor_name or "").strip().lower() == "blueground":
+            title_lower = ((it.get("title") or "") + " " + (it.get("outlet") or "") + " " + (it.get("source") or "")).lower()
+            if "blueground" in title_lower and any(
+                term in title_lower for term in ("apartment", "rental", "furnished", "property", "real estate", "expansion", "partnership", "hire", "funding", "series")
+            ):
+                is_about = True
+                topic = "other_business"
 
         out["is_about_company"] = is_about
         out["topic"] = topic

@@ -432,12 +432,13 @@ def _fetch_google_news_rss(
     when_days: int,
     max_items: int,
     cutoff: datetime,
+    raw_query: Optional[str] = None,
 ) -> List[dict]:
-    """Fetch and parse Google News RSS for a single quoted phrase. Returns list of items.
-    Google News RSS accepts when:Nd (days) but returns empty feed for when:Nm (months).
-    We use when:{when_days}d in the query and also filter by cutoff in code.
-    """
-    query = f'"{quoted_phrase}" when:{when_days}d'
+    """Fetch and parse Google News RSS. Use raw_query (e.g. '"a" + "b"') when given, else quoted_phrase with quotes."""
+    if raw_query and raw_query.strip():
+        query = f"{raw_query.strip()} when:{when_days}d"
+    else:
+        query = f'"{quoted_phrase}" when:{when_days}d'
     encoded = quote_plus(query)
     rss_url = (
         f"https://news.google.com/rss/search?q={encoded}&hl=en-US&gl=US&ceid=US:en"
@@ -506,50 +507,58 @@ def collect_google_news_items(
     company_name: str,
     max_items: int = 40,
     window_days: int = 90,
+    search_phrases: Optional[List[str]] = None,
 ) -> List[dict]:
     """
-    Fetch Google News articles that contain the company name as an exact phrase
-    (quoted search). Date on each item is publication date only (from RSS
-    published/published_parsed; never fetch time).
+    Fetch Google News articles. By default uses company_name as quoted phrase; if
+    search_phrases is provided (e.g. ["landing furnished rentals"] or ["rove travel", "furnished rentals"]),
+    uses that for the main query (Google syntax: multiple quoted phrases joined with + for AND).
 
-    Uses when:Nd (days) in the query (e.g. when:90d); Google News RSS accepts days but returns empty for when:Nm (months).
-    We also enforce the window in code by dropping entries older than cutoff.
-    For multi-word names (e.g. "Lark Hotels") we fetch both the full phrase and
-    the first word ("Lark") and merge so we get headlines that use either.
-    Partnership phrase is also fetched. Company blog links are filtered out by the
-    pipeline (company_domains). Downstream LLM (first/final dedupe) filters irrelevant items.
+    Date on each item is publication date only (from RSS). Uses when:Nd in the query.
+    When search_phrases is not set, also fetches first word and "company partnership" and merges.
+    Company blog links are filtered out by the pipeline (company_domains).
+    Multiple keywords use Google syntax "phrase1" + "phrase2" so all must appear in the article.
     """
+    search_phrases = [p for p in (search_phrases or []) if isinstance(p, str) and (p or "").strip()]
+    primary_query = ""
+    if search_phrases:
+        # One phrase: "phrase when:90d". Multiple: "phrase1" + "phrase2" when:90d (all required).
+        if len(search_phrases) == 1:
+            primary_query = (search_phrases[0] or "").strip()
+        else:
+            primary_query = " + ".join(f'"{p.strip()}"' for p in search_phrases if (p or "").strip())
+        if not primary_query:
+            search_phrases = []
     company_name = (company_name or "").strip()
-    if not company_name:
+    if not search_phrases and not company_name:
+        return []
+    primary = (primary_query if search_phrases else company_name).strip()
+    if not primary:
         return []
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
 
-    results = _fetch_google_news_rss(company_name, window_days, max_items, cutoff)
+    raw = (primary_query if search_phrases and len(search_phrases) > 1 else None)
+    results = _fetch_google_news_rss(primary, window_days, max_items, cutoff, raw_query=raw)
     seen_urls = {item["url"] for item in results}
 
-    # Multi-word names: also fetch with first word and merge. Many headlines use
-    # only the brand (e.g. "Lark appoints...", "Lark Expands...") while others use
-    # the full name ("Lark Hotels renews..."). We want both, not only one.
-    if " " in company_name:
-        first_word = company_name.split()[0].strip()
-        if first_word and first_word.lower() != company_name.lower():
-            extra = _fetch_google_news_rss(first_word, window_days, max_items, cutoff)
-            for item in extra:
-                if item["url"] not in seen_urls and len(results) < max_items:
-                    seen_urls.add(item["url"])
-                    results.append(item)
-
-    # Supplementary: partnership/deal stories often appear under "X partnership" or
-    # "X partners with Y" and can be ranked differently. Fetch with quoted "Company partnership"
-    # and merge so we don't miss stories like "Hilton partners with Placemakr".
-    seen_urls = {item["url"] for item in results}
-    partnership_phrase = f"{company_name} partnership"
-    extra = _fetch_google_news_rss(partnership_phrase, window_days, max_items, cutoff)
-    for item in extra:
-        if item["url"] not in seen_urls and len(results) < max_items:
-            seen_urls.add(item["url"])
-            results.append(item)
+    # When using company_name (no custom search_phrases): also fetch first word and partnership phrase.
+    if not search_phrases and company_name:
+        if " " in company_name:
+            first_word = company_name.split()[0].strip()
+            if first_word and first_word.lower() != company_name.lower():
+                extra = _fetch_google_news_rss(first_word, window_days, max_items, cutoff)
+                for item in extra:
+                    if item["url"] not in seen_urls and len(results) < max_items:
+                        seen_urls.add(item["url"])
+                        results.append(item)
+        seen_urls = {item["url"] for item in results}
+        partnership_phrase = f"{company_name} partnership"
+        extra = _fetch_google_news_rss(partnership_phrase, window_days, max_items, cutoff)
+        for item in extra:
+            if item["url"] not in seen_urls and len(results) < max_items:
+                seen_urls.add(item["url"])
+                results.append(item)
 
     return results
 

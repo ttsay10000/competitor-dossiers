@@ -7,7 +7,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from .diff.asset_diff import resolve_destination_slug_to_state
+from .diff.asset_diff import resolve_destination_slug_to_state, US_STATE_ABBREV
 
 
 def _extract_first_json_object(text: str) -> Optional[Dict[str, Any]]:
@@ -89,14 +89,15 @@ _EVENT_PRIORITY_ORDER = (
     "public_record.",
 )
 
-# US state full names for state-level aggregation (no LLM).
+# US state full names (+ DC) for state-level aggregation (no LLM).
+# Include both "Washington DC" and "District of Columbia" so either label groups under "Properties by states".
 _US_STATES = frozenset({
     "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut",
-    "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa",
-    "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan",
-    "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire",
-    "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio",
-    "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota",
+    "Delaware", "District of Columbia", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois",
+    "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts",
+    "Michigan", "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada",
+    "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota",
+    "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota",
     "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington", "Washington DC",
     "West Virginia", "Wisconsin", "Wyoming",
 })
@@ -135,10 +136,15 @@ def _location_label_to_state(loc: str) -> str:
     s = (loc or "").strip()
     if not s:
         return "Other"
+    # Normalize DC so "District of Columbia" and "Washington DC" merge into one row.
+    if s == "District of Columbia":
+        return "Washington DC"
     if s in _US_STATES or s == "Other":
         return s
     if " - " in s:
         part = s.split(" - ", 1)[0].strip()
+        if part == "District of Columbia":
+            return "Washington DC"
         if part in _US_STATES:
             return part
     return "Other"
@@ -161,15 +167,24 @@ def _aggregate_properties_by_state(properties_by_location: List[Dict[str, Any]])
 
 def _location_to_state_extended(loc: str) -> str:
     """
-    Map location label to state for aggregation. Handles state names, "State - City", and
-    AvantStay-style destination labels (e.g. "Newport Beach" -> newport-beach -> California).
+    Map location label to state for aggregation. Handles state names, "State - City",
+    "City, ST" (e.g. Austin, TX), and AvantStay-style destination labels
+    (e.g. "Newport Beach" -> newport-beach -> California).
     """
     state = _location_label_to_state(loc)
     if state != "Other":
         return state
+    # "City, ST" format (e.g. Austin, TX, Miami, FL) -> merge into state
+    s = (loc or "").strip()
+    if s:
+        m = re.search(r",\s*([a-zA-Z]{2})\s*$", s)
+        if m:
+            abbrev = m.group(1).lower()
+            if abbrev in US_STATE_ABBREV:
+                return US_STATE_ABBREV[abbrev]
     # Try destination-slug form (e.g. "Newport Beach" -> "newport-beach") so AvantStay-style
     # rows get merged by state in code instead of relying on the LLM.
-    slug = (loc or "").lower().replace(" ", "-").strip()
+    slug = (loc or "").lower().replace(" ", "-").replace(",", "-").strip()
     if slug:
         resolved = resolve_destination_slug_to_state(slug)
         if resolved:
@@ -380,13 +395,15 @@ def generate_executive_summary(context: Dict[str, Any]) -> Optional[str]:
 
 The data you receive contains ONLY: (1) Top news from the past 2-3 weeks; (2) Asset/property changes vs baseline (or baseline footprint if no refresh); (3) Job count changes vs baseline (or baseline count if no refresh); (4) Website/digital footprint changes since last refresh; (5) Social media and review updates (new or significant). When the input says "only baseline" or "no refresh yet", summarize current state; when it says "changes since baseline", summarize only those changes. When the input says "No changes since last refresh", include a brief bullet noting this (e.g. "No changes to properties, jobs, or signals since last refresh")—this is common and worth stating explicitly.
 
-PRIORITY: Lead with (1) news/press, (2) asset/footprint, (3) talent/hiring, (4) digital footprint. Include social/review sentiment only when it reflects major change. Do not restate every datapoint—only changes that materially alter competitive dynamics (market entry/exit, meaningful inventory, pricing/fees, key hiring, major product/positioning, partnerships, regulatory). Drop cosmetic or one-off items.
+PRIORITY: Order bullets by importance to competitive dynamics, not by section order. Put the single most important change first (e.g. major news, market entry/exit, key hire). Then the next most important. Include only changes that materially alter competitive dynamics (market entry/exit, meaningful inventory, pricing/fees, key hiring, major product/positioning, partnerships, regulatory). Drop cosmetic or one-off items. Include social/review sentiment only when it reflects major change.
+
+If nothing has changed: output only a brief line (e.g. "No changes to properties, jobs, or signals since last refresh") and do not write a long recap.
 
 Return in this exact structure. Do NOT start with "EXECUTIVE SUMMARY" or any top-level header—the page already has a header. Use only single newlines between bullets and sections.
 
-• (3–5 bullets): most important shifts, why it matters. One line per bullet where possible; no paragraph-length bullets. Concrete and decisive.
+• (3–5 bullets when there are changes; 1 short bullet when there are none): most important shifts first, why it matters. One line per bullet where possible; no paragraph-length bullets. Concrete and decisive.
 
-Format: bullet character • for every list item (never dash -). No "EXECUTIVE SUMMARY" at top. Style: bullets only, no fluff, concrete language, strong verbs, ~120–200 words total."""
+Format: bullet character • for every list item (never dash -). No "EXECUTIVE SUMMARY" at top. Style: bullets only, no fluff, concrete language, strong verbs, ~120–200 words total when there are changes; much shorter when there are none."""
 
     user = f"Competitor: {competitor_name}\n\nData:\n{context_text}"
 
@@ -409,11 +426,38 @@ Format: bullet character • for every list item (never dash -). No "EXECUTIVE S
     return None
 
 
-def generate_rollup_summary(per_competitor_summaries: List[Tuple[int, str, str]]) -> Optional[str]:
+def _format_property_counts_section(property_counts: List[dict]) -> str:
+    """Format property counts per competitor for the email report."""
+    if not property_counts:
+        return ""
+    lines = ["**Property counts (latest per competitor; changes since last refresh):**", ""]
+    for p in property_counts:
+        name = p.get("name") or "Unknown"
+        total = p.get("total") or 0
+        added = p.get("added") or 0
+        removed = p.get("removed") or 0
+        has_refresh = p.get("has_refresh", False)
+        if has_refresh and (added > 0 or removed > 0):
+            delta = f" (+{added} -{removed} since last refresh)"
+        elif has_refresh:
+            delta = " (no change since last refresh)"
+        else:
+            delta = " (no refresh yet)"
+        lines.append(f" - **{name}:** {total} total{delta}")
+    return "\n".join(lines)
+
+
+def generate_rollup_summary(
+    per_competitor_summaries: List[Tuple[int, str, str]],
+    *,
+    all_news: Optional[List[dict]] = None,
+    property_counts: Optional[List[dict]] = None,
+) -> Optional[str]:
     """
-    Produce a single roll-up summary from multiple competitor executive summaries for the
-    competitors page. Returns a blob with: (1) a short lead paragraph "Recent updates",
-    (2) per-competitor bullets. Returns None if no summaries or LLM fails.
+    Produce a single roll-up summary from multiple competitor executive summaries.
+    Returns a blob with: (1) Recent updates paragraph, (2) per-competitor bullets,
+    (3) running news list with hyperlinks, (4) property counts per competitor.
+    Returns None if no summaries or LLM fails.
     """
     from .config import get_openai_client
     if not per_competitor_summaries:
@@ -421,7 +465,6 @@ def generate_rollup_summary(per_competitor_summaries: List[Tuple[int, str, str]]
     client = get_openai_client()
     if not client:
         return None
-    # Build input: one block per competitor (name + summary text).
     blocks = []
     for cid, name, text in per_competitor_summaries:
         if not (name and text):
@@ -430,21 +473,48 @@ def generate_rollup_summary(per_competitor_summaries: List[Tuple[int, str, str]]
     if not blocks:
         return None
     combined = "\n\n".join(blocks)
-    system = """You are an AI Chief of Staff for Kasa's exec team. You are given executive summaries for several competitors (each block below is one competitor, with a header "--- Name (id=...) ---"). Pull out concrete facts from the summaries to write the roll-up.
 
-Output exactly two parts:
+    news_instruction = ""
+    news_block = ""
+    if all_news:
+        MAX_NEWS = 25
+        news_items = all_news[:MAX_NEWS]
+        news_lines = []
+        for n in news_items:
+            title = (n.get("title") or "Untitled").replace("\n", " ")
+            summary = (n.get("one_line_summary") or "").replace("\n", " ").strip()
+            url = (n.get("url") or "").strip()
+            comp = n.get("competitor_name") or ""
+            date_str = (n.get("date") or "")[:10]
+            if url:
+                news_lines.append(f"- [{comp}] {title} | {summary} | {date_str} | URL: {url}")
+        if news_lines:
+            news_block = "\n".join(news_lines)
+            news_instruction = """
 
-1. **Recent updates:** — A short lead paragraph (2–3 sentences) that synthesizes major news *across* competitors at executive level. Use specific market names, regions, or cities where expansion or openings are mentioned (e.g. "Austin", "Miami", "UK")—not vague language like "new markets". Surface cross-cutting themes (e.g. expansion in the same regions, similar hiring or partnership moves). End with the single most important takeaway or insight for Kasa. Keep it succinct and direct.
+3. **Running news list** — Select the most important/relevant news from the list below. Output each as a single line:
+   - **Headline** — One-line summary. [Read](URL)
+   Use the exact URL from the input. Pick up to 15 items, most recent and business-relevant first. Include competitor name in parentheses when helpful, e.g. "(Vacasa)". Do not include articles that are purely promotional or low-signal."""
 
-2. **Per-competitor bullets** — A list, one bullet per competitor, in the same order as the input blocks:
-   - **[Competitor Name]:** [1–2 sentences of specific recent news only: name actual hires or roles if mentioned, named partnerships, specific cities or markets for new openings/expansion, key press or product/strategy shifts. Do NOT include "recommended action" or generic advice—only what actually happened (news, hires, market entries, partnerships, exits).]
-   Use the exact competitor names from the block headers (the text after "--- " and before " (id="). Do not invent or reorder competitors.
+    system = f"""You are an AI Chief of Staff for Kasa's exec team. You are given executive summaries for several competitors (each block below is one competitor, with a header "--- Name (id=...) ---"). Pull out concrete facts to write the roll-up.
 
-Style: bullets only for the list; no fluff; concrete language; name real markets and moves; ~200–400 words total. If a competitor's summary is thin or mostly "no material changes," say so briefly rather than padding.
+Output exactly two parts{(" (plus a third)" if news_block else "")}:
 
-FORMATTING: Output with clear line breaks for display. Put the "Recent updates" paragraph first, then a single newline, then "Per-competitor bullets" on its own line, then each competitor bullet on its own line (one line per " - **Name:** ..."). Do not run everything into one paragraph."""
+1. **Recent updates:** — A short lead paragraph (2–3 sentences) that synthesizes major news *across* competitors at executive level. Use specific market names, regions, or cities where expansion or openings are mentioned (e.g. "Austin", "Miami", "UK")—not vague language like "new markets". Surface cross-cutting themes. End with the single most important takeaway or insight for Kasa. Keep it succinct and direct.
 
-    user = f"Competitor executive summaries (each block is one competitor; use the name in the block header):\n\n{combined}"
+2. **Per-competitor bullets:** — A list, one bullet per competitor, in the same order as the input blocks:
+   - **[Competitor Name]:** [1–2 sentences of specific recent news only: name actual hires or roles if mentioned, named partnerships, specific cities or markets for new openings/expansion, key press or product/strategy shifts. Do NOT include "recommended action" or generic advice—only what actually happened.]
+   Use the exact competitor names from the block headers (the text after "--- " and before " (id="). Do not invent or reorder competitors.{news_instruction}
+
+Style: bullets only; no fluff; concrete language; name real markets and moves. If a competitor's summary is thin, say so briefly.
+
+FORMATTING: Put each part on its own line with clear section headers. Use " - **Name:**" for each bullet. For the news list, use markdown links: [Read](exact_url)."""
+
+    user_parts = [f"Competitor executive summaries:\n\n{combined}"]
+    if news_block:
+        user_parts.append(f"\n\nNews items to curate (title | summary | date | URL):\n\n{news_block}")
+
+    user = "\n".join(user_parts)
 
     try:
         resp = client.chat.completions.create(
@@ -453,21 +523,25 @@ FORMATTING: Output with clear line breaks for display. Put the "Recent updates" 
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            max_tokens=800,
+            max_tokens=1200,
             temperature=0.3,
         )
         choice = resp.choices[0] if resp.choices else None
         if choice and choice.message and choice.message.content:
             raw = choice.message.content.strip()
             polished = polish_rollup_summary(raw)
-            if polished:
-                # If the model still returned one dense paragraph, force formatting pass.
-                if polished.count("\n") < 4 and " - **" in polished:
-                    cleaned = clean_rollup_formatting(polished)
-                    return cleaned if cleaned else polished
-                return polished
-            cleaned = clean_rollup_formatting(raw)
-            return cleaned if cleaned else raw
+            body = polished if polished else raw
+            if polished and polished.count("\n") < 4 and " - **" in polished:
+                cleaned = clean_rollup_formatting(polished)
+                body = cleaned if cleaned else polished
+            elif not polished:
+                cleaned = clean_rollup_formatting(raw)
+                body = cleaned if cleaned else raw
+            if property_counts:
+                props_section = _format_property_counts_section(property_counts)
+                if props_section:
+                    body = body.rstrip() + "\n\n" + props_section
+            return body
     except Exception:
         pass
     return None
@@ -476,8 +550,9 @@ FORMATTING: Output with clear line breaks for display. Put the "Recent updates" 
 def polish_rollup_summary(text: str) -> Optional[str]:
     """
     Final LLM read-through: take the draft rollup and produce a clean version with a strong
-    top-line paragraph and one strong bullet per competitor (changes since last refresh),
-    in the same style as the executive summary. Returns None if LLM unavailable or fails.
+    top-line paragraph and one strong bullet per competitor (changes since last refresh).
+    Preserves a Running news list section if present (with [Read](url) links).
+    Returns None if LLM unavailable or fails.
     """
     if not text or not text.strip():
         return text
@@ -485,17 +560,23 @@ def polish_rollup_summary(text: str) -> Optional[str]:
     client = get_openai_client()
     if not client:
         return None
-    system = """You are an AI Chief of Staff for Kasa's exec team. You will receive a "Recent updates" rollup for the main competitors page. Your job is to produce one clean, final version—the same two-part structure, but with stronger wording and clear "changes since last refresh" framing.
+    has_news = "Running news" in text or "**Running news" in text
+    news_instruction = (
+        "\n3. **Running news list:** — If the input contains a Running news list section (with [Read](url) markdown links), copy it EXACTLY without modification. Do not alter any URLs or headlines."
+        if has_news
+        else ""
+    )
+    system = f"""You are an AI Chief of Staff for Kasa's exec team. You will receive a "Recent updates" rollup. Your job is to produce one clean, final version with stronger wording and clear "changes since last refresh" framing.
 
-Output exactly two parts:
+Output exactly two parts{(" (plus a third)" if has_news else "")}:
 
 1. **Recent updates:** — A short top-line paragraph (2–3 sentences) that synthesizes what is happening across competitors, using specific market/city names where relevant, and the single most important takeaway or insight for Kasa. Be direct and executive-ready.
 
 2. **Per-competitor bullets:** — One bullet per competitor, each on its own line. Format each line as: " - **Competitor Name:** [1–2 sentence summary of specific changes since last refresh: named hires or roles, specific partnerships, actual cities or markets for openings/expansion, key news or strategy shifts.]"
 - Use the exact competitor names that appear in the input. Do not add or remove competitors; keep the same order.
-- Write strong, concrete bullets: only specific facts (hires, partnerships, market entries, openings with city/market names, press, exits). Do NOT include "recommended action" or generic advice—focus on what actually happened. No fluff or generic strategy talk.
+- Write strong, concrete bullets: only specific facts (hires, partnerships, market entries, openings with city/market names, press, exits). Do NOT include "recommended action" or generic advice—focus on what actually happened. No fluff or generic strategy talk.{news_instruction}
 
-FORMATTING: Put "**Recent updates:**" and its paragraph first, then a single newline, then "**Per-competitor bullets:**" on its own line, then exactly one line per competitor bullet. Use " - **Name:**" for each bullet. Output only the recap, nothing else."""
+FORMATTING: Put each part on its own line. Use " - **Name:**" for each bullet. Output only the recap, nothing else."""
 
     try:
         resp = client.chat.completions.create(
@@ -604,8 +685,8 @@ def _normalize_rollup_line_breaks(text: str) -> str:
 
 def format_rollup_summary_for_display(text: Optional[str]) -> Optional[str]:
     """
-    Escape roll-up summary for HTML, convert **markdown** to <strong>, and preserve
-    line breaks with <br> so the output renders like a normal formatted summary.
+    Escape roll-up summary for HTML, convert **markdown** to <strong>, convert [text](url)
+    to hyperlinks <a href="url">text</a>, and preserve line breaks with <br>.
     """
     if not text or not isinstance(text, str):
         return text
@@ -616,11 +697,16 @@ def format_rollup_summary_for_display(text: Optional[str]) -> Optional[str]:
     for line in text.splitlines():
         s = line.rstrip()
         escaped = html.escape(s)
-        # Replace all **...** (e.g. **Recent updates:**, **Vacasa:**) with <strong>...</strong>
-        # so bolding works even when the LLM returns one long paragraph.
+        # Replace markdown links [text](url) with <a href="url">text</a> (before escaping URLs).
+        # Match [text](url) where url is non-empty; escape was applied so & is &amp; etc.
+        escaped = re.sub(
+            r"\[([^\]]*)\]\((https?://[^\)]+)\)",
+            r'<a href="\2" target="_blank" rel="noopener">\1</a>',
+            escaped,
+        )
+        # Replace **...** with <strong>...</strong>
         escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
         out.append(escaped)
-    # Use <br> so line breaks render in HTML (white-space: normal would otherwise collapse them).
     return "<br>\n".join(out)
 
 
@@ -732,6 +818,50 @@ def format_executive_summary_for_display(text: Optional[str]) -> Optional[str]:
         else:
             out.append(escaped)
     return "\n".join(out)
+
+
+def clean_senior_role_bullets_for_dossier(bullets: List[str], *, competitor_name: str = "") -> List[str]:
+    """
+    Use the LLM to clean senior-role bullet strings for display. Normalizes location formatting
+    (e.g. "Austin, Texas, United States" → "Austin, TX"), removes redundant country suffixes,
+    and keeps titles readable. Returns the same number of strings in the same order; on failure
+    returns the original list unchanged.
+    """
+    if not bullets:
+        return bullets
+    from .config import get_openai_client
+    client = get_openai_client()
+    if not client:
+        return bullets
+
+    system = """You clean job-role bullet lines for a talent snapshot. Each line is either a job title alone or "Title (Location)".
+
+Your job:
+- Normalize locations: use "City, ST" for US (e.g. "Austin, Texas, United States" → "Austin, TX"; "New York, NY" keep).
+- Drop trailing ", United States" or ", USA" or ", US".
+- For "Remote", "Hybrid", or work-type-only text in parens, keep it as-is (e.g. "VP of Sales (Remote)").
+- Keep the job title exactly as given; only clean the location part in parens.
+- If a line has no parens, return it unchanged.
+- Return the same number of lines in the same order. One line per bullet, no numbering or extra text."""
+
+    user = f"Bullets to clean (one per line):\n" + "\n".join(bullets)
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            max_tokens=2048,
+            temperature=0.1,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        if not content:
+            return bullets
+        cleaned = [line.strip() for line in content.splitlines() if line.strip()]
+        if len(cleaned) == len(bullets):
+            return cleaned
+        return bullets
+    except Exception:
+        return bullets
 
 
 def clean_location_display_for_dossier(

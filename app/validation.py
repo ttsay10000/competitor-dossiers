@@ -34,14 +34,19 @@ def normalize_domain(raw: str) -> Optional[str]:
     if "://" in s:
         parsed = urlparse(s)
         if parsed.netloc:
-            return parsed.netloc.split(":")[0]
-        return None
-    # Remove path if they pasted "example.com/path"
-    if "/" in s:
-        s = s.split("/")[0]
-    # Remove port for display
-    if ":" in s:
-        s = s.split(":")[0]
+            s = parsed.netloc.split(":")[0]
+        else:
+            return None
+    else:
+        # Remove path if they pasted "example.com/path"
+        if "/" in s:
+            s = s.split("/")[0]
+        # Remove port for display
+        if ":" in s:
+            s = s.split(":")[0]
+    # Prefer bare domain (strip www.) for consistent display and storage
+    if s and s.startswith("www."):
+        s = s[4:]
     return s if s else None
 
 

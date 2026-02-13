@@ -56,7 +56,8 @@ def print_weekly_digest(days: int = 7, per_competitor: int = 3) -> None:
 
 def send_weekly_digest(to_emails: list[str], days: int = 7, per_competitor: int = 3) -> tuple[bool, str]:
     """
-    Send the Recent updates (rollup summary) to the given addresses via SMTP.
+    Send the Summary report (rollup summary) to the given addresses via SMTP.
+    Sends both plain text and HTML (with hyperlinked news) as multipart/alternative.
     Returns (success, message). Uses settings.smtp_* and settings.digest_from_email.
     """
     if not settings.digest_send_enabled:
@@ -65,15 +66,23 @@ def send_weekly_digest(to_emails: list[str], days: int = 7, per_competitor: int 
     if not to_emails:
         return False, "No valid email addresses provided."
     from .routes.dossier import get_rollup_summary
+    from .executive_summary import format_rollup_summary_for_display
     with get_session() as session:
         rollup_text, _ = get_rollup_summary(session)
-    body = rollup_text if rollup_text else "No recent updates available. Generate executive summaries for your competitors first."
-    subject = f"Competitor Signals — Recent updates ({datetime.now(timezone.utc).strftime('%Y-%m-%d')})"
+    body = rollup_text if rollup_text else "No summary report available. Generate executive summaries for your competitors first."
+    subject = f"Competitor Signals — Summary report ({datetime.now(timezone.utc).strftime('%Y-%m-%d')})"
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = settings.digest_from_email
     msg["To"] = ", ".join(to_emails)
     msg.attach(MIMEText(body, "plain", "utf-8"))
+    import html as html_module
+    html_body = format_rollup_summary_for_display(rollup_text) if rollup_text else html_module.escape(body)
+    html_wrapped = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head><body style="font-family: sans-serif; font-size: 14px; line-height: 1.5;">
+<div>{html_body}</div>
+</body></html>"""
+    msg.attach(MIMEText(html_wrapped, "html", "utf-8"))
     try:
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
             if settings.smtp_use_tls:

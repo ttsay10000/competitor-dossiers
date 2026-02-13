@@ -14,11 +14,11 @@ from sqlalchemy import func
 from datetime import datetime, timezone
 
 from ..db import get_session, get_last_refreshed
-from ..models import Competitor, CompetitorReviewProperty, SourceEndpoint, RunLog, Snapshot
+from ..models import Competitor, CompetitorReviewProperty, SourceEndpoint, RunLog, Snapshot, Event, Capability
 from ..utils import to_eastern
 from ..config import settings
 from ..collectors.reviews import resolve_place_id_from_text
-from ..validation import validate_url_format, suggest_urls_from_domain
+from ..validation import validate_url_format, suggest_urls_from_domain, normalize_domain
 
 router = APIRouter()
 
@@ -112,6 +112,9 @@ def competitors_list(request: Request):
     nav_competitors = [{"id": c["id"], "name": c["name"], "created_at": c.get("created_at")} for c in competitors_data]
     run_blocked = request.query_params.get("run_blocked") == "1"
     run_blocked_running = request.query_params.get("running") or ""
+    remove_error = request.query_params.get("remove_error") == "1"
+    remove_competitor_name = request.query_params.get("competitor_name") or ""
+    removed = request.query_params.get("removed") == "1"
     return request.app.state.templates.TemplateResponse(
         "competitors.html",
         {
@@ -123,6 +126,9 @@ def competitors_list(request: Request):
             "channel_letters": CHANNEL_LETTERS,
             "run_blocked": run_blocked,
             "run_blocked_running": run_blocked_running,
+            "remove_error": remove_error,
+            "remove_competitor_name": remove_competitor_name,
+            "removed": removed,
         },
     )
 
@@ -157,10 +163,10 @@ def competitors_rollup_summary():
     return JSONResponse(content={"empty": True, "message": "No roll-up available."})
 
 
-def _validate_source_urls(talent_urls: list, asset_urls: list, press_urls: list) -> list[dict]:
+def _validate_source_urls(talent_urls: list, asset_urls: list) -> list[dict]:
     """Validate all non-empty URLs; return list of errors {channel, index, value, message}."""
     errors = []
-    for channel, urls in [("talent", talent_urls), ("asset", asset_urls), ("press", press_urls)]:
+    for channel, urls in [("talent", talent_urls), ("asset", asset_urls)]:
         for i, raw in enumerate(urls):
             url = (raw or "").strip()
             if not url:
@@ -209,14 +215,15 @@ async def competitors_create(request: Request):
         name = (form.get("name") or "").strip()
         if not name:
             return RedirectResponse(url="/competitors/new", status_code=HTTP_303_SEE_OTHER)
-        primary_domain = (form.get("primary_domain") or "").strip() or None
+        raw_domain = (form.get("primary_domain") or "").strip() or None
+        primary_domain = normalize_domain(raw_domain) if raw_domain else None
         talent_urls = form.getlist("talent_urls")
         asset_urls = form.getlist("asset_urls")
-        press_urls = form.getlist("press_urls")
         twitter_url = (form.get("twitter_url") or "").strip() or None
         linkedin_url = (form.get("linkedin_url") or "").strip() or None
+        press_keywords_raw = (form.get("press_keywords") or "").strip() or None
 
-        url_errors = list(_validate_source_urls(talent_urls, asset_urls, press_urls))
+        url_errors = list(_validate_source_urls(talent_urls, asset_urls))
         err = _validate_optional_url(twitter_url)
         if err:
             url_errors.append({"channel": "twitter", "index": 0, "value": twitter_url or "", "message": err})
@@ -231,9 +238,9 @@ async def competitors_create(request: Request):
                 "primary_domain": primary_domain or "",
                 "talent_urls": talent_urls,
                 "asset_urls": asset_urls,
-                "press_urls": press_urls,
                 "twitter_url": twitter_url or "",
                 "linkedin_url": linkedin_url or "",
+                "press_keywords": press_keywords_raw or "",
             }
             return request.app.state.templates.TemplateResponse(
                 "competitor_new.html",
@@ -271,7 +278,6 @@ async def competitors_create(request: Request):
 
             _add_sources(talent_urls, "talent")
             _add_sources(asset_urls, "asset")
-            _add_sources(press_urls, "press")
             if twitter_url:
                 session.add(
                     SourceEndpoint(
@@ -294,6 +300,23 @@ async def competitors_create(request: Request):
                         js_required=False,
                         use_sitemap_first=False,
                         extra_options={"platform": "linkedin"},
+                    )
+                )
+            press_keywords = _parse_google_news_phrases(press_keywords_raw)
+            if press_keywords:
+                press_url = f"https://{primary_domain}" if primary_domain else "https://example.com"
+                session.add(
+                    SourceEndpoint(
+                        competitor_id=competitor.id,
+                        channel="press",
+                        url=press_url,
+                        confidence="high",
+                        js_required=False,
+                        use_sitemap_first=False,
+                        extra_options={
+                            "google_news_search_phrases": press_keywords,
+                            "press_search_name": press_keywords[0],
+                        },
                     )
                 )
 
@@ -592,6 +615,7 @@ def competitors_run_status(request: Request):
 def competitor_added(request: Request, competitor_id: int):
     """Landing page after adding a new competitor: summary of uploaded data and next-step instructions."""
     seed_sync_failed = request.query_params.get("seed_sync") == "failed"
+    export_seed = request.query_params.get("export_seed")  # "1" or "failed" after Add to seed
     with get_session() as session:
         competitor = session.get(Competitor, competitor_id)
         if competitor is None:
@@ -615,6 +639,7 @@ def competitor_added(request: Request, competitor_id: int):
             "last_refreshed": last_refreshed,
             "nav_competitors": nav_competitors,
             "seed_sync_failed": seed_sync_failed,
+            "export_seed": export_seed,
         },
     )
 
@@ -663,6 +688,7 @@ def competitors_edit(request: Request, competitor_id: int):
                 "js_required": ep.js_required,
                 "use_sitemap_first": ep.use_sitemap_first,
                 "is_primary": ep.channel in ("talent", "asset") and ep.id in primary_ids,
+                "extra_options": ep.extra_options or {},
             }
             for ep in endpoints
         ]
@@ -707,10 +733,19 @@ def competitors_update(
         if competitor is None:
             return RedirectResponse(url="/competitors", status_code=HTTP_303_SEE_OTHER)
         competitor.name = name.strip()
-        competitor.primary_domain = (primary_domain or "").strip() or None
+        raw_domain = (primary_domain or "").strip() or None
+        competitor.primary_domain = normalize_domain(raw_domain) if raw_domain else None
         competitor.is_active = bool(is_active)
     _sync_seed_file()
     return RedirectResponse(url=f"/competitors/{competitor_id}", status_code=HTTP_303_SEE_OTHER)
+
+
+def _parse_google_news_phrases(raw: Optional[str]) -> Optional[list[str]]:
+    """Parse comma- or newline-separated phrases into a list (strip empty)."""
+    if not raw or not (raw := raw.strip()):
+        return None
+    phrases = [p.strip() for p in raw.replace("\n", ",").split(",") if p.strip()]
+    return phrases if phrases else None
 
 
 @router.post("/competitors/{competitor_id}/sources")
@@ -721,11 +756,18 @@ def competitor_add_source(
     confidence: str = Form("high"),
     js_required: Optional[str] = Form(None),
     use_sitemap_first: Optional[str] = Form(None),
+    google_news_search_phrases: Optional[str] = Form(None),
 ):
     with get_session() as session:
         competitor = session.get(Competitor, competitor_id)
         if competitor is None:
             return RedirectResponse(url="/competitors", status_code=HTTP_303_SEE_OTHER)
+        extra_options = None
+        if channel.strip().lower() == "press":
+            phrases = _parse_google_news_phrases(google_news_search_phrases)
+            if phrases:
+                extra_options = {"google_news_search_phrases": phrases}
+                extra_options["press_search_name"] = phrases[0]
         endpoint = SourceEndpoint(
             competitor_id=competitor_id,
             channel=channel.strip(),
@@ -733,6 +775,7 @@ def competitor_add_source(
             confidence=confidence.strip() or "high",
             js_required=bool(js_required),
             use_sitemap_first=bool(use_sitemap_first),
+            extra_options=extra_options,
         )
         session.add(endpoint)
     _sync_seed_file()
@@ -758,6 +801,7 @@ def competitor_update_source(
     confidence: str = Form("high"),
     js_required: Optional[str] = Form(None),
     use_sitemap_first: Optional[str] = Form(None),
+    google_news_search_phrases: Optional[str] = Form(None),
 ):
     with get_session() as session:
         endpoint = session.get(SourceEndpoint, source_id)
@@ -768,6 +812,16 @@ def competitor_update_source(
         endpoint.confidence = confidence.strip() or "high"
         endpoint.js_required = bool(js_required)
         endpoint.use_sitemap_first = bool(use_sitemap_first)
+        if channel.strip().lower() == "press":
+            extra = dict(endpoint.extra_options or {})
+            phrases = _parse_google_news_phrases(google_news_search_phrases)
+            if phrases:
+                extra["google_news_search_phrases"] = phrases
+                extra["press_search_name"] = phrases[0]
+            else:
+                extra.pop("google_news_search_phrases", None)
+                extra.pop("press_search_name", None)
+            endpoint.extra_options = extra if extra else None
     _sync_seed_file()
     return RedirectResponse(url=f"/competitors/{competitor_id}", status_code=HTTP_303_SEE_OTHER)
 
@@ -836,3 +890,35 @@ def competitor_remove_review_property(competitor_id: int, property_id: int):
         if prop is not None and prop.competitor_id == competitor_id:
             session.delete(prop)
     return RedirectResponse(url=f"/competitors/{competitor_id}", status_code=HTTP_303_SEE_OTHER)
+
+
+def _required_remove_phrase(name: str) -> str:
+    """Exact phrase user must type to confirm competitor removal."""
+    return f"remove {name} from site"
+
+
+@router.post("/competitors/{competitor_id}/remove")
+async def competitor_remove(request: Request, competitor_id: int, confirmation: str = Form("")):
+    """Remove a competitor after confirmation. Expects confirmation exactly: 'remove {name} from site'."""
+    with get_session() as session:
+        competitor = session.get(Competitor, competitor_id)
+        if competitor is None:
+            return RedirectResponse(url="/competitors", status_code=HTTP_303_SEE_OTHER)
+        name = competitor.name
+        required = _required_remove_phrase(name)
+        if (confirmation or "").strip() != required:
+            return RedirectResponse(
+                url="/competitors?" + urlencode({"remove_error": "1", "competitor_name": name}),
+                status_code=HTTP_303_SEE_OTHER,
+            )
+        # Delete dependent rows (no cascade from Competitor to these)
+        session.query(RunLog).filter(RunLog.competitor_id == competitor_id).delete()
+        session.query(Snapshot).filter(Snapshot.competitor_id == competitor_id).delete()
+        session.query(Event).filter(Event.competitor_id == competitor_id).delete()
+        session.query(Capability).filter(Capability.competitor_id == competitor_id).delete()
+        session.delete(competitor)
+    _sync_seed_file()
+    return RedirectResponse(
+        url="/competitors?" + urlencode({"removed": "1"}),
+        status_code=HTTP_303_SEE_OTHER,
+    )

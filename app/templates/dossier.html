@@ -280,6 +280,9 @@
     <div id="properties-by-location" class="card dossier-section mb-24">
       <strong>Properties by location</strong>
       <p class="meta card-desc">From latest asset pull: current counts by state or city. Any notable adds/removals are summarized in the Executive summary above.</p>
+      {% if properties_refinement_available %}
+      <p class="meta" id="properties-refinement-status" style="margin: 8px 0 0 0; font-weight: 500;">Refining locations with AI…</p>
+      {% endif %}
       <div id="properties-by-location-content">
         {% if total_properties and total_properties > 0 %}
           <p style="margin: 0 0 8px 0;"><strong>Total: {{ total_properties }} propert{{ 'ies' if total_properties != 1 else 'y' }}</strong></p>
@@ -312,15 +315,24 @@
           <div class="meta">No property data yet. Run the asset collector to populate.</div>
         {% endif %}
       </div>
-      {% if properties_refinement_available %}
-      <p class="meta" id="properties-refinement-status" style="margin: 4px 0 0 0;">Refining locations with AI…</p>
-      {% endif %}
     </div>
     {% if properties_refinement_available %}
     <script>
       (function() {
         var statusEl = document.getElementById('properties-refinement-status');
         var contentEl = document.getElementById('properties-by-location-content');
+        var startMs = Date.now();
+        var timerId = setInterval(function() {
+          if (!statusEl) return;
+          var elapsed = Math.floor((Date.now() - startMs) / 1000);
+          var m = Math.floor(elapsed / 60);
+          var s = elapsed % 60;
+          statusEl.textContent = 'Refining locations with AI… ' + m + ':' + (s < 10 ? '0' : '') + s;
+        }, 1000);
+        function clearTimer() {
+          if (timerId) { clearInterval(timerId); timerId = null; }
+          if (statusEl) statusEl.textContent = '';
+        }
         function escapeHtml(s) {
           if (s == null) return '';
           var div = document.createElement('div');
@@ -330,8 +342,8 @@
         fetch('/dossier/{{ competitor.id }}/properties-by-location')
           .then(function(r) { return r.json(); })
           .then(function(data) {
+            clearTimer();
             if (data.error) {
-              if (statusEl) statusEl.textContent = '';
               return;
             }
             var total = data.total_properties || 0;
@@ -378,10 +390,9 @@
               html += '<div class="meta">No property data yet. Run the asset collector to populate.</div>';
             }
             contentEl.innerHTML = html;
-            if (statusEl) statusEl.textContent = '';
           })
           .catch(function() {
-            if (statusEl) statusEl.textContent = '';
+            clearTimer();
           });
       })();
     </script>

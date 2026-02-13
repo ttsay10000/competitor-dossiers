@@ -80,6 +80,29 @@ def feed(request: Request, competitor_id: Optional[int] = None, severity: Option
     )
 
 
+def _events_for_dashboard(session):
+    """Load recent events for dashboard feed view: one-liner + date added + category/type for filtering."""
+    rows = (
+        session.query(Event)
+        .order_by(Event.detected_at.desc())
+        .limit(500)
+        .all()
+    )
+    categories = set()
+    events = []
+    for e in rows:
+        categories.add(e.category)
+        events.append({
+            "category": e.category,
+            "type": e.type,
+            "title": e.title,
+            "summary": e.summary,
+            "detected_at_str": e.detected_at.strftime("%Y-%m-%d"),
+            "detected_at_short": e.detected_at.strftime("%b %d"),
+        })
+    return events, sorted(categories)
+
+
 @router.get("/digest")
 def digest(request: Request):
     with get_session() as session:
@@ -91,6 +114,7 @@ def digest(request: Request):
         all_competitors = session.query(Competitor).order_by(Competitor.created_at.desc()).all()
         nav_competitors = [{"id": c.id, "name": c.name, "created_at": c.created_at} for c in all_competitors]
         last_refreshed = get_last_refreshed(session)
+        feed_events, feed_categories = _events_for_dashboard(session)
     return request.app.state.templates.TemplateResponse(
         "digest.html",
         {
@@ -99,6 +123,8 @@ def digest(request: Request):
             "last_refreshed": last_refreshed,
             "nav_competitors": nav_competitors,
             "send_enabled": settings.digest_send_enabled,
+            "feed_events": feed_events,
+            "feed_categories": feed_categories,
         },
     )
 

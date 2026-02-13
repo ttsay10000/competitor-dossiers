@@ -1,21 +1,20 @@
 {% extends "base.html" %}
 {% block content %}
-  <h1>Recent updates</h1>
+  <h1>Dashboard</h1>
   <div class="card">
     <strong>Send by email</strong>
-    {% if send_enabled %}
-      <p class="meta" style="margin-top: 4px;">Enter recipient address(es), then click Send email to send the report below. Separate multiple addresses with commas.</p>
-      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px;">
-        <input type="text" id="digest-to-email" placeholder="you@example.com or a@b.com, c@d.com" style="flex: 1; min-width: 200px; padding: 8px 10px; font-size: 14px; border: 1px solid var(--border); border-radius: 6px;" />
-        <button type="button" id="digest-send-btn">Send email</button>
-        <span id="digest-send-status" class="meta" style="margin-left: 4px;"></span>
-      </div>
-    {% else %}
-      <p class="meta" style="margin-top: 4px;">Configure SMTP to enable sending: set <code>SMTP_HOST</code>, <code>SMTP_PORT</code>, <code>SMTP_USER</code>, <code>SMTP_PASSWORD</code>, and <code>DIGEST_FROM_EMAIL</code> in your environment.</p>
+    <p class="meta" style="margin-top: 4px;">Enter your email (or comma-separated addresses), then click Send report to email the Summary report below.</p>
+    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px;">
+      <input type="text" id="digest-to-email" placeholder="you@example.com or a@b.com, c@d.com" style="flex: 1; min-width: 200px; padding: 8px 10px; font-size: 14px; border: 1px solid var(--border); border-radius: 6px;" />
+      <button type="button" id="digest-send-btn">Send report</button>
+      <span id="digest-send-status" class="meta" style="margin-left: 4px;"></span>
+    </div>
+    {% if not send_enabled %}
+      <p class="meta" style="margin-top: 8px; color: var(--muted, #666);">To enable sending, configure SMTP: set <code>SMTP_HOST</code>, <code>SMTP_PORT</code>, <code>SMTP_USER</code>, <code>SMTP_PASSWORD</code>, and <code>DIGEST_FROM_EMAIL</code> in your environment.</p>
     {% endif %}
   </div>
   <div class="card" id="rollup-card">
-    <strong>Recent updates</strong>
+    <strong>Summary report</strong>
     <p class="meta" style="margin-top: 4px;">This is the report content that will be sent by email.</p>
     <div id="rollup-content" class="rollup-box" style="max-height: 320px; overflow-y: auto; white-space: pre-wrap; font-size: 14px; line-height: 1.5; margin-top: 8px;">Loading…</div>
   </div>
@@ -37,11 +36,69 @@
           }
         })
         .catch(function() {
-          el.textContent = 'Could not load recent updates.';
+          el.textContent = 'Could not load summary report.';
           el.style.whiteSpace = 'normal';
         });
     })();
   </script>
+
+  <div class="card" id="feed-view-card">
+    <strong>Feed view</strong>
+    <p class="meta" style="margin-top: 4px;">Timeline of detected events. Toggle signal types to filter.</p>
+    <div class="feed-filter" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; margin-bottom: 8px;">
+      <span class="meta">Filter by type:</span>
+      <label style="display: inline-flex; align-items: center; gap: 4px; cursor: pointer;"><input type="checkbox" class="feed-cat-toggle" value="_all_" checked /> All</label>
+      {% for cat in feed_categories %}
+      <label style="display: inline-flex; align-items: center; gap: 4px; cursor: pointer;"><input type="checkbox" class="feed-cat-toggle" value="{{ cat }}" checked /> {{ cat }}</label>
+      {% endfor %}
+    </div>
+    <div id="feed-timeline" class="rollup-box" style="max-height: 320px; overflow-y: auto; font-size: 14px; line-height: 1.5; margin-top: 8px;">
+      <ul style="margin: 0; padding-left: 1.25em;">
+        {% for e in feed_events %}
+        <li class="feed-event" data-category="{{ e.category }}" style="margin-bottom: 4px;">
+          <span class="meta">{{ e.detected_at_short }}</span>: {{ e.title }}{% if e.summary and e.summary != e.title %} — {{ e.summary }}{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% if not feed_events %}
+      <p class="meta">No events yet. Run collectors (or force refresh to establish baseline); the next run will surface changes.</p>
+      {% endif %}
+    </div>
+  </div>
+  <script>
+    (function() {
+      var toggles = document.querySelectorAll('.feed-cat-toggle');
+      var allToggle = document.querySelector('.feed-cat-toggle[value="_all_"]');
+      var items = document.querySelectorAll('.feed-event');
+      function applyFilter() {
+        var anyChecked = false;
+        var checked = {};
+        toggles.forEach(function(t) {
+          if (t.value === '_all_') return;
+          if (t.checked) { checked[t.value] = true; anyChecked = true; }
+        });
+        var showAll = allToggle && allToggle.checked;
+        items.forEach(function(li) {
+          var cat = li.getAttribute('data-category');
+          var show = showAll || checked[cat];
+          li.style.display = show ? '' : 'none';
+        });
+      }
+      toggles.forEach(function(t) {
+        t.addEventListener('change', function() {
+          if (t.value === '_all_') {
+            toggles.forEach(function(o) { if (o !== t) o.checked = t.checked; });
+          } else {
+            var anyOther = false;
+            toggles.forEach(function(o) { if (o.value !== '_all_' && o.checked) anyOther = true; });
+            if (allToggle) allToggle.checked = !anyOther;
+          }
+          applyFilter();
+        });
+      });
+    })();
+  </script>
+
   <div class="card">
     <strong>Last Runs</strong>
     <div class="meta">
@@ -54,7 +111,6 @@
       {% endif %}
     </div>
   </div>
-  {% if send_enabled %}
   <script>
     (function() {
       var btn = document.getElementById('digest-send-btn');
@@ -85,7 +141,7 @@
           .then(function(r) { return r.json(); })
           .then(function(data) {
             if (data.ok) {
-              status.textContent = 'Email sent to ' + emails.join(', ') + '.';
+              status.textContent = 'Report sent to ' + emails.join(', ') + '.';
               status.style.color = 'var(--accent)';
             } else {
               status.textContent = data.error || 'Send failed.';
@@ -100,5 +156,4 @@
       });
     })();
   </script>
-  {% endif %}
 {% endblock %}
