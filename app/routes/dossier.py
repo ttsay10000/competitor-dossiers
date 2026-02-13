@@ -80,12 +80,12 @@ _ROLLUP_CACHE_MAX = 20
 
 
 def _collect_news_items_for_rollup(competitor_name: str, context: dict) -> list[dict]:
-    """Extract news items with title, one-line summary, and URL from press_groups for the email report."""
+    """Extract news items with title, one-line summary, and URL from press_groups for the rollup (recent updates = last week)."""
     from datetime import datetime, timedelta, timezone
 
     items = []
     press_groups = context.get("press_groups") or []
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=21)).date()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).date()  # align with exec summary TOP_NEWS_DAYS
     for g in press_groups:
         group_summary = (g.get("one_line_summary") or "").strip()
         for art in g.get("articles") or []:
@@ -983,6 +983,8 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
 
     first_talent_endpoint = next((e for e in competitor.source_endpoints if e.channel == "talent"), None)
     talent_job_board_url = first_talent_endpoint.url if first_talent_endpoint else None
+    first_asset_endpoint = next((e for e in competitor.source_endpoints if e.channel == "asset"), None)
+    asset_source_url = first_asset_endpoint.url if first_asset_endpoint else None
 
     # Reviews: list of tracked properties (for "no properties added" vs populated) and minimal top-line from snapshot.
     review_properties = [
@@ -1082,6 +1084,7 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         "jobs_by_function": jobs_by_function,
         "jobs_by_function_property": jobs_by_function_property,
         "talent_job_board_url": talent_job_board_url,
+        "asset_source_url": asset_source_url,
         "press_items": press_items,
         "press_90d": press_90d,
         "press_groups": press_groups,
@@ -1396,6 +1399,7 @@ def _dossier_frame_context(session, competitor_id: int, error: Optional[str] = N
         "jobs_by_function": [],
         "jobs_by_function_property": [],
         "talent_job_board_url": None,
+        "asset_source_url": None,
         "digital_footprint_events": [],
         "press_groups": [],
         "social_posts": [],

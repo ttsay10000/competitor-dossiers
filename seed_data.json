@@ -215,11 +215,13 @@
 "channel": "asset",
 "url": "https://www.vacasa.com/search?place=/usa/",
 "confidence": "high",
+"use_sitemap_first": true,
 "extra_options": {
 "strategy_chain": [
+"sitemap_first",
 "html"
 ],
-"min_properties_accept": 1
+"min_properties_accept": 5
 }
 },
 {

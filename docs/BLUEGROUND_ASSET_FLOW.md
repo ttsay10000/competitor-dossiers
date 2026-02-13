@@ -22,21 +22,15 @@ run_asset(competitor_name="Blueground")
 
 ## Step-by-step checks
 
-### Step 0: Playwright must be available
+### Step 0: HTTP-first (no Playwright required)
 
-- **Config**: `settings.playwright_enabled` must be True (env: `PLAYWRIGHT_ENABLED=true`).
-- **Package**: `playwright` must be installed.
-- **Browser**: Chromium must be installed (`playwright install` or `playwright install chromium`).
-
-**If any of these fail** → falls back to `_fetch_without_browser()`, which does sitemap + HTML fetch. The `/destinations` page has no property listings in static HTML, so you get **0 properties**.
-
-**Fix locally**: Run `python3 -m playwright install chromium`.
+As of the fix for 0-properties, Blueground uses **plain HTTP** for both the destinations page and destination pages. The site uses SSR; links are in the initial HTML. Playwright is only used as a fallback if HTTP returns 0 USA links.
 
 ---
 
 ### Step 1: `_fetch_blueground_destinations(source_url)`
 
-1. **Navigate** to `https://www.theblueground.com/destinations` (Playwright, `networkidle`).
+1. **Fetch** `https://www.theblueground.com/destinations` via plain HTTP (fast; links are in SSR HTML).
 2. **Find North America USA links**: Parse HTML in DOM order; stop at South America/Europe/etc. section headers. Keep links where:
    - href contains `/m/furnished-apartments/`
    - slug ends with `-usa`
@@ -98,7 +92,7 @@ If Blueground changed this class or structure, extraction will fail and you’ll
 
 | # | Failure point                    | Symptom          | What to check                                           |
 |---|----------------------------------|------------------|---------------------------------------------------------|
-| 1 | Playwright disabled / not installed | 0 properties     | `PLAYWRIGHT_ENABLED`, `playwright install chromium`     |
+| 1 | Blueground blocks HTTP / changes to client-only | 0 properties     | Fallback: Playwright (`fetch_url_js_wait_for_spa`) used if HTTP returns 0 USA links |
 | 2 | Chromium not installed           | RuntimeError     | `playwright install`                                    |
 | 3 | USA link filter too strict       | Few cities       | Consider adding `/furnished-apartments-*-usa` pattern   |
 | 4 | Search button selectors outdated | 0 properties     | Inspect Blueground UI for new Search/Add dates elements |

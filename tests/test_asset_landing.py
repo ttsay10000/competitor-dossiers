@@ -50,6 +50,32 @@ class TestLandingAssetFlow(unittest.TestCase):
         self.assertEqual(loc_counts[2]["market"], "Atlanta, GA")
         self.assertEqual(loc_counts[2]["count"], 3)
 
+    def test_extract_landing_locations_skips_location_header_as_h3(self) -> None:
+        """Location headers that appear as h3 (e.g. duplicate City, ST) must not be counted as properties."""
+        html = """
+        <html><body>
+        <h2>Atlanta, GA</h2>
+        <h3>Atlanta, GA</h3>
+        <h3>Park South</h3>
+        <h3>Livano Oakwood</h3>
+        <h2>Austin, TX</h2>
+        <h3>Austin, TX</h3>
+        <h3>The Ashton</h3>
+        </body></html>
+        """
+        props, _ = _extract_landing_locations_html(
+            html,
+            "https://www.hellolanding.com/locations",
+            "https://www.hellolanding.com",
+        )
+        names = [p["name"] for p in props]
+        self.assertNotIn("Atlanta, GA", names)
+        self.assertNotIn("Austin, TX", names)
+        self.assertEqual(len(props), 3, "Only Park South, Livano Oakwood, The Ashton")
+        self.assertIn("Park South", names)
+        self.assertIn("Livano Oakwood", names)
+        self.assertIn("The Ashton", names)
+
     def test_extract_landing_locations_includes_zero_property_markets(self) -> None:
         """Markets with no properties should appear in location_counts (upcoming areas)."""
         html = """

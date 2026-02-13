@@ -21,8 +21,18 @@
     .edit-page .source-table { margin-top: 8px; }
     .edit-page .source-table td { vertical-align: middle; }
     .edit-page .source-table .url-cell { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .edit-page .source-row-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 36px; }
-    .edit-page .source-row-actions button { padding: 6px 10px; font-size: 13px; }
+    .edit-page .source-row-actions { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; min-height: 36px; }
+    .edit-page .source-row-actions button,
+    .edit-page .source-row-actions details.source-edit summary {
+      min-width: 76px;
+      width: 76px;
+      padding: 6px 10px;
+      font-size: 13px;
+      text-align: center;
+      box-sizing: border-box;
+    }
+    .edit-page .source-row-actions button { margin: 0; }
+    .edit-page .source-row-actions form { display: inline-block; margin: 0; }
     .edit-page .source-row-actions details.source-edit summary { margin: 0; vertical-align: middle; }
     .edit-page details.source-edit { margin-top: 12px; }
     .edit-page details.source-edit[open] .source-edit-summary { margin-bottom: 12px; }
@@ -37,13 +47,14 @@
     .edit-page details.source-edit summary {
       list-style: none;
       cursor: pointer;
-      display: inline-block;
-      padding: 6px 10px;
-      font-size: 13px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       border-radius: 8px;
       border: 1px solid var(--border);
       background: transparent;
       color: var(--text);
+      font-family: inherit;
     }
     .edit-page details.source-edit summary::-webkit-details-marker { display: none; }
     .edit-page details.source-edit summary:hover { background: #f5f5f5; }
@@ -100,8 +111,8 @@
         </div>
         <div class="field" style="grid-column: 1 / -1;">
           <label for="edit-short-description">Short description</label>
-          <input id="edit-short-description" name="short_description" value="{{ competitor.short_description or '' }}" placeholder="e.g. Furnished rental operator" type="text" style="width: 100%; max-width: 32em;" />
-          <p class="help">Optional one-line description shown on the competitors list.</p>
+          <input id="edit-short-description" name="short_description" value="{{ competitor.short_description or '' }}" placeholder="e.g. Furnished rental operator; revenue share model" type="text" style="width: 100%; max-width: 32em;" />
+          <p class="help">One-line description shown on the competitors list. If empty, a default (including business model: lease arbitrage/master lease, owned/managed, or revenue share) is generated; you can edit or replace it.</p>
         </div>
       </div>
       <div class="details-actions">

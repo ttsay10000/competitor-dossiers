@@ -142,7 +142,8 @@ SEED_COMPETITORS = [
             {"channel": "talent", "url": "https://jobs.gem.com/rove", "confidence": "high"},
         ],
     },
-    # Vacasa: html-only (search page has ~26k properties in static HTML; sitemap+js_exhaust caused 20-60+ min runs).
+    # Vacasa: sitemap first, then HTML fallback. (HTML-only was used when search had ~26k in static HTML;
+    # if the site now uses JS for listings, HTML returns ~1; sitemap still lists all /unit/12345 URLs.)
     {
         "name": "Vacasa",
         "primary_domain": "vacasa.com",
@@ -151,7 +152,8 @@ SEED_COMPETITORS = [
                 "channel": "asset",
                 "url": "https://www.vacasa.com/search?place=/usa/",
                 "confidence": "high",
-                "extra_options": {"strategy_chain": ["html"], "min_properties_accept": 1},
+                "use_sitemap_first": True,
+                "extra_options": {"strategy_chain": ["sitemap_first", "html"], "min_properties_accept": 5},
             },
             {"channel": "talent", "url": "https://job-boards.greenhouse.io/vacasa", "confidence": "medium"},
         ],

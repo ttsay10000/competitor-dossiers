@@ -69,8 +69,8 @@ def _extract_properties_by_location_array(text: str) -> Optional[List[Dict[str, 
 
 # Caps for exec summary prompt size (location/news/delta); events are not capped.
 MAX_LOCATION_ROWS_FOR_SUMMARY = 25
-MAX_NEWS_FOR_SUMMARY = 15  # Top news only (latest 2-3 weeks); no raw press_90d in exec summary
-TOP_NEWS_DAYS = 21  # Only include news from past 2-3 weeks in executive summary
+MAX_NEWS_FOR_SUMMARY = 5  # Only top 5 news items; exec summary synthesizes into 1-2 bullets, does not list articles
+TOP_NEWS_DAYS = 7  # Only include news from past week in executive summary (recent updates only)
 MAX_DELTA_BY_CITY_ROWS = 15
 MAX_REVIEW_PROPERTIES_FOR_SUMMARY = 10  # Sample of review sentiment sent to LLM (only when significant)
 
@@ -318,7 +318,7 @@ def _build_context_text(context: Dict[str, Any]) -> str:
         total_roles = len(context.get("talent_jobs") or [])
         parts.append(f"Open roles (baseline; no refresh yet): {total_roles}. No job count changes.")
 
-    # 3. Top news: only latest 2-3 weeks (top_news only; no raw press_90d).
+    # 3. Top news: only last week (top_news only; no raw press_90d).
     top_news = context.get("top_news") or []
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=TOP_NEWS_DAYS)).date()
@@ -342,7 +342,10 @@ def _build_context_text(context: Dict[str, Any]) -> str:
             date_str = n.get("date")
             group = n.get("group_title")
             lines.append(f"({date_str}) {title}" + (f" [{group}]" if group else ""))
-        parts.append("Top news (last 2-3 weeks; derive bullets from these): " + " | ".join(lines))
+        parts.append(
+            "Top news (last 7 days when available; synthesize into 1–2 bullets max—do NOT list or recite each item): "
+            + " | ".join(lines)
+        )
     else:
         parts.append("Top news: none.")
 
@@ -408,7 +411,9 @@ def generate_executive_summary(context: Dict[str, Any]) -> Optional[str]:
 
     system = """You are an AI Chief of Staff writing a competitive intelligence brief for Kasa's CEO and exec team. Be concise and executive-level: scannable in 30 seconds. Filter noise, cluster related updates, and translate changes into clear implications and actions.
 
-The data you receive contains ONLY: (1) Top news from the past 2-3 weeks; (2) Asset/property changes vs baseline (or baseline footprint if no refresh); (3) Job count changes vs baseline (or baseline count if no refresh); (4) Website/digital footprint changes since last refresh; (5) Social media and review updates (new or significant). When the input says "only baseline" or "no refresh yet", summarize current state; when it says "changes since baseline", summarize only those changes. When the input says "No changes since last refresh", include a brief bullet noting this (e.g. "No changes to properties, jobs, or signals since last refresh")—this is common and worth stating explicitly.
+The data you receive contains ONLY: (1) Top news from the past week (at most 5 items); (2) Asset/property changes vs baseline (or baseline footprint if no refresh); (3) Job count changes vs baseline (or baseline count if no refresh); (4) Website/digital footprint changes since last refresh; (5) Social media and review updates (new or significant). When the input says "only baseline" or "no refresh yet", summarize current state; when it says "changes since baseline", summarize only those changes. When the input says "No changes since last refresh", include a brief bullet noting this (e.g. "No changes to properties, jobs, or signals since last refresh")—this is common and worth stating explicitly.
+
+NEWS: Do NOT list or recite each news article. Synthesize news into at most 1–2 bullets total (the single most important development). If multiple items are the same story, one bullet only.
 
 PRIORITY: Order bullets by importance to competitive dynamics, not by section order. Put the single most important change first (e.g. major news, market entry/exit, key hire). Then the next most important. Include only changes that materially alter competitive dynamics (market entry/exit, meaningful inventory, pricing/fees, key hiring, major product/positioning, partnerships, regulatory). Drop cosmetic or one-off items. Include social/review sentiment only when it reflects major change.
 

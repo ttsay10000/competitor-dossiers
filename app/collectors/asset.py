@@ -210,6 +210,35 @@ def _is_placemakr_property_url(candidate_url: str, source_url: str) -> bool:
     return False
 
 
+def _is_rove_source(url: str) -> bool:
+    """True if URL's host is rovetravel.com (so we apply stricter link filtering)."""
+    if not url:
+        return False
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    return "rovetravel.com" in host
+
+
+def _is_rove_property_url(candidate_url: str, source_url: str) -> bool:
+    """
+    For Rove (rovetravel.com), only accept /listing/<slug> URLs as individual properties.
+    Exclude /search, /search?market=..., /collections/..., /locations, /list-on-rove, etc.,
+    which otherwise match generic is_property_like patterns and get trapped as extra properties.
+    """
+    if not _is_rove_source(source_url):
+        return True  # Not Rove: no extra filter
+    parsed_c = urlparse(candidate_url)
+    parsed_s = urlparse(source_url)
+    if (parsed_c.netloc or "").lower() != (parsed_s.netloc or "").lower():
+        return False
+    path = (parsed_c.path or "").rstrip("/") or "/"
+    path_lower = path.lower()
+    # Only actual listing pages: /listing/<property-slug>
+    if path_lower.startswith("/listing/") and len(path) > len("/listing/"):
+        return True
+    return False
+
+
 def is_property_like(url: str) -> bool:
     """True if URL looks like a property/location page (for HTML link and sitemap filtering)."""
     u = (url or "").strip()
@@ -400,6 +429,9 @@ def _extract_landing_locations_html(html: str, source_url: str, base_url: str) -
             # Property name — but skip image collector / nav card if it ever appears as h3.
             if _is_landing_image_collector(text):
                 continue
+            # Skip location headers that appear as h3 (e.g. duplicate "City, ST" — not a property).
+            if _RE_LANDING_LOCATION.match(text) and len(text) < 80:
+                continue
             if "no properties available" in text.lower():
                 continue
             if len(text) < 2:
@@ -458,52 +490,79 @@ def _is_kasa_locations_url(url: str) -> bool:
 def _extract_kasa_locations_html(html: str, source_url: str, base_url: str) -> list[dict[str, Any]]:
     """
     Parse Kasa (kasa.com/locations) page: 44 cities, each with multiple properties.
-    Structure: h2 = "City, ST", then links "Go to location City, ST" (city — skip) and
-    "View details Apartment/Hotel Property Name" (one per property). We count each
-    "View details" row as one property (~77 total), not the city links.
+    Structure: h2 or h3 = "City, ST", then links "Go to location City, ST" (city — skip) and
+    "View details Apartment/Hotel Property Name" or links to /properties/... (one per property).
+    Uses body if main yields no properties (list may be outside <main>).
     """
     soup = BeautifulSoup(html, "html.parser")
-    root = _main_content_root(soup)
-    if not root:
+    body = soup.find("body") or soup
+    if not body:
         return []
-    properties: list[dict[str, Any]] = []
-    current_market: Optional[str] = None
 
-    for el in root.find_all(["h2", "a"]):
-        if el.name == "h2":
-            text = (el.get_text() or "").strip()
-            if _RE_LANDING_LOCATION.match(text) and len(text) < 80:
-                current_market = text
-            continue
+    def _parse_from_root(root: Any) -> list[dict[str, Any]]:
+        properties = []
+        current_market: Optional[str] = None
+        # City headers can be h2 or h3; property links are <a>.
+        for el in root.find_all(["h2", "h3", "a"]):
+            if el.name in ("h2", "h3"):
+                text = (el.get_text() or "").strip()
+                if _RE_LANDING_LOCATION.match(text) and len(text) < 80:
+                    current_market = text
+                continue
 
-        if el.name == "a" and current_market:
-            href = (el.get("href") or "").strip()
-            text = (el.get_text() or "").strip()
-            if not href or not text:
-                continue
-            # "Go to location City, ST" = city link, not a property
-            if text.lower().startswith("go to location "):
-                continue
-            # "View details Apartment/Hotel Property Name" or "View detailsApartment..." = one property
-            lower = text.lower()
-            if "view details" not in lower:
-                continue
-            idx = lower.find("view details")
-            name = (text[idx + len("view details") :].strip() or text).strip()
-            if not name or len(name) < 2:
-                continue
-            url_val = urljoin(base_url, href) if href and not href.startswith("http") else href
-            if not url_val:
-                url_val = href
-            properties.append({
-                "name": name,
-                "url": url_val,
-                "market": current_market,
-                "state": None,
-                "city": None,
-                "status": None,
-            })
+            if el.name == "a" and current_market:
+                href = (el.get("href") or "").strip()
+                text = (el.get_text() or "").strip()
+                if not href:
+                    continue
+                # "Go to location City, ST" or "Go to locationCity, ST" = city link, not a property
+                lower = (text or "").lower()
+                if lower.startswith("go to location"):
+                    continue
+                # Property: "View details" in text, or href is /properties/... (name from text or inner h3)
+                is_property_url = "/properties/" in href
+                if "view details" in lower:
+                    idx = lower.find("view details")
+                    name = (text[idx + len("view details") :].strip() or text).strip()
+                    # Strip leading "Apartment "/"Hotel " if present
+                    if name.lower().startswith("apartment "):
+                        name = name[9:].strip()
+                    if name.lower().startswith("hotel "):
+                        name = name[6:].strip()
+                    if name.lower() in ("apartment", "hotel"):
+                        h3 = el.find("h3")
+                        if h3:
+                            name = (h3.get_text() or "").strip()
+                elif is_property_url and text and len(text.strip()) > 2:
+                    name = text.strip()
+                    if name.lower() in ("apartment", "hotel", "view details"):
+                        h3 = el.find("h3")
+                        name = (h3.get_text() or "").strip() if h3 else name
+                elif is_property_url:
+                    h3 = el.find("h3")
+                    name = (h3.get_text() or "").strip() if h3 else None
+                    if not name or len(name) < 2:
+                        continue
+                else:
+                    continue
+                if not name or len(name) < 2:
+                    continue
+                url_val = urljoin(base_url, href) if not href.startswith("http") else href
+                properties.append({
+                    "name": name,
+                    "url": url_val,
+                    "market": current_market,
+                    "state": None,
+                    "city": None,
+                    "status": None,
+                })
+        return properties
 
+    root = _main_content_root(soup)
+    properties = _parse_from_root(root) if root else []
+    # If list is outside <main> (e.g. in a sibling section), retry on body
+    if not properties and body is not root:
+        properties = _parse_from_root(body)
     return properties
 
 
@@ -559,6 +618,12 @@ def extract_properties_from_html(html: str, source_url: str = "") -> list[dict[s
             continue
         if is_landing and _link_in_empty_landing_section(link):
             continue
+        # Landing: exclude city-level pages (e.g. /s/atlanta-ga/apartments/furnished) — not individual properties.
+        if is_landing and href:
+            abs_url = urljoin(base_url, href) if not href.startswith("http") else href
+            path = (urlparse(abs_url).path or "").strip()
+            if "/apartments/furnished" in abs_url and path.count("/") <= 4:
+                continue
         if _link_in_footer(link):
             continue
         # Vacasa: only count /unit/<id> listings, not /about-us, /accessibility, etc.
@@ -575,6 +640,11 @@ def extract_properties_from_html(html: str, source_url: str = "") -> list[dict[s
         if _is_placemakr_source(source_url):
             abs_url = urljoin(base_url, href) if href and not href.startswith("http") else href
             if not _is_placemakr_property_url(abs_url, source_url):
+                continue
+        # Rove: only count /listing/<slug> pages; exclude /search, /collections, /locations, and other nav links that otherwise match generic patterns.
+        if _is_rove_source(source_url):
+            abs_url = urljoin(base_url, href) if href and not href.startswith("http") else href
+            if not _is_rove_property_url(abs_url, source_url):
                 continue
         prop: dict[str, Any] = {
             "url": href,
@@ -1572,6 +1642,9 @@ def collect_asset_snapshot(
                         pass
                     elif not _is_aka_property_url(url, source_url):
                         # AKA sitemaps list 200+ single-segment URLs; only count real property slugs (/hotel-aka-*, /aka-*).
+                        pass
+                    elif not _is_rove_property_url(url, source_url):
+                        # Rove sitemaps/listings: only count /listing/<slug>; exclude /search, /collections, /locations, etc.
                         pass
                     else:
                         property_urls.add(url)

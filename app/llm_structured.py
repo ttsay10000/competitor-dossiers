@@ -9,6 +9,7 @@ input unchanged (or apply simple heuristics) so rules-based logic downstream
 still works and the app remains usable without an API key.
 """
 import json
+import logging
 import os
 import re
 from typing import Any, List, Optional
@@ -2072,4 +2073,54 @@ def research_operating_model_llm(
         content = (resp.choices[0].message.content or "").strip()
         return content if content else None
     except Exception:
+        return None
+
+
+def generate_short_description_llm(
+    competitor_name: str,
+    primary_domain: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Generate a one-line short description for a competitor including business model.
+    Uses: lease arbitrage / master lease, owned/managed, or revenue share.
+    Returns a single line (e.g. "Furnished rental operator; revenue share with owners")
+    or None if API unavailable.
+    """
+    client = _openai_client()
+    if not client:
+        logging.debug("Short description not generated for %s: OPENAI_API_KEY not set", competitor_name or "competitor")
+        return None
+    name = (competitor_name or "").strip() or "the company"
+    domain = (primary_domain or "").strip()
+    context = f"Company: {name}"
+    if domain:
+        context += f" (website: {domain})"
+    system = (
+        "You are a researcher writing a one-line description for a furnished rental or short-term rental operator. "
+        "Write exactly one short sentence that includes: (1) what they do (e.g. furnished rental operator, corporate housing), "
+        "and (2) their business model using one of: revenue share (with owners), owned/managed (they own and operate), "
+        "or master lease / lease arbitrage (lease from owners, sublease to guests). "
+        "Keep the whole line under 100 characters. No bullet points, no extra sentences."
+    )
+    user = (
+        f"{context}\n\n"
+        "Write one short line: what they do + business model (revenue share, owned/managed, or master lease / lease arbitrage)."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            max_tokens=150,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        # Take only first sentence / line if model returned more
+        if content:
+            first_line = content.split("\n")[0].strip()
+            first_sentence = first_line.split(". ")[0].strip()
+            if first_sentence.endswith("."):
+                return first_sentence
+            return first_sentence + "." if first_sentence else None
+        return None
+    except Exception as e:
+        logging.warning("Short description LLM failed for %s: %s", competitor_name or "competitor", e)
         return None

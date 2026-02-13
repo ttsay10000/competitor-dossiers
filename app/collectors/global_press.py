@@ -443,14 +443,23 @@ def _fetch_google_news_rss(
     rss_url = (
         f"https://news.google.com/rss/search?q={encoded}&hl=en-US&gl=US&ceid=US:en"
     )
+    import sys
+    print(f"[press] Google News RSS URL (when:{when_days}d): {rss_url}", file=sys.stderr)
     try:
         fetched = fetch_url(rss_url, timeout=25, headers={"User-Agent": USER_AGENT_BROWSER})
-    except Exception:
+    except Exception as e:
+        import sys
+        print(f"[press] _fetch_google_news_rss: fetch failed: {e}", file=sys.stderr)
         return []
     if fetched.status_code != 200 or not fetched.text:
+        import sys
+        print(f"[press] _fetch_google_news_rss: bad response status={getattr(fetched, 'status_code', None)}, has_text={bool(fetched.text)}", file=sys.stderr)
         return []
 
     feed = feedparser.parse(fetched.text)
+    num_entries = len(feed.entries) if hasattr(feed, "entries") else 0
+    import sys
+    print(f"[press] _fetch_google_news_rss: query={query!r}, feed_entries={num_entries}", file=sys.stderr)
     results: List[dict] = []
     seen_urls: set[str] = set()
 
@@ -500,6 +509,7 @@ def _fetch_google_news_rss(
         if snippet:
             item["snippet"] = snippet
         results.append(item)
+    print(f"[press] _fetch_google_news_rss: after date filter: {len(results)} items", file=sys.stderr)
     return results
 
 
@@ -518,43 +528,26 @@ def collect_google_news_items(
     Example: "rove" furnished rentals when:90d
 
     Date on each item is publication date only (from RSS). Uses when:Nd in the query.
-    When no keywords are set, also fetches first word and "company partnership" and merges.
+    Keywords (e.g. furnished rentals) should be set in the UI (Edit competitor → press source → Keywords).
     Company blog links are filtered out by the pipeline (company_domains).
     """
     keywords = [p for p in (search_phrases or []) if isinstance(p, str) and (p or "").strip()]
     company_name = (company_name or "").strip()
     if not company_name:
+        import sys
+        print("[press] collect_google_news_items: skipped (empty company_name)", file=sys.stderr)
         return []
 
     primary = company_name
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
 
-    # Build query: "CompanyName" [keyword1 keyword2 ...] — company quoted, keywords unquoted.
+    # Build query: "CompanyName" [keyword1 keyword2 ...] — company quoted, keywords unquoted (e.g. "Landing" furnished rentals).
     if keywords:
         keywords_part = " ".join(p.strip() for p in keywords)
         raw_query = f'"{primary}" {keywords_part}'.strip()
         results = _fetch_google_news_rss(primary, window_days, max_items, cutoff, raw_query=raw_query)
     else:
         results = _fetch_google_news_rss(primary, window_days, max_items, cutoff, raw_query=None)
-    seen_urls = {item["url"] for item in results}
-
-    # When no custom keywords: also fetch first word and partnership phrase for more coverage.
-    if not keywords:
-        if " " in company_name:
-            first_word = company_name.split()[0].strip()
-            if first_word and first_word.lower() != company_name.lower():
-                extra = _fetch_google_news_rss(first_word, window_days, max_items, cutoff)
-                for item in extra:
-                    if item["url"] not in seen_urls and len(results) < max_items:
-                        seen_urls.add(item["url"])
-                        results.append(item)
-        seen_urls = {item["url"] for item in results}
-        partnership_phrase = f"{company_name} partnership"
-        extra = _fetch_google_news_rss(partnership_phrase, window_days, max_items, cutoff)
-        for item in extra:
-            if item["url"] not in seen_urls and len(results) < max_items:
-                seen_urls.add(item["url"])
-                results.append(item)
 
     return results
 

@@ -22,7 +22,7 @@ from ..config import settings
 from ..collectors.reviews import resolve_place_id_from_text
 from ..validation import validate_url_format, suggest_urls_from_domain, normalize_domain
 from ..diff.asset_diff import infer_location_for_property
-from ..llm_structured import _assign_state_from_url, research_operating_model_llm
+from ..llm_structured import _assign_state_from_url, research_operating_model_llm, generate_short_description_llm
 from ..executive_summary import US_STATES_LIST
 
 router = APIRouter()
@@ -149,7 +149,12 @@ def _competitor_topline_summary(session, c: Competitor) -> dict:
                 if isinstance(b, dict):
                     bullet = (b.get("bullet") or b.get("title") or "").strip() or None
                     if bullet:
-                        latest_news_items.append({"title": bullet, "url": None})
+                        date_str = (b.get("date") or "").strip()
+                        if date_str and len(date_str) >= 10:
+                            date_str = date_str[:10]
+                        else:
+                            date_str = None
+                        latest_news_items.append({"title": bullet, "url": None, "date": date_str})
             latest_news_count = len(latest_news_items)
             if latest_news_items:
                 latest_news_headline = latest_news_items[0].get("title")
@@ -171,7 +176,12 @@ def _competitor_topline_summary(session, c: Competitor) -> dict:
                 if not title:
                     continue
                 url = (item.get("url") or item.get("link") or item.get("source_url") or "").strip() or None
-                latest_news_items.append({"title": title, "url": url})
+                date_str = (item.get("date") or "").strip()
+                if date_str and len(date_str) >= 10:
+                    date_str = date_str[:10]
+                else:
+                    date_str = None
+                latest_news_items.append({"title": title, "url": url, "date": date_str})
             if items:
                 first = items[0]
                 latest_news_headline = (first.get("title") or first.get("display_title") or "").strip() or None
@@ -211,6 +221,13 @@ def competitors_list(request: Request):
             status = _competitor_status(session, c.id)
             last_refresh = status.get("last_refresh_at")
             topline = _competitor_topline_summary(session, c)
+            # If short_description is missing, try to generate and persist so list shows it
+            if not (topline.get("short_description") or "").strip():
+                llm_default = generate_short_description_llm(c.name, c.primary_domain or "")
+                if llm_default:
+                    c.short_description = llm_default
+                    session.commit()
+                    topline["short_description"] = llm_default
             competitors_data.append({
                 "id": c.id,
                 "name": c.name,
@@ -442,6 +459,11 @@ async def competitors_create(request: Request):
                     )
                 )
 
+            # Populate short description via LLM so list/edit show it without a separate visit
+            if not (getattr(competitor, "short_description", None) or "").strip():
+                llm_default = generate_short_description_llm(competitor.name, primary_domain or "")
+                if llm_default:
+                    competitor.short_description = llm_default
             new_id = competitor.id
         seed_synced = _sync_seed_file()
         url = f"/competitors/{new_id}/added"
@@ -804,11 +826,19 @@ def competitors_edit(request: Request, competitor_id: int):
                     "created_at_str": to_eastern(log.created_at),
                 }
         last_refreshed = get_last_refreshed(session)
+        short_desc = getattr(competitor, "short_description", None) or ""
+        # If no user-set short description, populate default via LLM (business model one-liner)
+        if not short_desc.strip():
+            llm_default = generate_short_description_llm(competitor.name, competitor.primary_domain or "")
+            if llm_default:
+                competitor.short_description = llm_default
+                session.commit()
+                short_desc = llm_default
         competitor_data = {
             "id": competitor.id,
             "name": competitor.name,
             "primary_domain": competitor.primary_domain,
-            "short_description": getattr(competitor, "short_description", None) or "",
+            "short_description": short_desc,
             "is_active": getattr(competitor, "is_active", True),
         }
         endpoints_data = [

@@ -292,6 +292,9 @@
     <!-- Properties by location -->
     <div id="properties-by-location" class="card dossier-section mb-24">
       <strong>Properties by location</strong>
+      {% if asset_source_url %}
+      <p class="meta" style="margin: 4px 0 0 0;"><a href="{{ asset_source_url }}" target="_blank" rel="noopener noreferrer">Source</a></p>
+      {% endif %}
       <p class="meta card-desc">From latest asset pull: current counts by state or city. Any notable adds/removals are summarized in the Executive summary above.</p>
       {% if properties_refinement_available %}
       <p class="meta" id="properties-refinement-status" style="margin: 8px 0 0 0; font-weight: 500;">Refining locations with AI…</p>
@@ -414,6 +417,9 @@
     <!-- Talent snapshot -->
     <div id="talent-snapshot" class="card dossier-section mb-24">
       <strong>Talent snapshot</strong>
+      {% if talent_job_board_url %}
+      <p class="meta" style="margin: 4px 0 0 0;"><a href="{{ talent_job_board_url }}" target="_blank" rel="noopener noreferrer">Source</a></p>
+      {% endif %}
       <p class="meta card-desc">Roles by function. Business & strategy vs property operations.</p>
       {% if talent_jobs|length %}
         <p class="staffing-total">{{ talent_jobs|length }} total role{{ 's' if talent_jobs|length != 1 else '' }}.</p>

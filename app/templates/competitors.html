@@ -30,6 +30,7 @@
     .competitor-card .aka a { text-decoration: none; color: var(--accent, #0d6efd); }
     .competitor-card .aka a:hover { text-decoration: underline; }
     .competitor-card .domain { text-align: center; color: var(--muted, #6c757d); margin: 4px 0 0 0; }
+    .competitor-card .short-description { text-align: center; font-style: italic; color: var(--muted, #6c757d); margin: 4px 0 0 0; }
     .competitor-card .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 24px; margin-top: 16px; max-width: 480px; margin-left: auto; margin-right: auto; }
     .competitor-card .stats-left, .competitor-card .stats-right { font-size: 13px; }
     .competitor-card .stat-line { margin: 4px 0; }
@@ -119,7 +120,7 @@
     {% for competitor in competitors %}
     <section class="competitor-card" data-competitor-id="{{ competitor.id }}">
       <p class="aka">{% if competitor.primary_domain %}<a href="{{ competitor.primary_domain if competitor.primary_domain.startswith('http') else 'https://' ~ competitor.primary_domain }}" target="_blank" rel="noopener" title="Open company site">{{ competitor.name }}</a>{% else %}{{ competitor.name }}{% endif %}</p>
-      <p class="domain">{{ competitor.primary_domain or "—" }}</p>
+      <p class="short-description">{% if competitor.short_description %}{{ competitor.short_description }}{% else %}<span class="domain">{{ competitor.primary_domain or "—" }}</span>{% endif %}</p>
       <p class="stats-line meta" style="margin: 4px 0 0 0; font-size: 12px;">Total properties: {{ competitor.total_properties or 0 }} | Available jobs: {{ competitor.total_jobs or 0 }} | Website changes: {{ competitor.recent_website_changes_count or 0 }}</p>
 
       <div class="latest-news">
@@ -128,7 +129,7 @@
         {% if news_items %}
         <ul>
           {% for item in news_items %}
-          <li>{% if item.url %}<a href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}</li>
+          <li>{% if item.get('date') %}<span class="meta" style="font-weight: 500;">{{ item.date }}</span> — {% endif %}{% if item.url %}<a href="{{ item.url }}" target="_blank" rel="noopener">{{ item.title }}</a>{% else %}{{ item.title }}{% endif %}</li>
           {% endfor %}
         </ul>
         {% else %}
