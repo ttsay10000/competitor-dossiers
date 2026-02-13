@@ -19,6 +19,7 @@ MESSAGE_DISPLAY_MAP = {
     "asset_seed_baseline": "First snapshot saved as baseline",
     "press_seed_baseline": "First snapshot saved as baseline",
     "homepage_seed_baseline": "First snapshot saved as baseline",
+    "no_homepage_url": "No homepage URL (set primary_domain or add a homepage source endpoint)",
     "social_seed_baseline": "First snapshot saved as baseline",
     "no_press_items": "No press items found from any source",
     "all_items_outside_window": "All items older than 90 days; none kept",

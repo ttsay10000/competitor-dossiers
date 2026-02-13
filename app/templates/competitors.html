@@ -37,17 +37,7 @@
       <h3 style="margin: 0;">Competitors</h3>
       <p class="meta" style="margin-top: 4px;">Manage the list of competitors and open their dossiers.</p>
     </div>
-    <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
-      <form method="post" action="/dossier/run-seed" style="display: inline-block;" title="Load seed_data.json into the database (file → DB).">
-        <button type="submit" class="secondary">Run seed</button>
-      </form>
-      <form method="post" action="/dossier/export-seed" style="display: inline-block;" title="Write current DB to seed_data.json (DB → file).">
-        <button type="submit" class="secondary">Export seed</button>
-      </form>
-      <form method="post" action="/dossier/force-refresh-and-reset-baseline" class="refresh-form" style="display: inline-block;">
-        <button type="submit">Force refresh &amp; reset baseline</button>
-      </form>
-      <span id="refresh-status" class="meta" style="margin-left: 4px; font-weight: 500;"></span>
+    <div>
       <a href="/competitors/new"><button>Add competitor</button></a>
     </div>
   </div>
@@ -72,6 +62,105 @@
     <p class="meta mt-4">The competitor has been removed from the site and from seed data.</p>
   </div>
   {% endif %}
+  <div class="card">
+    <h3>Existing</h3>
+    <table class="competitors-existing-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Domain</th>
+          <th>Added</th>
+          <th>Last refresh</th>
+          <th>Baseline set</th>
+          <th>Data / Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for competitor in competitors %}
+        <tr>
+          <td>{{ competitor.name }}</td>
+          <td class="muted">{{ competitor.primary_domain or "" }}</td>
+          <td class="muted cell-date">{% if competitor.created_at %}{{ competitor.created_at.strftime('%Y-%m-%d') }}{% else %}—{% endif %}</td>
+          <td class="muted cell-date">{{ competitor.last_refresh or "—" }}</td>
+          <td class="muted cell-date">{{ competitor.baseline_set or "—" }}</td>
+          <td class="muted cell-status">
+            {% set has = competitor.has_snapshots or {} %}
+            {% set runs = competitor.last_runs or {} %}
+            {% for ch in display_channels %}
+            {% set letter = channel_letters.get(ch, ch[0]|upper) %}
+            <span title="{{ ch }}: {% if has.get(ch) %}has data{% else %}no data{% endif %}{% if runs.get(ch) %}; last run: {{ runs[ch].status }}{% endif %}">
+              {{ letter }}:{% if has.get(ch) %}✓{% else %}—{% endif %}
+              {% if runs.get(ch) %}<span style="{% if runs[ch].status == 'success' %}color: #0d8a0d;{% elif runs[ch].status == 'running' %}color: #b8860b;{% elif runs[ch].status == 'error' %}color: #b84a2b;{% endif %}">({{ runs[ch].status }})</span>{% endif %}
+            </span>
+            {% if not loop.last %} · {% endif %}
+            {% endfor %}
+          </td>
+          <td>
+            <a href="/competitors/{{ competitor.id }}">Edit</a> ·
+            <a href="/dossier/{{ competitor.id }}">Dossier</a> ·
+            <button type="button" class="remove-competitor-btn btn-link" data-id="{{ competitor.id }}" data-name="{{ competitor.name|e }}" data-required="{{ ('remove ' ~ competitor.name ~ ' from site')|e }}">Remove</button>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if competitors|length == 0 %}
+        <tr>
+          <td colspan="7" class="muted">No competitors yet.</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+  <div id="remove-competitor-modal" class="modal-overlay" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="remove-modal-title">
+    <div class="modal-card" style="max-width: 480px;">
+      <h3 id="remove-modal-title">Remove competitor</h3>
+      <p class="meta mt-4">This will permanently remove <strong id="remove-modal-name"></strong> from the site and from seed data (database and <code>seed_data.json</code>).</p>
+      <p class="meta mt-4">To confirm, type exactly:</p>
+      <p style="margin: 8px 0 12px 0;"><code id="remove-modal-required"></code></p>
+      <form id="remove-competitor-form" method="post" action="">
+        <label for="remove-confirmation-input" class="sr-only">Confirmation phrase</label>
+        <input type="text" name="confirmation" id="remove-confirmation-input" autocomplete="off" placeholder="Type the phrase above" style="width: 100%; padding: 8px; margin-bottom: 12px; box-sizing: border-box;">
+        <div style="display: flex; gap: 8px; justify-content: flex-end;">
+          <button type="button" id="remove-modal-cancel" class="secondary">Cancel</button>
+          <button type="submit" id="remove-modal-submit" class="danger" disabled>Remove competitor</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card mt-16">
+    <h3>Refresh selected channels (all competitors)</h3>
+    <p class="meta" style="margin-top: 4px;">Run chosen collectors for every competitor. Run log appears below until you refresh or leave the page.</p>
+    <form method="post" action="/competitors/run-selected-channels" class="run-channels-form run-channels-inline" style="margin-top: 12px;" id="global-run-channels-form">
+      <div class="run-channels-checkboxes">
+        <label><input type="checkbox" name="channels" value="talent" /> Talent</label>
+        <label><input type="checkbox" name="channels" value="asset" /> Asset</label>
+        <label><input type="checkbox" name="channels" value="press" /> Press</label>
+        <label><input type="checkbox" name="channels" value="homepage" /> Website</label>
+        <label><input type="checkbox" name="channels" value="reviews" /> Reviews</label>
+        <label><input type="checkbox" name="channels" value="social" /> Social</label>
+      </div>
+      <button type="submit">Run selected channels</button>
+    </form>
+  </div>
+
+  <div class="card mt-16" style="border-left: 4px solid var(--warning, #b8860b);">
+    <h3>Global reset — only use if sure</h3>
+    <p class="meta" style="margin-top: 4px;">Run seed: loads seed_data.json into the database (file → DB). Export seed: writes the current DB to seed_data.json (DB → file). Force refresh runs seed, then deletes all snapshots, runs all collectors, and sets each competitor’s comparison date to now. Use after editing the seed file, changing press/LLM logic, or when runs are still skipping.</p>
+    <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px;">
+      <form method="post" action="/dossier/run-seed" style="display: inline-block;" title="Load seed_data.json into the database (file → DB).">
+        <button type="submit" class="secondary">Run seed</button>
+      </form>
+      <form method="post" action="/dossier/export-seed" style="display: inline-block;" title="Write current DB to seed_data.json (DB → file).">
+        <button type="submit" class="secondary">Export seed</button>
+      </form>
+      <form method="post" action="/dossier/force-refresh-and-reset-baseline" class="refresh-form" style="display: inline-block;">
+        <button type="submit">Force refresh &amp; reset baseline</button>
+      </form>
+      <span id="refresh-status" class="meta" style="margin-left: 4px; font-weight: 500;"></span>
+    </div>
+  </div>
   <script>
     (function() {
       var statusEl = document.getElementById('refresh-status');
@@ -123,92 +212,6 @@
       }
     })();
   </script>
-  <p class="meta" style="margin: -8px 0 12px 0;">
-    <strong>Run seed</strong>: loads <code>seed_data.json</code> into the database (file → DB).<br>
-    <strong>Export seed</strong>: writes the current DB to <code>seed_data.json</code> (DB → file).<br>
-    <strong>Force refresh &amp; reset baseline</strong>: runs seed first (file → DB), then deletes <em>all</em> snapshots, runs all collectors, then sets each competitor’s comparison date to now. That first run establishes the baseline; the next refresh will surface changes in the executive summary. Use after editing the seed file, changing press/LLM logic, or when runs are still skipping.</p>
-  <div class="card">
-    <h3>Existing</h3>
-    <table class="competitors-existing-table">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Domain</th>
-          <th>Added</th>
-          <th>Last refresh</th>
-          <th>Baseline set</th>
-          <th>Data / Status</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for competitor in competitors %}
-        <tr>
-          <td>{{ competitor.name }}</td>
-          <td class="muted">{{ competitor.primary_domain or "" }}</td>
-          <td class="muted cell-date">{% if competitor.created_at %}{{ competitor.created_at.strftime('%Y-%m-%d') }}{% else %}—{% endif %}</td>
-          <td class="muted cell-date">{{ competitor.last_refresh or "—" }}</td>
-          <td class="muted cell-date">{{ competitor.baseline_set or "—" }}</td>
-          <td class="muted cell-status">
-            {% set has = competitor.has_snapshots or {} %}
-            {% set runs = competitor.last_runs or {} %}
-            {% for ch in display_channels %}
-            {% set letter = channel_letters.get(ch, ch[0]|upper) %}
-            <span title="{{ ch }}: {% if has.get(ch) %}has data{% else %}no data{% endif %}{% if runs.get(ch) %}; last run: {{ runs[ch].status }}{% endif %}">
-              {{ letter }}:{% if has.get(ch) %}✓{% else %}—{% endif %}
-              {% if runs.get(ch) %}<span style="{% if runs[ch].status == 'error' %}color: #c00;{% endif %}">({{ runs[ch].status }})</span>{% endif %}
-            </span>
-            {% if not loop.last %} · {% endif %}
-            {% endfor %}
-          </td>
-          <td>
-            <a href="/competitors/{{ competitor.id }}">Edit</a> ·
-            <a href="/dossier/{{ competitor.id }}">Dossier</a> ·
-            <button type="button" class="remove-competitor-btn secondary" data-id="{{ competitor.id }}" data-name="{{ competitor.name|e }}" data-required="{{ ('remove ' ~ competitor.name ~ ' from site')|e }}">Remove</button>
-          </td>
-        </tr>
-        {% endfor %}
-        {% if competitors|length == 0 %}
-        <tr>
-          <td colspan="7" class="muted">No competitors yet.</td>
-        </tr>
-        {% endif %}
-      </tbody>
-    </table>
-  </div>
-
-  <div id="remove-competitor-modal" class="modal-overlay" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="remove-modal-title">
-    <div class="modal-card" style="max-width: 480px;">
-      <h3 id="remove-modal-title">Remove competitor</h3>
-      <p class="meta mt-4">This will permanently remove <strong id="remove-modal-name"></strong> from the site and from seed data (database and <code>seed_data.json</code>).</p>
-      <p class="meta mt-4">To confirm, type exactly:</p>
-      <p style="margin: 8px 0 12px 0;"><code id="remove-modal-required"></code></p>
-      <form id="remove-competitor-form" method="post" action="">
-        <label for="remove-confirmation-input" class="sr-only">Confirmation phrase</label>
-        <input type="text" name="confirmation" id="remove-confirmation-input" autocomplete="off" placeholder="Type the phrase above" style="width: 100%; padding: 8px; margin-bottom: 12px; box-sizing: border-box;">
-        <div style="display: flex; gap: 8px; justify-content: flex-end;">
-          <button type="button" id="remove-modal-cancel" class="secondary">Cancel</button>
-          <button type="submit" id="remove-modal-submit" class="danger" disabled>Remove competitor</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  <div class="card mt-16">
-    <h3>Refresh selected channels (all competitors)</h3>
-    <p class="meta" style="margin-top: 4px;">Run chosen collectors for every competitor. Run log appears below until you refresh or leave the page.</p>
-    <form method="post" action="/competitors/run-selected-channels" class="run-channels-form run-channels-inline" style="margin-top: 12px;" id="global-run-channels-form">
-      <div class="run-channels-checkboxes">
-        <label><input type="checkbox" name="channels" value="talent" /> Talent</label>
-        <label><input type="checkbox" name="channels" value="asset" /> Asset</label>
-        <label><input type="checkbox" name="channels" value="press" /> Press</label>
-        <label><input type="checkbox" name="channels" value="homepage" /> Website</label>
-        <label><input type="checkbox" name="channels" value="reviews" /> Reviews</label>
-        <label><input type="checkbox" name="channels" value="social" /> Social</label>
-      </div>
-      <button type="submit">Run selected channels</button>
-    </form>
-  </div>
 
   <div id="global-run-status-card" class="card mt-16" style="display: none; border-left: 4px solid var(--accent, #0d6efd);">
     <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">

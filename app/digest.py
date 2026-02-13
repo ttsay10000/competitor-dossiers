@@ -58,10 +58,10 @@ def send_weekly_digest(to_emails: list[str], days: int = 7, per_competitor: int 
     """
     Send the Summary report (rollup summary) to the given addresses via SMTP.
     Sends both plain text and HTML (with hyperlinked news) as multipart/alternative.
-    Returns (success, message). Uses settings.smtp_* and settings.digest_from_email.
+    Returns (success, message). Uses settings.smtp_* and settings.mail_from.
     """
     if not settings.digest_send_enabled:
-        return False, "Email send is not configured (set SMTP_* and DIGEST_FROM_EMAIL)."
+        return False, "Email send is not configured (set SMTP_* and MAIL_FROM)."
     to_emails = [e.strip() for e in to_emails if _is_valid_email(e.strip())]
     if not to_emails:
         return False, "No valid email addresses provided."
@@ -73,7 +73,7 @@ def send_weekly_digest(to_emails: list[str], days: int = 7, per_competitor: int 
     subject = f"Competitor Signals — Summary report ({datetime.now(timezone.utc).strftime('%Y-%m-%d')})"
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = settings.digest_from_email
+    msg["From"] = settings.mail_from
     msg["To"] = ", ".join(to_emails)
     msg.attach(MIMEText(body, "plain", "utf-8"))
     import html as html_module
@@ -88,7 +88,7 @@ def send_weekly_digest(to_emails: list[str], days: int = 7, per_competitor: int 
             if settings.smtp_use_tls:
                 server.starttls()
             server.login(settings.smtp_user, settings.smtp_password)
-            server.sendmail(settings.digest_from_email, to_emails, msg.as_string())
+            server.sendmail(settings.mail_from, to_emails, msg.as_string())
         return True, f"Sent to {', '.join(to_emails)}."
     except Exception as e:
         return False, str(e)

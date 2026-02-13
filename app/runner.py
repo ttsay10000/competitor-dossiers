@@ -20,7 +20,14 @@ from .config import settings
 from .db import get_session
 from .diff.talent_diff import diff_jobs, count_recent_by_capability
 from .diff.asset_diff import diff_properties, extract_markets
-from .llm_structured import enrich_properties_with_llm, enrich_jobs_with_llm, enrich_press_items_with_llm, enrich_social_posts_with_llm
+from .llm_structured import (
+    enrich_properties_with_llm,
+    enrich_jobs_with_llm,
+    enrich_press_items_with_llm,
+    enrich_social_posts_with_llm,
+    interpret_website_change,
+)
+from .utils import parse_url_context
 from .diff.press_diff import diff_items
 from .diff.social_diff import diff_social_posts
 from sqlalchemy.orm import selectinload
@@ -271,6 +278,37 @@ def event_recently_created(
         session.query(Event)
         .filter(
             Event.competitor_id == competitor_id,
+            Event.type == event_type,
+            Event.title == title,
+            Event.detected_at >= cutoff,
+        )
+        .first()
+        is not None
+    )
+
+
+def event_already_created_since_baseline(
+    session,
+    competitor: Competitor,
+    event_type: str,
+    title: str,
+    *,
+    fallback_window_days: int = 14,
+) -> bool:
+    """
+    For website-change events: have we already created this (type + title) since the last
+    refresh? Uses competitor.reporting_baseline_at so dedupe is per refresh cycle, not calendar.
+    If no baseline is set, falls back to time-based (fallback_window_days).
+    """
+    baseline = getattr(competitor, "reporting_baseline_at", None)
+    if baseline is not None:
+        cutoff = baseline
+    else:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=fallback_window_days)
+    return (
+        session.query(Event)
+        .filter(
+            Event.competitor_id == competitor.id,
             Event.type == event_type,
             Event.title == title,
             Event.detected_at >= cutoff,
@@ -1335,7 +1373,12 @@ def run_homepage(competitor_name: Optional[str] = None, is_cancelled: Optional[C
     if _is_cancelled(is_cancelled):
         return
     with get_session() as session:
-        competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        competitors = (
+            session.query(Competitor)
+            .options(selectinload(Competitor.source_endpoints))
+            .order_by(Competitor.name.asc())
+            .all()
+        )
         if competitor_name:
             competitors = _filter_competitors_by_name(competitors, competitor_name)
         else:
@@ -1347,6 +1390,16 @@ def run_homepage(competitor_name: Optional[str] = None, is_cancelled: Optional[C
             if _is_cancelled(is_cancelled):
                 return
             runs = _homepage_runs_for_competitor(competitor)
+            if not runs:
+                log_run(
+                    session,
+                    competitor.id,
+                    "homepage",
+                    "skipped",
+                    message="no_homepage_url",
+                    extra={"reason": "no primary_domain and no homepage source_endpoints"},
+                )
+                continue
             for base_url, js_required, paths in runs:
                 if _is_cancelled(is_cancelled):
                     return
@@ -1430,27 +1483,54 @@ def run_homepage(competitor_name: Optional[str] = None, is_cancelled: Optional[C
                     content_changed = prev is None or (page.get("content_hash") != prev.get("content_hash"))
                     if not content_changed:
                         continue
+                    # Optional LLM interpretation: what changed, subdomain/path context, and importance.
+                    url_ctx = parse_url_context(url)
+                    old_snippet = (prev.get("visible_text_snippet") or "") if prev else None
+                    new_snippet = page.get("visible_text_snippet") or ""
+                    interpretation = interpret_website_change(
+                        competitor.name,
+                        url,
+                        url_ctx,
+                        old_snippet or None,
+                        new_snippet or None,
+                        page.get("coming_soon_phrases"),
+                    )
+                    if interpretation and not interpretation.get("is_important", True):
+                        continue  # Skip creating event for trivial changes
                     ev_updated = build_homepage_updated_event(url)
+                    evidence = ev_updated.get("evidence") or {}
+                    evidence["subdomain"] = url_ctx.get("subdomain") or ""
+                    evidence["path"] = url_ctx.get("path") or ""
+                    ev_updated["evidence"] = evidence
+                    if interpretation:
+                        ev_updated["title"] = (interpretation.get("suggested_title") or ev_updated["title"])[:255]
+                        ev_updated["summary"] = (interpretation.get("summary") or ev_updated["summary"])[:2000]
+                        if interpretation.get("reason"):
+                            ev_updated["why_it_matters"] = (interpretation.get("reason") or ev_updated.get("why_it_matters"))[:1000]
                     title_updated = ev_updated["title"] + " " + (url[:80] if url else "")
-                    if not event_recently_created(
+                    if not event_already_created_since_baseline(
                         session,
-                        competitor.id,
+                        competitor,
                         "narrative.homepage_updated",
                         title_updated,
-                        window_days=dedupe_window_for("narrative.homepage_updated"),
+                        fallback_window_days=dedupe_window_for("narrative.homepage_updated"),
                     ):
                         create_event(session, competitor.id, ev_updated)
                     phrases = page.get("coming_soon_phrases") or []
                     if phrases:
                         phrase = phrases[0]
                         ev_soon = build_coming_soon_event(url, phrase)
+                        soon_evidence = ev_soon.get("evidence") or {}
+                        soon_evidence["subdomain"] = url_ctx.get("subdomain") or ""
+                        soon_evidence["path"] = url_ctx.get("path") or ""
+                        ev_soon["evidence"] = soon_evidence
                         title_soon = ev_soon["title"] + " " + (url[:80] if url else "")
-                        if not event_recently_created(
+                        if not event_already_created_since_baseline(
                             session,
-                            competitor.id,
+                            competitor,
                             "narrative.coming_soon",
                             title_soon,
-                            window_days=dedupe_window_for("narrative.coming_soon"),
+                            fallback_window_days=dedupe_window_for("narrative.coming_soon"),
                         ):
                             create_event(session, competitor.id, ev_soon)
                 log_run(

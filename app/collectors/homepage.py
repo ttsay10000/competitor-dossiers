@@ -78,19 +78,25 @@ def build_composite_hash(pages: list[dict[str, Any]]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+# Max chars of visible text stored per page for LLM diff/interpretation (old vs new).
+VISIBLE_TEXT_SNIPPET_LEN = 4000
+
+
 def _structured_page(page: dict[str, Any], detect_phrases: Callable[[str], list[str]]) -> dict[str, Any]:
-    """Build one entry for structured_json.pages: url, raw_hash, content_hash, coming_soon_phrases."""
+    """Build one entry for structured_json.pages: url, raw_hash, content_hash, coming_soon_phrases, visible_text_snippet."""
     url = page.get("source_url") or ""
     raw_hash = page.get("raw_hash") or ""
     raw = (page.get("raw_content") or "").strip()
     text = extract_visible_text(raw) if raw else ""
     ch = content_hash(text)
     phrases = detect_phrases(text) if text else []
+    snippet = (text or "")[:VISIBLE_TEXT_SNIPPET_LEN]
     return {
         "url": url,
         "raw_hash": raw_hash,
         "content_hash": ch,
         "coming_soon_phrases": phrases,
+        "visible_text_snippet": snippet,
     }
 
 

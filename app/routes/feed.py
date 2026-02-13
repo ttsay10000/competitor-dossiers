@@ -46,6 +46,7 @@ def feed(request: Request, competitor_id: Optional[int] = None, severity: Option
             query = query.filter(Event.category == category)
 
         events_rows = query.limit(200).all()
+        competitor_names = {c.id: c.name for c in competitors}
         events = [
             {
                 "title": e.title,
@@ -56,6 +57,7 @@ def feed(request: Request, competitor_id: Optional[int] = None, severity: Option
                 "detected_at_str": e.detected_at.strftime("%Y-%m-%d"),
                 "why_it_matters": e.why_it_matters,
                 "evidence_json": e.evidence_json,
+                "competitor_name": competitor_names.get(e.competitor_id, ""),
             }
             for e in events_rows
         ]
@@ -88,6 +90,11 @@ def _events_for_dashboard(session):
         .limit(500)
         .all()
     )
+    competitor_ids = {e.competitor_id for e in rows}
+    competitor_names = {}
+    if competitor_ids:
+        for c in session.query(Competitor).filter(Competitor.id.in_(competitor_ids)).all():
+            competitor_names[c.id] = c.name
     categories = set()
     events = []
     for e in rows:
@@ -99,6 +106,7 @@ def _events_for_dashboard(session):
             "summary": e.summary,
             "detected_at_str": e.detected_at.strftime("%Y-%m-%d"),
             "detected_at_short": e.detected_at.strftime("%b %d"),
+            "competitor_name": competitor_names.get(e.competitor_id, ""),
         })
     return events, sorted(categories)
 
@@ -131,11 +139,11 @@ def digest(request: Request):
 
 @router.post("/digest/send")
 def digest_send(body: SendDigestBody):
-    """Send the weekly digest to the given email address(es). Requires SMTP_* and DIGEST_FROM_EMAIL to be set."""
+    """Send the weekly digest to the given email address(es). Requires SMTP_* and MAIL_FROM to be set."""
     if not settings.digest_send_enabled:
         return JSONResponse(
             status_code=503,
-            content={"ok": False, "error": "Email send is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASSWORD, and DIGEST_FROM_EMAIL."},
+            content={"ok": False, "error": "Email send is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASSWORD, and MAIL_FROM."},
         )
     to_raw = body.to if isinstance(body.to, list) else [body.to]
     to_emails = [e.strip() for e in to_raw if (e or "").strip()]

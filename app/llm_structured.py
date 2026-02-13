@@ -78,6 +78,86 @@ def _parse_json_response(content: str) -> Any:
     return json.loads(content)
 
 
+# Max chars of old/new page text sent to LLM for website change interpretation (control cost).
+_WEBSITE_CHANGE_TEXT_MAX = 2500
+
+
+def interpret_website_change(
+    competitor_name: str,
+    url: str,
+    url_context: dict,
+    old_text_snippet: Optional[str],
+    new_text_snippet: Optional[str],
+    coming_soon_phrases: Optional[List[str]] = None,
+) -> Optional[dict]:
+    """
+    Ask LLM to interpret a website change: what changed and whether it's competitively important.
+    url_context should have subdomain, path, host (e.g. from utils.parse_url_context).
+    Returns dict with: summary (str), is_important (bool), reason (str), suggested_title (str)
+    or None if API unavailable / failure.
+    """
+    client = _openai_client()
+    if not client:
+        return None
+    old_text = (old_text_snippet or "")[:_WEBSITE_CHANGE_TEXT_MAX]
+    new_text = (new_text_snippet or "")[:_WEBSITE_CHANGE_TEXT_MAX]
+    subdomain = url_context.get("subdomain") or ""
+    path = url_context.get("path") or ""
+    host = url_context.get("host") or ""
+    phrases = coming_soon_phrases or []
+    system = """You are a competitive intelligence analyst for short-term rental / hospitality companies.
+Given a competitor's name, the URL (and its subdomain/path) where a change was detected, and optional before/after visible text, you must:
+1. summary: One short line only (max ~80 chars). State only the major change—e.g. "New locations list added", "Pricing section updated", "Coming soon messaging added". No filler. If only new text is given, use "Content changed; no previous version available" only if you cannot infer anything else.
+2. is_important: true if new markets, product/positioning, pricing, partnerships, or material messaging; false if trivial (dates, copyright, typos, nav, cookie text).
+3. reason: One brief sentence for importance or unimportance.
+4. suggested_title: Short event title (max 80 chars) for an executive.
+
+Reply with exactly this JSON (no markdown, no extra text):
+{"summary": "...", "is_important": true or false, "reason": "...", "suggested_title": "..."}"""
+
+    user_parts = [
+        f"Competitor: {competitor_name}",
+        f"URL: {url}",
+        f"Location on site: subdomain={subdomain!r} path={path!r} host={host!r}",
+    ]
+    if phrases:
+        user_parts.append(f"Detected phrases on page: {phrases}")
+    if old_text:
+        user_parts.append(f"Previous page text (excerpt):\n{old_text}")
+    else:
+        user_parts.append("Previous page text: (not available)")
+    if new_text:
+        user_parts.append(f"Current page text (excerpt):\n{new_text}")
+    else:
+        user_parts.append("Current page text: (empty or not available)")
+    user_content = "\n\n".join(user_parts)
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0.2,
+            max_tokens=400,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        if not content:
+            return None
+        data = _parse_json_response(content)
+        if not isinstance(data, dict):
+            return None
+        return {
+            "summary": (data.get("summary") or "").strip() or "Content changed.",
+            "is_important": bool(data.get("is_important", True)),
+            "reason": (data.get("reason") or "").strip(),
+            "suggested_title": (data.get("suggested_title") or "Website or product page updated")[:255],
+        }
+    except Exception:
+        return None
+
+
 # Data attributes that often contain property location on cards (so LLM can see them when enriching).
 _ENRICH_LOCATION_ATTRS = ("data-city", "data-state", "data-region", "data-market", "data-location", "data-address", "aria-label")
 

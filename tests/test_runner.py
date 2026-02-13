@@ -10,9 +10,9 @@ def test_run_unknown_channel_prints_message(capsys):
     assert "invalid_channel" in out
 
 
-def test_runner_channels_include_all_seed_baseline_channels():
-    """Every channel in RUNNER_CHANNELS has per-competitor seed baseline (SEED_MODE).
-    Do not remove channels from this list without updating the runner seed logic."""
-    expected = ("talent", "asset", "press", "homepage", "public_records")
-    assert RUNNER_CHANNELS == expected
-    assert len(RUNNER_CHANNELS) == 5
+def test_runner_channels_include_homepage():
+    """Homepage channel is required for website changes / digital footprint flow."""
+    assert "homepage" in RUNNER_CHANNELS
+    assert RUNNER_CHANNELS == (
+        "talent", "asset", "press", "homepage", "public_records", "reviews", "social"
+    )

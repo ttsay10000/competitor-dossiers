@@ -140,6 +140,15 @@
       color: var(--muted);
       margin-top: 6px;
     }
+    .meta-uniform,
+    .meta-uniform code,
+    .meta-uniform strong,
+    .meta-uniform em {
+      font-family: inherit;
+      font-size: inherit;
+      font-weight: 400;
+      font-style: normal;
+    }
     /* Staffing/talent snapshot: consistent 13px body so list items match descriptions */
     .staffing-body { font-size: 13px; line-height: 1.4; color: var(--text); margin: 0; }
     .staffing-body.muted { color: var(--muted); }
@@ -177,6 +186,19 @@
       background: transparent;
       border: 1px solid var(--border);
       color: var(--text);
+    }
+    button.btn-link {
+      background: none;
+      border: none;
+      padding: 0;
+      font: inherit;
+      color: var(--text);
+      text-decoration: underline;
+      cursor: pointer;
+      border-radius: 0;
+    }
+    button.btn-link:hover {
+      color: var(--accent);
     }
     /* Spacing utilities (4/8/12/16/24px scale) */
     .mb-4 { margin-bottom: 4px; }
@@ -219,6 +241,14 @@
     .page-header h1 { margin: 0; }
     /* Jump-to nav (sticky, dossier): prevent scroll from going past the section header */
     .dossier-section { scroll-margin-top: 1.25rem; }
+    /* Website changes: scrollable list with thin scrollbar */
+    .website-changes-scroll {
+      scrollbar-width: thin;
+      scrollbar-color: var(--muted, #9ca3af) transparent;
+    }
+    .website-changes-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+    .website-changes-scroll::-webkit-scrollbar-track { background: transparent; }
+    .website-changes-scroll::-webkit-scrollbar-thumb { background: var(--muted, #9ca3af); border-radius: 4px; }
     .dossier-layout { display: flex; gap: 32px; align-items: flex-start; }
     .dossier-nav {
       flex-shrink: 0;

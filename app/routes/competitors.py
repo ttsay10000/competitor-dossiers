@@ -647,6 +647,7 @@ def competitor_added(request: Request, competitor_id: int):
 @router.get("/competitors/{competitor_id}")
 def competitors_edit(request: Request, competitor_id: int):
     review_error = request.query_params.get("review_error")
+    source_error = request.query_params.get("source_error")
     with get_session() as session:
         competitor = session.get(Competitor, competitor_id)
         if competitor is None:
@@ -714,6 +715,7 @@ def competitors_edit(request: Request, competitor_id: int):
             "review_properties": review_properties,
             "reviews_snapshot": reviews_snapshot,
             "review_error": review_error,
+            "source_error": source_error,
             "last_runs": last_runs,
             "last_refreshed": last_refreshed,
             "nav_competitors": nav_competitors,
@@ -748,11 +750,18 @@ def _parse_google_news_phrases(raw: Optional[str]) -> Optional[list[str]]:
     return phrases if phrases else None
 
 
+def _press_placeholder_url(primary_domain: Optional[str]) -> str:
+    """URL placeholder for press channel (Google News doesn't need a real URL)."""
+    if primary_domain and primary_domain.strip():
+        return f"https://{primary_domain.strip().split('/')[0].split(':')[0]}"
+    return "https://example.com"
+
+
 @router.post("/competitors/{competitor_id}/sources")
 def competitor_add_source(
     competitor_id: int,
     channel: str = Form(...),
-    url: str = Form(...),
+    url: Optional[str] = Form(None),
     confidence: str = Form("high"),
     js_required: Optional[str] = Form(None),
     use_sitemap_first: Optional[str] = Form(None),
@@ -762,16 +771,25 @@ def competitor_add_source(
         competitor = session.get(Competitor, competitor_id)
         if competitor is None:
             return RedirectResponse(url="/competitors", status_code=HTTP_303_SEE_OTHER)
+        ch = channel.strip().lower()
+        url_val = (url or "").strip()
+        if ch == "press" and not url_val:
+            url_val = _press_placeholder_url(competitor.primary_domain)
+        elif not url_val:
+            return RedirectResponse(
+                url=f"/competitors/{competitor_id}?source_error=url_required",
+                status_code=HTTP_303_SEE_OTHER,
+            )
         extra_options = None
-        if channel.strip().lower() == "press":
+        if ch == "press":
             phrases = _parse_google_news_phrases(google_news_search_phrases)
             if phrases:
                 extra_options = {"google_news_search_phrases": phrases}
                 extra_options["press_search_name"] = phrases[0]
         endpoint = SourceEndpoint(
             competitor_id=competitor_id,
-            channel=channel.strip(),
-            url=url.strip(),
+            channel=ch,
+            url=url_val,
             confidence=confidence.strip() or "high",
             js_required=bool(js_required),
             use_sitemap_first=bool(use_sitemap_first),
@@ -797,7 +815,7 @@ def competitor_update_source(
     competitor_id: int,
     source_id: int,
     channel: str = Form(...),
-    url: str = Form(...),
+    url: Optional[str] = Form(None),
     confidence: str = Form("high"),
     js_required: Optional[str] = Form(None),
     use_sitemap_first: Optional[str] = Form(None),
@@ -807,12 +825,22 @@ def competitor_update_source(
         endpoint = session.get(SourceEndpoint, source_id)
         if endpoint is None:
             return RedirectResponse(url=f"/competitors/{competitor_id}", status_code=HTTP_303_SEE_OTHER)
-        endpoint.channel = channel.strip()
-        endpoint.url = url.strip()
+        competitor = session.get(Competitor, competitor_id)
+        ch = channel.strip().lower()
+        url_val = (url or "").strip()
+        if ch == "press" and not url_val:
+            url_val = _press_placeholder_url(competitor.primary_domain if competitor else None)
+        elif not url_val:
+            return RedirectResponse(
+                url=f"/competitors/{competitor_id}?source_error=url_required",
+                status_code=HTTP_303_SEE_OTHER,
+            )
+        endpoint.channel = ch
+        endpoint.url = url_val
         endpoint.confidence = confidence.strip() or "high"
         endpoint.js_required = bool(js_required)
         endpoint.use_sitemap_first = bool(use_sitemap_first)
-        if channel.strip().lower() == "press":
+        if ch == "press":
             extra = dict(endpoint.extra_options or {})
             phrases = _parse_google_news_phrases(google_news_search_phrases)
             if phrases:

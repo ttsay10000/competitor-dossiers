@@ -10,7 +10,7 @@
       <span id="digest-send-status" class="meta" style="margin-left: 4px;"></span>
     </div>
     {% if not send_enabled %}
-      <p class="meta" style="margin-top: 8px; color: var(--muted, #666);">To enable sending, configure SMTP: set <code>SMTP_HOST</code>, <code>SMTP_PORT</code>, <code>SMTP_USER</code>, <code>SMTP_PASSWORD</code>, and <code>DIGEST_FROM_EMAIL</code> in your environment.</p>
+      <p class="meta meta-uniform" style="margin-top: 8px; color: var(--muted, #666);">To enable sending, configure SMTP: set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, and MAIL_FROM in your environment.</p>
     {% endif %}
   </div>
   <div class="card" id="rollup-card">
@@ -56,7 +56,7 @@
       <ul style="margin: 0; padding-left: 1.25em;">
         {% for e in feed_events %}
         <li class="feed-event" data-category="{{ e.category }}" style="margin-bottom: 4px;">
-          <span class="meta">{{ e.detected_at_short }}</span>: {{ e.title }}{% if e.summary and e.summary != e.title %} — {{ e.summary }}{% endif %}
+          <span class="meta">{{ e.detected_at_short }}</span>{% if e.competitor_name %}<strong> {{ e.competitor_name }}</strong>{% endif %}: {{ e.title }}{% if e.summary and e.summary != e.title %} — {{ e.summary }}{% endif %}
         </li>
         {% endfor %}
       </ul>

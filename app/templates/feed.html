@@ -81,7 +81,7 @@
       </div>
     </div>
     <div class="meta">
-      {{ event.category }} · {{ event.type }} · detected {{ event.detected_at_str }}
+      {% if event.competitor_name %}<strong>{{ event.competitor_name }}</strong> · {% endif %}{{ event.category }} · {{ event.type }} · detected {{ event.detected_at_str }}
     </div>
     {% if event.why_it_matters %}
     <div style="margin-top: 8px;">

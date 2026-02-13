@@ -1,24 +1,87 @@
 {% extends "base.html" %}
 {% block content %}
+  <style>
+    .edit-page .card { margin-bottom: 24px; }
+    .edit-page .card h3 { margin-bottom: 12px; }
+    .edit-page .details-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px 24px;
+      align-items: start;
+    }
+    @media (max-width: 640px) { .edit-page .details-grid { grid-template-columns: 1fr; } }
+    .edit-page .details-actions { margin-top: 16px; display: flex; justify-content: flex-end; }
+    .edit-page .add-source-section {
+      padding: 16px;
+      background: #f8f9fa;
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+    .edit-page .add-source-section h4 { margin: 0 0 12px 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+    .edit-page .source-table { margin-top: 8px; }
+    .edit-page .source-table td { vertical-align: middle; }
+    .edit-page .source-table .url-cell { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .edit-page .source-row-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .edit-page .source-row-actions button { padding: 6px 10px; font-size: 13px; }
+    .edit-page details.source-edit { margin-top: 12px; }
+    .edit-page details.source-edit[open] .source-edit-summary { margin-bottom: 12px; }
+    .edit-page .source-edit-form .row { margin-bottom: 12px; }
+    .edit-page .last-runs-table { font-size: 13px; }
+    .edit-page .last-runs-table th { font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; }
+    .edit-page .status-pill { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 500; }
+    .edit-page .status-pill.success { background: #e2f0e8; color: #20523e; }
+    .edit-page .status-pill.error { background: #f8d7da; color: #721c24; }
+    .edit-page .status-pill.running { background: #fef9e6; color: #7d6a00; }
+    .edit-page .status-pill.skipped, .edit-page .status-pill.cancelled { background: #f0f0f0; color: var(--muted); }
+    .edit-page details.source-edit summary {
+      list-style: none;
+      cursor: pointer;
+      display: inline-block;
+      padding: 6px 10px;
+      font-size: 13px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text);
+    }
+    .edit-page details.source-edit summary::-webkit-details-marker { display: none; }
+    .edit-page details.source-edit summary:hover { background: #f5f5f5; }
+  </style>
+
+  <div class="edit-page">
   <h1>Edit Competitor</h1>
 
   <div class="card">
-    <strong>Last Runs</strong>
-    <div class="meta">
-      {% if last_runs %}
-        {% for channel, log in last_runs.items() %}
-          <div>{{ channel }} · {{ log.status }} · {{ log.created_at_str }}</div>
-        {% endfor %}
-      {% else %}
-        <div>No run history yet.</div>
-      {% endif %}
-    </div>
+    <h3>Last Runs</h3>
+    {% if last_runs %}
+      <table class="last-runs-table">
+        <thead>
+          <tr>
+            <th>Channel</th>
+            <th>Status</th>
+            <th>Date & time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for channel, log in last_runs.items() %}
+          <tr>
+            <td>{{ channel }}</td>
+            <td><span class="status-pill {{ log.status }}">{{ log.status }}</span></td>
+            <td class="muted">{{ log.created_at_str }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="meta" style="margin: 0;">No run history yet.</p>
+    {% endif %}
   </div>
 
   <div class="card">
     <h3>Details</h3>
     <form method="post" action="/competitors/{{ competitor.id }}">
-      <div class="row">
+      <div class="details-grid">
         <div>
           <label>Name</label>
           <input name="name" value="{{ competitor.name }}" required />
@@ -28,70 +91,94 @@
           <input name="primary_domain" value="{{ competitor.primary_domain or '' }}" placeholder="example.com" />
           <p class="meta" style="margin: 4px 0 0 0;">Use the raw domain (e.g. <code>example.com</code>). Full URLs are accepted and will be normalized.</p>
         </div>
-        <div style="display: flex; align-items: flex-end;">
-          <label style="display: inline-flex; align-items: center; gap: 6px; margin-right: 12px;">
+        <div style="grid-column: 1 / -1;">
+          <label style="display: inline-flex; align-items: center; gap: 8px;">
             <input type="checkbox" name="is_active" value="1" {% if competitor.is_active %}checked{% endif %} />
             <span>Active (include in cron/global refresh)</span>
           </label>
         </div>
-        <div>
-          <button type="submit">Save</button>
-        </div>
+      </div>
+      <div class="details-actions">
+        <button type="submit">Save</button>
       </div>
     </form>
   </div>
 
   <div class="card">
     <h3>Source Endpoints</h3>
-    <form method="post" action="/competitors/{{ competitor.id }}/sources">
-      <div class="row">
-        <div>
-          <label>Channel</label>
-          <select name="channel">
-            <option value="talent">talent</option>
-            <option value="asset">asset</option>
-            <option value="press">press (primary company news; used first each run)</option>
-            <option value="homepage">homepage</option>
-            <option value="public_records">public_records</option>
-          </select>
-        </div>
-        <div>
-          <label>URL</label>
-          <input name="url" required />
-        </div>
-        <div>
-          <label>Confidence</label>
-          <select name="confidence">
-            <option value="high">high</option>
-            <option value="low">low</option>
-          </select>
-        </div>
-        <div>
-          <label>JS Required</label>
-          <select name="js_required">
-            <option value="">No</option>
-            <option value="1">Yes</option>
-          </select>
-        </div>
-        <div>
-          <label>Sitemap First</label>
-          <select name="use_sitemap_first">
-            <option value="">No</option>
-            <option value="1">Yes</option>
-          </select>
-        </div>
-        <div>
-          <label>Keywords <span class="meta">(press only; comma-separated — all must appear in article)</span></label>
-          <input name="google_news_search_phrases" placeholder="e.g. landing, furnished rentals" />
-        </div>
-        <div>
-          <button type="submit">Add Source</button>
-        </div>
-      </div>
-    </form>
+    <p class="meta card-desc">Changes here are saved to the database and synced to <code>seed_data.json</code> automatically — no extra command needed. The next run (cron or manual) will use the updated sources and keywords.</p>
 
-    <p class="meta" style="margin: 0 0 12px 0;">For talent and asset, the first source (Primary) is used; if it fails or returns no data, the system tries the next (Secondary). For press: optional <strong>keywords</strong> (comma-separated) are used for Google News; all keywords must appear in the article. Leave blank to use company name.</p>
-    <table>
+    <div class="add-source-section">
+      <h4>Add new source</h4>
+      <p class="meta" style="margin: 0 0 12px 0;">For talent and asset, the first source (Primary) is used; if it fails, the system tries the next (Secondary). <strong>Press</strong>: no URL needed (Google News search). Use keywords to narrow results, or leave blank to use the competitor name.</p>
+      {% if source_error == "url_required" %}
+      <p class="meta" style="color: var(--accent); margin: 0 0 8px 0;">URL is required for this channel. For press, you can leave URL empty.</p>
+      {% endif %}
+      <form method="post" action="/competitors/{{ competitor.id }}/sources" id="add-source-form">
+        <div class="row">
+          <div>
+            <label>Channel</label>
+            <select name="channel" id="add-source-channel">
+              <option value="talent">talent</option>
+              <option value="asset">asset</option>
+              <option value="press">press (primary company news; used first each run)</option>
+              <option value="homepage">homepage</option>
+              <option value="public_records">public_records</option>
+            </select>
+          </div>
+          <div>
+            <label>URL <span class="meta" id="url-optional-label">(optional for press)</span></label>
+            <input name="url" id="add-source-url" placeholder="Not needed for press" />
+          </div>
+          <div>
+            <label>Confidence</label>
+            <select name="confidence">
+              <option value="high">high</option>
+              <option value="low">low</option>
+            </select>
+          </div>
+          <div>
+            <label>JS Required</label>
+            <select name="js_required">
+              <option value="">No</option>
+              <option value="1">Yes</option>
+            </select>
+          </div>
+          <div>
+            <label>Sitemap First</label>
+            <select name="use_sitemap_first">
+              <option value="">No</option>
+              <option value="1">Yes</option>
+            </select>
+          </div>
+          <div>
+            <label>Keywords <span class="meta">(press only)</span></label>
+            <input name="google_news_search_phrases" placeholder="Default: {{ competitor.name }}" title="Leave blank to use competitor name; comma-separated phrases must all appear in article" />
+            <p class="meta" style="margin: 2px 0 0 0;">Leave blank to use “{{ competitor.name }}”. Edit to override.</p>
+          </div>
+          <div>
+            <button type="submit">Add Source</button>
+          </div>
+        </div>
+      </form>
+      <script>
+        (function() {
+          var channel = document.getElementById('add-source-channel');
+          var urlInput = document.getElementById('add-source-url');
+          if (!channel || !urlInput) return;
+          function toggleUrlRequired() {
+            var isPress = channel.value === 'press';
+            urlInput.required = !isPress;
+            urlInput.placeholder = isPress ? 'Not needed for press' : '';
+          }
+          channel.addEventListener('change', toggleUrlRequired);
+          toggleUrlRequired();
+        })();
+      </script>
+    </div>
+
+    <h4 class="card-section-title">Existing sources</h4>
+    <table class="source-table">
       <thead>
         <tr>
           <th>Channel</th>
@@ -108,63 +195,76 @@
         <tr>
           <td>{{ endpoint.channel }}</td>
           <td>{% if endpoint.channel in ("talent", "asset") %}<span style="font-size: 12px; font-weight: 600; color: var(--accent);">{% if endpoint.is_primary %}Primary{% else %}Secondary{% endif %}</span>{% else %}—{% endif %}</td>
-          <td class="muted">{{ endpoint.url }}</td>
+          <td class="muted url-cell" title="{{ endpoint.url }}">{{ endpoint.url }}</td>
           <td>{{ endpoint.confidence }}</td>
           <td>{{ "yes" if endpoint.js_required else "no" }}</td>
           <td>{{ "yes" if endpoint.use_sitemap_first else "no" }}</td>
           <td>
-            <form method="post" action="/competitors/{{ competitor.id }}/sources/{{ endpoint.id }}">
-              <div class="row">
-                <div>
-                  <select name="channel">
-                    <option value="talent" {% if endpoint.channel == "talent" %}selected{% endif %}>talent</option>
-                    <option value="asset" {% if endpoint.channel == "asset" %}selected{% endif %}>asset</option>
-                    <option value="press" {% if endpoint.channel == "press" %}selected{% endif %}>press</option>
-                    <option value="homepage" {% if endpoint.channel == "homepage" %}selected{% endif %}>homepage</option>
-                    <option value="public_records" {% if endpoint.channel == "public_records" %}selected{% endif %}>public_records</option>
-                  </select>
+            <div class="source-row-actions">
+              <details class="source-edit">
+                <summary class="source-edit-summary">Edit</summary>
+                <div class="source-edit-form">
+                  <form method="post" action="/competitors/{{ competitor.id }}/sources/{{ endpoint.id }}">
+                    <div class="row">
+                      <div>
+                        <label>Channel</label>
+                        <select name="channel">
+                          <option value="talent" {% if endpoint.channel == "talent" %}selected{% endif %}>talent</option>
+                          <option value="asset" {% if endpoint.channel == "asset" %}selected{% endif %}>asset</option>
+                          <option value="press" {% if endpoint.channel == "press" %}selected{% endif %}>press</option>
+                          <option value="homepage" {% if endpoint.channel == "homepage" %}selected{% endif %}>homepage</option>
+                          <option value="public_records" {% if endpoint.channel == "public_records" %}selected{% endif %}>public_records</option>
+                        </select>
+                      </div>
+                      <div style="flex: 1; min-width: 200px;">
+                        <label>URL</label>
+                        <input name="url" value="{{ endpoint.url }}" />
+                      </div>
+                      <div>
+                        <label>Confidence</label>
+                        <select name="confidence">
+                          <option value="high" {% if endpoint.confidence == "high" %}selected{% endif %}>high</option>
+                          <option value="low" {% if endpoint.confidence == "low" %}selected{% endif %}>low</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label>JS</label>
+                        <select name="js_required">
+                          <option value="" {% if not endpoint.js_required %}selected{% endif %}>No</option>
+                          <option value="1" {% if endpoint.js_required %}selected{% endif %}>Yes</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label>Sitemap</label>
+                        <select name="use_sitemap_first">
+                          <option value="" {% if not endpoint.use_sitemap_first %}selected{% endif %}>No</option>
+                          <option value="1" {% if endpoint.use_sitemap_first %}selected{% endif %}>Yes</option>
+                        </select>
+                      </div>
+                      {% if endpoint.channel == "press" %}
+                      <div>
+                        {% set phrases = (endpoint.extra_options or {}).get('google_news_search_phrases') %}
+                        <label>Keywords</label>
+                        <input name="google_news_search_phrases" placeholder="Comma-separated" value="{{ phrases | join(', ') if phrases else '' }}" />
+                      </div>
+                      {% endif %}
+                      <div style="align-self: flex-end;">
+                        <button type="submit">Update</button>
+                      </div>
+                    </div>
+                  </form>
                 </div>
-                <div>
-                  <input name="url" value="{{ endpoint.url }}" />
-                </div>
-                <div>
-                  <select name="confidence">
-                    <option value="high" {% if endpoint.confidence == "high" %}selected{% endif %}>high</option>
-                    <option value="low" {% if endpoint.confidence == "low" %}selected{% endif %}>low</option>
-                  </select>
-                </div>
-                <div>
-                  <select name="js_required">
-                    <option value="" {% if not endpoint.js_required %}selected{% endif %}>No</option>
-                    <option value="1" {% if endpoint.js_required %}selected{% endif %}>Yes</option>
-                  </select>
-                </div>
-                <div>
-                  <select name="use_sitemap_first">
-                    <option value="" {% if not endpoint.use_sitemap_first %}selected{% endif %}>No</option>
-                    <option value="1" {% if endpoint.use_sitemap_first %}selected{% endif %}>Yes</option>
-                  </select>
-                </div>
-                {% if endpoint.channel == "press" %}
-                <div>
-                  {% set phrases = (endpoint.extra_options or {}).get('google_news_search_phrases') %}
-                  <input name="google_news_search_phrases" placeholder="Keywords (comma-separated; all must appear)" value="{{ phrases | join(', ') if phrases else '' }}" />
-                </div>
-                {% endif %}
-                <div>
-                  <button class="secondary" type="submit">Update</button>
-                </div>
-              </div>
-            </form>
-            <form method="post" action="/competitors/{{ competitor.id }}/sources/{{ endpoint.id }}/delete">
-              <button class="secondary" type="submit">Delete</button>
-            </form>
+              </details>
+              <form method="post" action="/competitors/{{ competitor.id }}/sources/{{ endpoint.id }}/delete" style="display: inline;">
+                <button class="secondary" type="submit">Delete</button>
+              </form>
+            </div>
           </td>
         </tr>
         {% endfor %}
         {% if endpoints|length == 0 %}
         <tr>
-          <td colspan="7" class="muted">No sources yet.</td>
+          <td colspan="7" class="muted">No sources yet. Add one above.</td>
         </tr>
         {% endif %}
       </tbody>
@@ -173,7 +273,7 @@
 
   <div class="card">
     <h3>Reviews (Google)</h3>
-    <p class="meta" style="margin: 0 0 12px 0;">Track review rating and sentiment for properties. Add by Place ID or search (e.g. property name and address). Set <code>GOOGLE_PLACES_API_KEY</code> and run the <strong>reviews</strong> channel to refresh.</p>
+    <p class="meta card-desc">Track review rating and sentiment for properties. Add by Place ID or search (e.g. property name and address). Set <code>GOOGLE_PLACES_API_KEY</code> and run the <strong>reviews</strong> channel to refresh.</p>
     {% if review_properties %}
     <form method="post" action="/competitors/{{ competitor.id }}/run-now" style="display: inline-block; margin-bottom: 12px;">
       <input type="hidden" name="channels" value="reviews" />
@@ -187,7 +287,7 @@
     {% endif %}
     <form method="post" action="/competitors/{{ competitor.id }}/review-properties" style="margin-bottom: 16px;">
       <div class="row">
-        <div style="flex: 1;">
+        <div style="flex: 1; min-width: 200px;">
           <input name="place_id_or_query" placeholder="Place ID (ChIJ...) or search: Property Name, City State" style="width: 100%;" />
         </div>
         <div>
@@ -195,7 +295,7 @@
         </div>
       </div>
     </form>
-    <table>
+    <table class="source-table">
       <thead>
         <tr>
           <th>Property</th>
@@ -207,7 +307,7 @@
         {% for rp in review_properties %}
         <tr>
           <td>{{ rp.display_name or rp.place_id }}</td>
-          <td class="muted" style="font-size: 12px;">{{ rp.place_id[:25] }}{% if rp.place_id|length > 25 %}…{% endif %}</td>
+          <td class="muted url-cell" style="font-size: 12px;" title="{{ rp.place_id }}">{{ rp.place_id[:25] }}{% if rp.place_id|length > 25 %}…{% endif %}</td>
           <td>
             <form method="post" action="/competitors/{{ competitor.id }}/review-properties/{{ rp.id }}/delete" style="display: inline;">
               <button type="submit" class="secondary">Remove</button>
@@ -259,4 +359,6 @@
     </div>
   </div>
   {% endif %}
+
+  </div>
 {% endblock %}

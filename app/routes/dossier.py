@@ -1253,9 +1253,10 @@ def export_seed_from_ui(request: Request, next_url: Optional[str] = Form(None, a
 def force_refresh_and_reset_baseline(request: Request):
     """
     Run seed first (seed_data.json → DB), then clear all snapshots (every channel, every
-    competitor), run all channels for all active competitors, then set each competitor's
-    reporting_baseline_at to now. The first refresh establishes the baseline; subsequent
-    refreshes compare against it so executive summaries surface what changed.
+    competitor), clear all events (so Event Feed and Dashboard feed view are empty), run
+    all channels for all active competitors, then set each competitor's reporting_baseline_at
+    to now. The first refresh establishes the baseline; subsequent refreshes compare against
+    it so executive summaries surface what changed.
     """
     from ..runner import run as run_all_channels, advance_baseline_after_full_refresh, clear_all_snapshots, clear_all_events
     from ..db import get_session

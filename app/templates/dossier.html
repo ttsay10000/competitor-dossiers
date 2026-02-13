@@ -459,20 +459,35 @@
     <!-- Website changes / digital footprint -->
     <div id="website-changes" class="card dossier-section mb-24">
       <strong>Website changes / digital footprint</strong>
-      <p class="meta card-desc">Changes since last refresh only (no running log). Force refresh sets the baseline; only URL/site/page changes after that are shown.</p>
       {% if digital_footprint_events|length %}
-        <ul class="card-list">
-          {% for event in digital_footprint_events %}
-          <li>
-            <span class="meta">{{ event.occurred_at_str or event.detected_at_str }}</span> — {{ event.title }}
-            {% if event.evidence_json and event.evidence_json.get('source_url') %}
-              <a href="{{ event.evidence_json.source_url }}" target="_blank" rel="noopener">View page</a>
-            {% endif %}
-          </li>
-          {% endfor %}
-        </ul>
+        <span class="meta" style="font-weight: 500;">({{ digital_footprint_events|length }})</span>
+      {% endif %}
+      <p class="meta card-desc">Changes since the last refresh or reset. Only changes after the baseline are shown.</p>
+      {% if digital_footprint_events|length %}
+        <div class="website-changes-scroll" style="max-height: 380px; overflow-y: auto; overflow-x: hidden; padding-right: 8px; margin-top: 8px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--bg-muted, #f9fafb);">
+          <ul class="card-list" style="padding: 12px 12px 12px 20px; margin: 0;">
+            {% for event in digital_footprint_events %}
+            <li style="margin-bottom: 10px; padding-bottom: 10px; list-style: none; margin-left: 0; padding-left: 0;{% if not loop.last %} border-bottom: 1px solid var(--border, #e5e7eb);{% endif %}">
+              <span class="meta" style="display: block; margin-bottom: 2px;">{{ event.occurred_at_str or event.detected_at_str }}</span>
+              {% if event.evidence_json and (event.evidence_json.get('subdomain') or event.evidence_json.get('path')) %}
+                <span class="meta" style="font-size: 11px; display: inline-block; margin-bottom: 2px;">Location: {% if event.evidence_json.subdomain %}{{ event.evidence_json.subdomain }}{% if event.evidence_json.path %} · {% endif %}{% endif %}{% if event.evidence_json.path %}{{ event.evidence_json.path }}{% endif %}</span>
+              {% endif %}
+              <span style="display: block;">{{ event.title }}</span>
+              {% if event.summary %}
+                <span class="meta" style="display: block; margin-top: 2px; font-size: 12px;">{{ (event.summary[:120] + '…') if event.summary|length > 120 else event.summary }}</span>
+              {% endif %}
+              {% if event.evidence_json and event.evidence_json.get('phrase') %}
+                <span class="meta">Phrase: {{ event.evidence_json.phrase }}</span>
+              {% endif %}
+              {% if event.evidence_json and event.evidence_json.get('source_url') %}
+                <a href="{{ event.evidence_json.source_url }}" target="_blank" rel="noopener" style="font-size: 13px;">View page →</a>
+              {% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+        </div>
       {% else %}
-        <div class="meta">No website or digital footprint changes since last refresh.</div>
+        <div class="meta">No website or digital footprint changes since the last refresh or reset.</div>
       {% endif %}
     </div>
 
