@@ -1613,7 +1613,7 @@ def _fetch_blueground_destinations(
 # if it has at least this many properties; otherwise we try the next in the chain (avoids accepting
 # a wrong/partial strategy, e.g. HTML returning 2 links when sitemap would return thousands).
 # Sources with no extra_options use the default chain with min_accept=1 (see below).
-_ASSET_CHAIN_MIN_PROPERTIES = 5
+_ASSET_CHAIN_MIN_PROPERTIES = 11
 
 # When a source has no strategy_chain and no explicit strategy, we try this chain and accept the
 # first result with >= 1 property (so seed-added competitors are never excluded by a strict minimum).

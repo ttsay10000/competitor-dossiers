@@ -135,6 +135,7 @@ SEED_COMPETITORS = [
         ],
     },
     # Rove: /search is SPA with infinite scroll; need Playwright + scroll to get full list (not just ~10 above fold).
+    # Try js_exhaust first so we scroll and get all listings; sitemap often has only ~10 /listing/ URLs.
     {
         "name": "Rove",
         "primary_domain": "rovetravel.com",
@@ -145,7 +146,7 @@ SEED_COMPETITORS = [
                 "confidence": "high",
                 "js_required": True,
                 "extra_options": {
-                    "strategy_chain": ["sitemap_first", "js_exhaust", "html"],
+                    "strategy_chain": ["js_exhaust", "sitemap_first", "html"],
                     "load_more": {"scroll_window": True, "scroll_wait_sec": 1.5, "max_scrolls": 150},
                 },
             },
