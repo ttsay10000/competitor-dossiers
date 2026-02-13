@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import urljoin, urlparse
 
 from .collectors.talent import collect_talent_snapshot, build_structured_json as build_talent_structured
@@ -302,6 +302,11 @@ def _endpoints_ordered(endpoints: list[SourceEndpoint]) -> list[SourceEndpoint]:
     return sorted(endpoints, key=lambda e: e.id)
 
 
+def _is_cancelled(is_cancelled: Optional[Callable[[], bool]]) -> bool:
+    """Return True if an optional cancel callable is set and returns True (run was cancelled)."""
+    return bool(is_cancelled and is_cancelled())
+
+
 def _filter_competitors_by_name(competitors: list, competitor_name: Optional[str]) -> list:
     """Filter competitors by name: exact match (case-insensitive) or first-word match so 'Lark' matches 'Lark Hotels'."""
     if not competitor_name or not competitors:
@@ -322,7 +327,9 @@ def _filter_competitors_by_name(competitors: list, competitor_name: Optional[str
     return out
 
 
-def run_talent(competitor_name: Optional[str] = None) -> None:
+def run_talent(competitor_name: Optional[str] = None, is_cancelled: Optional[Callable[[], bool]] = None) -> None:
+    if _is_cancelled(is_cancelled):
+        return
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         if competitor_name:
@@ -333,6 +340,8 @@ def run_talent(competitor_name: Optional[str] = None) -> None:
             log_event("competitor_not_found", competitor_filter=competitor_name)
             return
         for competitor in competitors:
+            if _is_cancelled(is_cancelled):
+                return
             endpoints_ordered = _endpoints_ordered([
                 e for e in competitor.source_endpoints if e.channel == "talent"
             ])
@@ -350,6 +359,8 @@ def run_talent(competitor_name: Optional[str] = None) -> None:
             current_jobs = []
 
             for endpoint in endpoints_ordered:
+                if _is_cancelled(is_cancelled):
+                    return
                 print(
                     f"[talent] Step 0 — Trying endpoint: {endpoint.url} ({endpoint.confidence})"
                 )
@@ -565,7 +576,9 @@ def run_talent(competitor_name: Optional[str] = None) -> None:
                 )
 
 
-def run_asset(competitor_name: Optional[str] = None) -> None:
+def run_asset(competitor_name: Optional[str] = None, is_cancelled: Optional[Callable[[], bool]] = None) -> None:
+    if _is_cancelled(is_cancelled):
+        return
     with get_session() as session:
         competitors = (
             session.query(Competitor)
@@ -581,6 +594,8 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
             log_event("competitor_not_found", competitor_filter=competitor_name)
             return
         for competitor in competitors:
+            if _is_cancelled(is_cancelled):
+                return
             endpoints_ordered = _endpoints_ordered([
                 e for e in (competitor.source_endpoints or []) if e.channel == "asset"
             ])
@@ -598,6 +613,8 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
             current_props = []
 
             for endpoint in endpoints_ordered:
+                if _is_cancelled(is_cancelled):
+                    return
                 print(
                     f"[asset] Step 0 — Trying endpoint: {endpoint.url} ({endpoint.confidence})"
                 )
@@ -787,7 +804,9 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
                 )
 
 
-def run_press(competitor_name: Optional[str] = None) -> None:
+def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Callable[[], bool]] = None) -> None:
+    if _is_cancelled(is_cancelled):
+        return
     with get_session() as session:
         competitors = (
             session.query(Competitor)
@@ -803,6 +822,8 @@ def run_press(competitor_name: Optional[str] = None) -> None:
             log_event("competitor_not_found", competitor_filter=competitor_name)
             return
         for competitor in competitors:
+            if _is_cancelled(is_cancelled):
+                return
             endpoints = [
                 endpoint
                 for endpoint in (competitor.source_endpoints or [])
@@ -877,6 +898,8 @@ def run_press(competitor_name: Optional[str] = None) -> None:
             # 3) Optional: user-provided company blog/news URLs (supplementary; not required for press to run).
             endpoint_count = 0
             for endpoint in endpoints:
+                if _is_cancelled(is_cancelled):
+                    return
                 try:
                     snapshot = collect_press_snapshot(endpoint.url)
                 except Exception as exc:
@@ -1268,7 +1291,9 @@ def _homepage_runs_for_competitor(competitor: Competitor) -> list[tuple[str, boo
     return runs
 
 
-def run_homepage(competitor_name: Optional[str] = None) -> None:
+def run_homepage(competitor_name: Optional[str] = None, is_cancelled: Optional[Callable[[], bool]] = None) -> None:
+    if _is_cancelled(is_cancelled):
+        return
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         if competitor_name:
@@ -1279,8 +1304,12 @@ def run_homepage(competitor_name: Optional[str] = None) -> None:
             log_event("competitor_not_found", competitor_filter=competitor_name)
             return
         for competitor in competitors:
+            if _is_cancelled(is_cancelled):
+                return
             runs = _homepage_runs_for_competitor(competitor)
             for base_url, js_required, paths in runs:
+                if _is_cancelled(is_cancelled):
+                    return
                 urls = [base_url] + [
                     urljoin(base_url.rstrip("/") + "/", p.lstrip("/"))
                     for p in paths
@@ -1409,8 +1438,10 @@ def _build_social_raw_hash(posts: list[dict]) -> str:
     return hashlib.sha256("\n".join(keys).encode("utf-8")).hexdigest()
 
 
-def run_social(competitor_name: Optional[str] = None) -> None:
+def run_social(competitor_name: Optional[str] = None, is_cancelled: Optional[Callable[[], bool]] = None) -> None:
     """Collect Twitter/LinkedIn posts via RSS; classify with LLM; create narrative.social_signal for executive-relevant new posts."""
+    if _is_cancelled(is_cancelled):
+        return
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         if competitor_name:
@@ -1423,6 +1454,8 @@ def run_social(competitor_name: Optional[str] = None) -> None:
         bridge = getattr(settings, "twitter_rss_bridge_base", None) or None
         linkedin_state = getattr(settings, "linkedin_storage_state_path", None) or None
         for competitor in competitors:
+            if _is_cancelled(is_cancelled):
+                return
             endpoints = [ep for ep in competitor.source_endpoints if ep.channel == "social"]
             if not endpoints:
                 continue
@@ -1433,6 +1466,8 @@ def run_social(competitor_name: Optional[str] = None) -> None:
             all_posts: list[dict] = []
             raw_content_parts: list[str] = []
             for ep in endpoints:
+                if _is_cancelled(is_cancelled):
+                    return
                 platform = (getattr(ep, "extra_options") or {}).get("platform") if isinstance(getattr(ep, "extra_options"), dict) else None
                 if not platform or platform not in ("twitter", "linkedin"):
                     platform = "linkedin" if "linkedin" in (ep.url or "").lower() else "twitter"
@@ -1513,7 +1548,9 @@ def run_social(competitor_name: Optional[str] = None) -> None:
             )
 
 
-def run_public_records(competitor_name: Optional[str] = None) -> None:
+def run_public_records(competitor_name: Optional[str] = None, is_cancelled: Optional[Callable[[], bool]] = None) -> None:
+    if _is_cancelled(is_cancelled):
+        return
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         if competitor_name:
@@ -1524,12 +1561,16 @@ def run_public_records(competitor_name: Optional[str] = None) -> None:
                 log_event("competitor_not_found", competitor_filter=competitor_name)
                 return
         for competitor in competitors:
+            if _is_cancelled(is_cancelled):
+                return
             endpoints = [
                 ep
                 for ep in competitor.source_endpoints
                 if ep.channel == "public_records"
             ]
             for endpoint in endpoints:
+                if _is_cancelled(is_cancelled):
+                    return
                 print(
                     f"[{datetime.now(timezone.utc).isoformat()}] public_records run: "
                     f"{competitor.name} {endpoint.url}"
@@ -1594,8 +1635,10 @@ def run_public_records(competitor_name: Optional[str] = None) -> None:
                 )
 
 
-def run_reviews(competitor_name: Optional[str] = None) -> None:
+def run_reviews(competitor_name: Optional[str] = None, is_cancelled: Optional[Callable[[], bool]] = None) -> None:
     """Fetch Google Reviews for each competitor's tracked properties; persist snapshot with trend."""
+    if _is_cancelled(is_cancelled):
+        return
     with get_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         if competitor_name:
@@ -1610,6 +1653,8 @@ def run_reviews(competitor_name: Optional[str] = None) -> None:
             print("[reviews] GOOGLE_PLACES_API_KEY not set; skipping reviews channel.")
             return
         for competitor in competitors:
+            if _is_cancelled(is_cancelled):
+                return
             props = list(competitor.review_properties) if hasattr(competitor, "review_properties") else []
             if not props:
                 continue
@@ -1619,6 +1664,8 @@ def run_reviews(competitor_name: Optional[str] = None) -> None:
             )
             properties_data = []
             for rp in props:
+                if _is_cancelled(is_cancelled):
+                    return
                 data = collect_property_review(
                     rp.place_id,
                     display_name=rp.display_name,
@@ -1681,7 +1728,10 @@ def run(
     channel: Optional[str] = None,
     competitor_name: Optional[str] = None,
     local: bool = False,
+    is_cancelled: Optional[Callable[[], bool]] = None,
 ) -> None:
+    if _is_cancelled(is_cancelled):
+        return
     if local:
         if channel not in (None, "press"):
             print("[local] Only --channel press is supported without a database. Use --channel press.")
@@ -1700,33 +1750,47 @@ def run(
                     if getattr(c, "is_active", True)
                 ]
             for name in competitor_names:
+                if _is_cancelled(is_cancelled):
+                    return
                 print(
                     f"\n[{datetime.now(timezone.utc).isoformat()}] === {name} (all channels) ===",
                     flush=True,
                 )
-                run_talent(competitor_name=name)
-                run_asset(competitor_name=name)
-                run_press(competitor_name=name)
-                run_homepage(competitor_name=name)
-                run_public_records(competitor_name=name)
-                run_social(competitor_name=name)
-                run_reviews(competitor_name=name)
+                run_talent(competitor_name=name, is_cancelled=is_cancelled)
+                run_asset(competitor_name=name, is_cancelled=is_cancelled)
+                run_press(competitor_name=name, is_cancelled=is_cancelled)
+                run_homepage(competitor_name=name, is_cancelled=is_cancelled)
+                run_public_records(competitor_name=name, is_cancelled=is_cancelled)
+                run_social(competitor_name=name, is_cancelled=is_cancelled)
+                run_reviews(competitor_name=name, is_cancelled=is_cancelled)
         else:
             # Channel-first: single channel or single competitor (unchanged)
             if channel in (None, "talent"):
-                run_talent(competitor_name=competitor_name)
+                run_talent(competitor_name=competitor_name, is_cancelled=is_cancelled)
+            if _is_cancelled(is_cancelled):
+                return
             if channel in (None, "asset"):
-                run_asset(competitor_name=competitor_name)
+                run_asset(competitor_name=competitor_name, is_cancelled=is_cancelled)
+            if _is_cancelled(is_cancelled):
+                return
             if channel in (None, "press"):
-                run_press(competitor_name=competitor_name)
+                run_press(competitor_name=competitor_name, is_cancelled=is_cancelled)
+            if _is_cancelled(is_cancelled):
+                return
             if channel in (None, "homepage"):
-                run_homepage(competitor_name=competitor_name)
+                run_homepage(competitor_name=competitor_name, is_cancelled=is_cancelled)
+            if _is_cancelled(is_cancelled):
+                return
             if channel in (None, "public_records"):
-                run_public_records(competitor_name=competitor_name)
+                run_public_records(competitor_name=competitor_name, is_cancelled=is_cancelled)
+            if _is_cancelled(is_cancelled):
+                return
             if channel in (None, "social"):
-                run_social(competitor_name=competitor_name)
+                run_social(competitor_name=competitor_name, is_cancelled=is_cancelled)
+            if _is_cancelled(is_cancelled):
+                return
             if channel in (None, "reviews"):
-                run_reviews(competitor_name=competitor_name)
+                run_reviews(competitor_name=competitor_name, is_cancelled=is_cancelled)
     if channel is not None and channel not in RUNNER_CHANNELS:
         print(f"[{datetime.now(timezone.utc).isoformat()}] unknown channel: {channel}")
 

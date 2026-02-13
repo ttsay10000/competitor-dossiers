@@ -56,7 +56,7 @@ def print_weekly_digest(days: int = 7, per_competitor: int = 3) -> None:
 
 def send_weekly_digest(to_emails: list[str], days: int = 7, per_competitor: int = 3) -> tuple[bool, str]:
     """
-    Build the weekly digest and send it to the given addresses via SMTP.
+    Send the Recent updates (rollup summary) to the given addresses via SMTP.
     Returns (success, message). Uses settings.smtp_* and settings.digest_from_email.
     """
     if not settings.digest_send_enabled:
@@ -64,8 +64,11 @@ def send_weekly_digest(to_emails: list[str], days: int = 7, per_competitor: int 
     to_emails = [e.strip() for e in to_emails if _is_valid_email(e.strip())]
     if not to_emails:
         return False, "No valid email addresses provided."
-    body = build_weekly_digest(days=days, per_competitor=per_competitor)
-    subject = f"Competitor Signals — Weekly Digest ({datetime.now(timezone.utc).strftime('%Y-%m-%d')})"
+    from .routes.dossier import get_rollup_summary
+    with get_session() as session:
+        rollup_text, _ = get_rollup_summary(session)
+    body = rollup_text if rollup_text else "No recent updates available. Generate executive summaries for your competitors first."
+    subject = f"Competitor Signals — Recent updates ({datetime.now(timezone.utc).strftime('%Y-%m-%d')})"
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = settings.digest_from_email

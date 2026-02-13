@@ -1,19 +1,47 @@
 {% extends "base.html" %}
 {% block content %}
-  <h1>Weekly Digest</h1>
+  <h1>Recent updates</h1>
   <div class="card">
     <strong>Send by email</strong>
     {% if send_enabled %}
-      <p class="meta" style="margin-top: 4px;">Enter recipient address(es), then click Send. Separate multiple addresses with commas.</p>
+      <p class="meta" style="margin-top: 4px;">Enter recipient address(es), then click Send email to send the report below. Separate multiple addresses with commas.</p>
       <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px;">
         <input type="text" id="digest-to-email" placeholder="you@example.com or a@b.com, c@d.com" style="flex: 1; min-width: 200px; padding: 8px 10px; font-size: 14px; border: 1px solid var(--border); border-radius: 6px;" />
-        <button type="button" id="digest-send-btn">Send</button>
+        <button type="button" id="digest-send-btn">Send email</button>
         <span id="digest-send-status" class="meta" style="margin-left: 4px;"></span>
       </div>
     {% else %}
       <p class="meta" style="margin-top: 4px;">Configure SMTP to enable sending: set <code>SMTP_HOST</code>, <code>SMTP_PORT</code>, <code>SMTP_USER</code>, <code>SMTP_PASSWORD</code>, and <code>DIGEST_FROM_EMAIL</code> in your environment.</p>
     {% endif %}
   </div>
+  <div class="card" id="rollup-card">
+    <strong>Recent updates</strong>
+    <p class="meta" style="margin-top: 4px;">This is the report content that will be sent by email.</p>
+    <div id="rollup-content" class="rollup-box" style="max-height: 320px; overflow-y: auto; white-space: pre-wrap; font-size: 14px; line-height: 1.5; margin-top: 8px;">Loading…</div>
+  </div>
+  <script>
+    (function() {
+      var el = document.getElementById('rollup-content');
+      if (!el) return;
+      fetch('/competitors/rollup-summary')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.empty && data.message) {
+            el.textContent = data.message;
+            el.style.whiteSpace = 'normal';
+            return;
+          }
+          if (data.rollup_display) {
+            el.innerHTML = data.rollup_display;
+            el.style.whiteSpace = 'normal';
+          }
+        })
+        .catch(function() {
+          el.textContent = 'Could not load recent updates.';
+          el.style.whiteSpace = 'normal';
+        });
+    })();
+  </script>
   <div class="card">
     <strong>Last Runs</strong>
     <div class="meta">
@@ -25,33 +53,6 @@
         <div>No run history yet.</div>
       {% endif %}
     </div>
-  </div>
-  <div class="card">
-    {% if digest_text %}
-      {% for line in digest_text.split('\n') %}
-        {% if line.startswith('- [HIGH]') %}
-          <div class="card sev-high" style="margin-top: 8px;">
-            <span class="pill high">high</span> {{ line[9:] }}
-          </div>
-        {% elif line.startswith('- [MED]') %}
-          <div class="card sev-med" style="margin-top: 8px;">
-            <span class="pill med">med</span> {{ line[8:] }}
-          </div>
-        {% elif line.startswith('- [LOW]') %}
-          <div class="card sev-low" style="margin-top: 8px;">
-            <span class="pill low">low</span> {{ line[8:] }}
-          </div>
-        {% elif line.startswith('- ') %}
-          <div>{{ line[2:] }}</div>
-        {% elif line %}
-          <div style="margin-top: 12px;"><strong>{{ line }}</strong></div>
-        {% else %}
-          <div style="height: 8px;"></div>
-        {% endif %}
-      {% endfor %}
-    {% else %}
-      <div class="empty">No digest yet. Run collectors and generate digest.</div>
-    {% endif %}
   </div>
   {% if send_enabled %}
   <script>
@@ -84,7 +85,7 @@
           .then(function(r) { return r.json(); })
           .then(function(data) {
             if (data.ok) {
-              status.textContent = data.message || 'Sent.';
+              status.textContent = 'Email sent to ' + emails.join(', ') + '.';
               status.style.color = 'var(--accent)';
             } else {
               status.textContent = data.error || 'Send failed.';

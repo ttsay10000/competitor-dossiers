@@ -91,35 +91,6 @@
     <strong>Run seed</strong>: loads <code>seed_data.json</code> into the database (file → DB).<br>
     <strong>Export seed</strong>: writes the current DB to <code>seed_data.json</code> (DB → file).<br>
     <strong>Force refresh &amp; reset baseline</strong>: runs seed first (file → DB), then deletes <em>all</em> snapshots, runs all collectors, then sets each competitor’s comparison date to now. That first run establishes the baseline; the next refresh will surface changes in the executive summary. Use after editing the seed file, changing press/LLM logic, or when runs are still skipping.</p>
-  <div class="card" id="rollup-card">
-    <h3>Recent updates</h3>
-    <p class="meta" style="margin: -4px 0 8px 0;"><a href="/digest">Email report</a> (weekly digest)</p>
-    <div id="rollup-content" class="rollup-box" style="max-height: 280px; overflow-y: auto; white-space: pre-wrap; font-size: 14px; line-height: 1.5;">Loading…</div>
-  </div>
-  <script>
-    (function() {
-      var el = document.getElementById('rollup-content');
-      if (!el) return;
-      fetch('/competitors/rollup-summary')
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-          if (data.empty && data.message) {
-            el.textContent = data.message;
-            el.style.whiteSpace = 'normal';
-            return;
-          }
-          if (data.rollup_display) {
-            el.innerHTML = data.rollup_display;
-            el.style.whiteSpace = 'normal';
-          }
-        })
-        .catch(function() {
-          el.textContent = 'Could not load recent updates.';
-          el.style.whiteSpace = 'normal';
-        });
-    })();
-  </script>
-
   <div class="card">
     <h3>Existing</h3>
     <table class="competitors-existing-table">

@@ -410,11 +410,14 @@ async def competitor_run_now(request: Request, competitor_id: int):
 
     def _run():
         from ..runner import run
+        cancel_check = lambda: run_start_ts in CANCELLED_RUN_STARTS
         if channels:
             for ch in channels:
-                run(channel=ch, competitor_name=name)
+                if run_start_ts in CANCELLED_RUN_STARTS:
+                    return
+                run(channel=ch, competitor_name=name, is_cancelled=cancel_check)
         else:
-            run(competitor_name=name)
+            run(competitor_name=name, is_cancelled=cancel_check)
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
@@ -471,7 +474,7 @@ async def competitors_run_selected_channels(request: Request):
         if run_ts in CANCELLED_RUN_STARTS:
             return
         from ..runner import run
-        run(channel=ch, competitor_name=name)
+        run(channel=ch, competitor_name=name, is_cancelled=lambda: run_ts in CANCELLED_RUN_STARTS)
 
     def _run_all():
         max_workers = min(3, len(jobs)) or 1

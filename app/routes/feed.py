@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from ..config import settings
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, RunLog
-from ..digest import build_weekly_digest, send_weekly_digest
+from ..digest import send_weekly_digest
 from ..utils import to_eastern
 
 
@@ -82,7 +82,6 @@ def feed(request: Request, competitor_id: Optional[int] = None, severity: Option
 
 @router.get("/digest")
 def digest(request: Request):
-    digest_text = build_weekly_digest()
     with get_session() as session:
         recent_logs = session.query(RunLog).order_by(RunLog.created_at.desc()).limit(100).all()
         last_runs = {}
@@ -96,7 +95,6 @@ def digest(request: Request):
         "digest.html",
         {
             "request": request,
-            "digest_text": digest_text,
             "last_runs": last_runs,
             "last_refreshed": last_refreshed,
             "nav_competitors": nav_competitors,

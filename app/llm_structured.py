@@ -526,7 +526,7 @@ Functional area rules:
 - Use "Business & Strategy", "Sales / Growth", "Marketing", "AI / Data", "Product", "Engineering" for other corporate/central roles.
 - Use "Other" only when the role clearly does not fit any of the above.
 
-Treat as senior: C-level (CEO, CFO, etc.), VP, Vice President, Head of, Director, and similar. Otherwise is_senior is false.
+Treat as senior only: C-level (CEO, CFO, etc.), VP, Vice President, Head of, or corporate Director. Do not treat as senior: General Manager, GM, or other property/venue-level or operations managers. Otherwise is_senior is false.
 Return only the JSON array, no markdown."""
 
     user = "Jobs:\n" + "\n".join(lines)
