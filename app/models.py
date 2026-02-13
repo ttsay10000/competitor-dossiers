@@ -30,6 +30,10 @@ class Competitor(Base):
     reporting_baseline_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     # When False, excluded from cron/global refresh. Default True for new competitors.
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+    # Optional short description for list/dossier (e.g. "Furnished rental operator").
+    short_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # LLM-generated operating model (revenue share %, owned/managed, master lease); refreshed via research.
+    operating_model_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     source_endpoints: Mapped[list["SourceEndpoint"]] = relationship(
         back_populates="competitor",

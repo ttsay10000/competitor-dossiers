@@ -11,7 +11,9 @@ from starlette.status import HTTP_303_SEE_OTHER
 
 from sqlalchemy import func
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import or_
 
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, CompetitorReviewProperty, SourceEndpoint, RunLog, Snapshot, Event, Capability
@@ -19,6 +21,9 @@ from ..utils import to_eastern
 from ..config import settings
 from ..collectors.reviews import resolve_place_id_from_text
 from ..validation import validate_url_format, suggest_urls_from_domain, normalize_domain
+from ..diff.asset_diff import infer_location_for_property
+from ..llm_structured import _assign_state_from_url, research_operating_model_llm
+from ..executive_summary import US_STATES_LIST
 
 router = APIRouter()
 
@@ -90,6 +95,82 @@ def _competitor_status(session, competitor_id: int) -> dict:
     return {"has_snapshots": has_snapshots, "last_runs": last_runs, "last_refresh_at": last_refresh_at}
 
 
+def _competitor_topline_summary(session, c: Competitor) -> dict:
+    """Return topline metrics for list view: properties, states count, jobs, latest news, website changes, descriptions."""
+    US_STATES_SET = frozenset(US_STATES_LIST)
+    total_properties = 0
+    total_markets_states = 0
+    latest_asset = (
+        session.query(Snapshot)
+        .filter(Snapshot.competitor_id == c.id, Snapshot.channel == "asset")
+        .order_by(Snapshot.captured_at.desc())
+        .first()
+    )
+    if latest_asset:
+        raw = (latest_asset.structured_json or {}).get("properties", [])
+        props = [p for p in raw if isinstance(p, dict)]
+        props = [_assign_state_from_url(p) for p in props]
+        total_properties = len(props)
+        locations = [infer_location_for_property(p) for p in props]
+        state_parts = set()
+        for loc in locations:
+            part = (loc.split(" - ")[0] if " - " in (loc or "") else (loc or "")).strip()
+            if part and part in US_STATES_SET:
+                state_parts.add(part)
+        total_markets_states = len(state_parts)
+
+    total_jobs = 0
+    latest_talent = (
+        session.query(Snapshot)
+        .filter(Snapshot.competitor_id == c.id, Snapshot.channel == "talent")
+        .order_by(Snapshot.captured_at.desc())
+        .first()
+    )
+    if latest_talent:
+        jobs = (latest_talent.structured_json or {}).get("jobs", [])
+        total_jobs = len([j for j in jobs if isinstance(j, dict)])
+
+    latest_news_count = 0
+    latest_news_headline = None
+    latest_press = (
+        session.query(Snapshot)
+        .filter(Snapshot.competitor_id == c.id, Snapshot.channel == "press")
+        .order_by(Snapshot.captured_at.desc())
+        .first()
+    )
+    if latest_press:
+        items = (latest_press.structured_json or {}).get("canonical_items") or (latest_press.structured_json or {}).get("items", [])
+        items = [i for i in items if isinstance(i, dict)]
+        latest_news_count = len(items)
+        if items:
+            first = items[0]
+            latest_news_headline = (first.get("title") or first.get("display_title") or "").strip() or None
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+    q = session.query(Event).filter(
+        Event.competitor_id == c.id,
+        Event.type == "narrative.homepage_updated",
+        or_(Event.detected_at >= cutoff, (Event.occurred_at.isnot(None)) & (Event.occurred_at >= cutoff)),
+    )
+    if getattr(c, "reporting_baseline_at", None):
+        baseline = c.reporting_baseline_at
+        if baseline.tzinfo is None:
+            baseline = baseline.replace(tzinfo=timezone.utc)
+        q = q.filter(or_(Event.detected_at >= baseline, (Event.occurred_at.isnot(None)) & (Event.occurred_at >= baseline)))
+    recent_website_changes_count = q.count()
+
+    return {
+        "total_properties": total_properties,
+        "total_markets_states": total_markets_states,
+        "total_jobs": total_jobs,
+        "latest_news_count": latest_news_count,
+        "latest_news_headline": latest_news_headline,
+        "recent_website_changes_count": recent_website_changes_count,
+        "short_description": getattr(c, "short_description", None) or None,
+        "operating_model_description": getattr(c, "operating_model_description", None) or None,
+    }
+
+
 @router.get("/competitors")
 def competitors_list(request: Request):
     with get_session() as session:
@@ -98,6 +179,7 @@ def competitors_list(request: Request):
         for c in competitors:
             status = _competitor_status(session, c.id)
             last_refresh = status.get("last_refresh_at")
+            topline = _competitor_topline_summary(session, c)
             competitors_data.append({
                 "id": c.id,
                 "name": c.name,
@@ -107,6 +189,14 @@ def competitors_list(request: Request):
                 "last_runs": status["last_runs"],
                 "last_refresh": to_eastern(last_refresh) if last_refresh else None,
                 "baseline_set": to_eastern(c.reporting_baseline_at) if getattr(c, "reporting_baseline_at", None) else None,
+                "total_properties": topline["total_properties"],
+                "total_markets_states": topline["total_markets_states"],
+                "total_jobs": topline["total_jobs"],
+                "latest_news_count": topline["latest_news_count"],
+                "latest_news_headline": topline["latest_news_headline"],
+                "recent_website_changes_count": topline["recent_website_changes_count"],
+                "short_description": topline["short_description"],
+                "operating_model_description": topline["operating_model_description"],
             })
         last_refreshed = get_last_refreshed(session)
     nav_competitors = [{"id": c["id"], "name": c["name"], "created_at": c.get("created_at")} for c in competitors_data]
@@ -677,6 +767,7 @@ def competitors_edit(request: Request, competitor_id: int):
             "id": competitor.id,
             "name": competitor.name,
             "primary_domain": competitor.primary_domain,
+            "short_description": getattr(competitor, "short_description", None) or "",
             "is_active": getattr(competitor, "is_active", True),
         }
         endpoints_data = [
@@ -727,7 +818,7 @@ def competitors_update(
     competitor_id: int,
     name: str = Form(...),
     primary_domain: Optional[str] = Form(None),
-    is_active: Optional[str] = Form(None),
+    short_description: Optional[str] = Form(None),
 ):
     with get_session() as session:
         competitor = session.get(Competitor, competitor_id)
@@ -736,7 +827,7 @@ def competitors_update(
         competitor.name = name.strip()
         raw_domain = (primary_domain or "").strip() or None
         competitor.primary_domain = normalize_domain(raw_domain) if raw_domain else None
-        competitor.is_active = bool(is_active)
+        competitor.short_description = (short_description or "").strip() or None
     _sync_seed_file()
     return RedirectResponse(url=f"/competitors/{competitor_id}", status_code=HTTP_303_SEE_OTHER)
 
@@ -946,3 +1037,19 @@ async def competitor_remove(request: Request, competitor_id: int, confirmation: 
         url="/competitors?" + urlencode({"removed": "1"}),
         status_code=HTTP_303_SEE_OTHER,
     )
+
+
+@router.post("/competitors/{competitor_id}/research-operating-model")
+def competitor_research_operating_model(competitor_id: int):
+    """Run LLM research on operating model (revenue share / owned / master lease) and save to competitor."""
+    with get_session() as session:
+        competitor = session.get(Competitor, competitor_id)
+        if competitor is None:
+            return RedirectResponse(url="/competitors", status_code=HTTP_303_SEE_OTHER)
+        text = research_operating_model_llm(competitor.name, competitor.primary_domain or "")
+        if text:
+            competitor.operating_model_description = text
+            session.commit()
+        # Redirect back; optional query param could signal success/failure
+        q = urlencode({"operating_model_updated": "1"}) if text else ""
+    return RedirectResponse(url="/competitors" + ("?" + q if q else ""), status_code=HTTP_303_SEE_OTHER)

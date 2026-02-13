@@ -21,8 +21,9 @@
     .edit-page .source-table { margin-top: 8px; }
     .edit-page .source-table td { vertical-align: middle; }
     .edit-page .source-table .url-cell { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .edit-page .source-row-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .edit-page .source-row-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 36px; }
     .edit-page .source-row-actions button { padding: 6px 10px; font-size: 13px; }
+    .edit-page .source-row-actions details.source-edit summary { margin: 0; vertical-align: middle; }
     .edit-page details.source-edit { margin-top: 12px; }
     .edit-page details.source-edit[open] .source-edit-summary { margin-bottom: 12px; }
     .edit-page .source-edit-form .row { margin-bottom: 12px; }
@@ -51,10 +52,8 @@
     .edit-page .details-form label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 14px; }
     .edit-page .details-form .help { font-size: 13px; color: var(--muted); margin: 4px 0 0 0; line-height: 1.4; }
     .edit-page .details-form .help code { font-size: 12px; }
-    .edit-page .details-form .checkbox-row { grid-column: 1 / -1; padding-top: 8px; border-top: 1px solid var(--border); margin-top: 4px; }
-    .edit-page .details-form .checkbox-row label { display: inline-flex; align-items: center; gap: 8px; font-weight: 500; margin: 0; cursor: pointer; }
-    .edit-page .details-form .checkbox-row input[type="checkbox"] { width: auto; margin: 0; }
     .edit-page .details-form .details-actions { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; }
+    .edit-page .card-desc, .edit-page .add-source-section .meta { max-width: 56em; line-height: 1.5; }
   </style>
 
   <div class="edit-page">
@@ -99,11 +98,10 @@
           <input id="edit-primary-domain" name="primary_domain" value="{{ competitor.primary_domain or '' }}" placeholder="example.com" type="text" />
           <p class="help">Use the raw domain (e.g. <code>example.com</code>). Full URLs are accepted and will be normalized.</p>
         </div>
-        <div class="checkbox-row">
-          <label for="edit-is-active">
-            <input type="checkbox" id="edit-is-active" name="is_active" value="1" {% if competitor.is_active %}checked{% endif %} />
-            <span>Active (include in cron/global refresh)</span>
-          </label>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label for="edit-short-description">Short description</label>
+          <input id="edit-short-description" name="short_description" value="{{ competitor.short_description or '' }}" placeholder="e.g. Furnished rental operator" type="text" style="width: 100%; max-width: 32em;" />
+          <p class="help">Optional one-line description shown on the competitors list.</p>
         </div>
       </div>
       <div class="details-actions">
@@ -114,11 +112,11 @@
 
   <div class="card">
     <h3>Source Endpoints</h3>
-    <p class="meta card-desc">Changes here are saved to the database and synced to <code>seed_data.json</code> automatically — no extra command needed. The next run (cron or manual) will use the updated sources and keywords.</p>
+    <p class="meta card-desc">Changes here are saved to the database and synced to <code>seed_data.json</code> automatically. The next run will use the updated sources and keywords.</p>
 
     <div class="add-source-section">
       <h4>Add new source</h4>
-      <p class="meta" style="margin: 0 0 12px 0;">For talent and asset, the first source (Primary) is used; if it fails, the system tries the next (Secondary). <strong>Press</strong>: no URL needed (Google News search). Use keywords to narrow results, or leave blank to use the competitor name.</p>
+      <p class="meta" style="margin: 0 0 12px 0;">For talent and asset, the first source (Primary) is used; if it fails, the system tries the next (Secondary). <strong>Press</strong>: no URL needed — we search Google News using the competitor name in quotes plus any optional keywords you add.</p>
       {% if source_error == "url_required" %}
       <p class="meta" style="color: var(--accent); margin: 0 0 8px 0;">URL is required for this channel. For press, you can leave URL empty.</p>
       {% endif %}
@@ -161,8 +159,8 @@
           </div>
           <div>
             <label>Keywords <span class="meta">(press only)</span></label>
-            <input name="google_news_search_phrases" placeholder="e.g. furnished rentals" title="Company name always required. Optional keywords improve relevance (e.g. furnished rentals); comma-separated." />
-            <p class="meta" style="margin: 2px 0 0 0;">Leave blank to use “{{ competitor.name }}”. Edit to override.</p>
+            <input name="google_news_search_phrases" placeholder="e.g. furnished rentals" title="Competitor name is always searched in quotes; add optional broad keywords here, comma-separated." />
+            <p class="meta" style="margin: 2px 0 0 0;">Search is always <code>"{{ competitor.name }}"</code> (exact). Add optional broad keywords above to improve relevance (e.g. furnished rentals).</p>
           </div>
           <div>
             <button type="submit">Add Source</button>
@@ -253,7 +251,7 @@
                       <div>
                         {% set phrases = (endpoint.extra_options or {}).get('google_news_search_phrases') %}
                         <label>Keywords</label>
-                        <input name="google_news_search_phrases" placeholder="e.g. furnished rentals (optional)" value="{{ phrases | join(', ') if phrases else '' }}" title="Optional; improve relevance. Company name always required in search." />
+                        <input name="google_news_search_phrases" placeholder="e.g. furnished rentals (optional)" value="{{ phrases | join(', ') if phrases else '' }}" title="Competitor name is always in quotes; these are optional broad keywords." />
                       </div>
                       {% endif %}
                       <div style="align-self: flex-end;">

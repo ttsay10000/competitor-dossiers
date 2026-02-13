@@ -36,6 +36,24 @@
     .competitors-existing-table .actions-cell .action-remove { color: #b84a2b; }
     .competitors-existing-table .actions-cell .action-remove:hover { text-decoration: underline; }
     .competitors-existing-table .status-legend { font-size: 10px; color: var(--muted, #6c757d); margin-bottom: 6px; }
+    .competitors-topline-table { table-layout: fixed; width: 100%; }
+    .competitors-topline-table .view-dossier-cell { text-align: center; width: 120px; }
+    .view-dossier-btn {
+      display: inline-block;
+      padding: 8px 16px;
+      background: var(--accent, #0d6efd);
+      color: white;
+      text-decoration: none;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .view-dossier-btn:hover { opacity: 0.9; color: white; }
+    .competitor-detail-cell { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+    .competitors-topline-table tr.collapsed .competitor-detail-cell {
+      max-width: 0; width: 0; padding-left: 0; padding-right: 0; overflow: hidden; border-left-width: 0; border-right-width: 0;
+    }
+    .toggle-detail-btn { font-size: 11px; padding: 0 4px; }
   </style>
   <h1>Dossiers</h1>
 
@@ -69,10 +87,16 @@
     <p class="meta mt-4">The competitor has been removed from the site and from seed data.</p>
   </div>
   {% endif %}
+  {% if request.query_params.get('operating_model_updated') == '1' %}
+  <div class="card mt-16" style="border-left: 6px solid var(--accent, #0d6efd);">
+    <strong>Operating model updated</strong>
+    <p class="meta mt-4">LLM research saved for the competitor.</p>
+  </div>
+  {% endif %}
   <div class="card">
     <h3>Existing</h3>
-    <p class="status-legend competitors-existing-table">Data / Status: T=Talent, A=Asset, P=Press, W=Website, S=Social, R=Reviews</p>
-    <table class="competitors-existing-table">
+    <p class="status-legend competitors-existing-table">Data / Status: T=Talent, A=Asset, P=Press, W=Website, S=Social, R=Reviews. Click row header to collapse/expand topline.</p>
+    <table class="competitors-existing-table competitors-topline-table">
       <thead>
         <tr>
           <th>Name</th>
@@ -80,19 +104,51 @@
           <th>Added</th>
           <th>Last refresh</th>
           <th>Baseline set</th>
+          <th>Description</th>
+          <th>Properties</th>
+          <th>Markets (states)</th>
+          <th>Jobs</th>
+          <th>Latest news</th>
+          <th>Website changes</th>
+          <th>Operating model</th>
+          <th class="view-dossier-cell"></th>
           <th>Data / Status</th>
           <th>Actions</th>
         </tr>
       </thead>
       <tbody>
         {% for competitor in competitors %}
-        <tr>
-          <td><a href="/dossier/{{ competitor.id }}" class="name-link" title="Open dossier">{{ competitor.name }}</a></td>
-          <td class="muted">{{ competitor.primary_domain or "" }}</td>
-          <td class="muted cell-date">{% if competitor.created_at %}{{ competitor.created_at.strftime('%Y-%m-%d') }}{% else %}—{% endif %}</td>
-          <td class="muted cell-date">{{ competitor.last_refresh or "—" }}</td>
-          <td class="muted cell-date">{{ competitor.baseline_set or "—" }}</td>
-          <td class="muted cell-status">
+        <tr class="competitor-main-row" data-competitor-id="{{ competitor.id }}">
+          <td class="competitor-name-cell">
+            <a href="/dossier/{{ competitor.id }}" class="name-link" title="Open dossier">{{ competitor.name }}</a>
+          </td>
+          <td class="muted competitor-detail-cell">{{ competitor.primary_domain or "" }}</td>
+          <td class="muted cell-date competitor-detail-cell">{% if competitor.created_at %}{{ competitor.created_at.strftime('%Y-%m-%d') }}{% else %}—{% endif %}</td>
+          <td class="muted cell-date competitor-detail-cell">{{ competitor.last_refresh or "—" }}</td>
+          <td class="muted cell-date competitor-detail-cell">{{ competitor.baseline_set or "—" }}</td>
+          <td class="competitor-detail-cell topline-desc">{{ competitor.short_description or "—" }}</td>
+          <td class="competitor-detail-cell topline-num">{{ competitor.total_properties or 0 }}</td>
+          <td class="competitor-detail-cell topline-num">{{ competitor.total_markets_states or 0 }}</td>
+          <td class="competitor-detail-cell topline-num">{{ competitor.total_jobs or 0 }}</td>
+          <td class="competitor-detail-cell topline-news">
+            {% if competitor.latest_news_count and competitor.latest_news_count > 0 %}
+              {{ competitor.latest_news_count }} article{{ 's' if competitor.latest_news_count != 1 else '' }}{% if competitor.latest_news_headline %} · {{ competitor.latest_news_headline[:60] }}{% if (competitor.latest_news_headline or '')|length > 60 %}…{% endif %}{% endif %}
+            {% else %}—{% endif %}
+          </td>
+          <td class="competitor-detail-cell topline-num">{{ competitor.recent_website_changes_count or 0 }}</td>
+          <td class="competitor-detail-cell topline-operating">
+            {% if competitor.operating_model_description %}
+              <span title="{{ competitor.operating_model_description }}">{{ (competitor.operating_model_description or '')[:80] }}{% if (competitor.operating_model_description or '')|length > 80 %}…{% endif %}</span>
+            {% else %}
+              <form method="post" action="/competitors/{{ competitor.id }}/research-operating-model" style="display: inline;">
+                <button type="submit" class="btn-link" style="font-size: 12px;">Research operating model</button>
+              </form>
+            {% endif %}
+          </td>
+          <td class="view-dossier-cell">
+            <a href="/dossier/{{ competitor.id }}" class="view-dossier-btn">View dossier</a>
+          </td>
+          <td class="muted cell-status competitor-detail-cell">
             {% set has = competitor.has_snapshots or {} %}
             {% set runs = competitor.last_runs or {} %}
             {% for ch in display_channels %}
@@ -105,13 +161,14 @@
             {% endfor %}
           </td>
           <td class="actions-cell">
+            <button type="button" class="toggle-detail-btn btn-link" title="Collapse/expand topline" aria-label="Collapse row">▼</button>
             <a href="/competitors/{{ competitor.id }}">Edit</a><span class="action-sep">·</span><button type="button" class="remove-competitor-btn btn-link action-remove" data-id="{{ competitor.id }}" data-name="{{ competitor.name|e }}" data-required="{{ ('remove ' ~ competitor.name ~ ' from site')|e }}">Remove</button>
           </td>
         </tr>
         {% endfor %}
         {% if competitors|length == 0 %}
         <tr>
-          <td colspan="7" class="muted">No competitors yet.</td>
+          <td colspan="15" class="muted">No competitors yet.</td>
         </tr>
         {% endif %}
       </tbody>
@@ -360,6 +417,17 @@
           var name = btn.getAttribute('data-name');
           var required = btn.getAttribute('data-required');
           if (id && name && required) openModal(id, name, required);
+        });
+      });
+
+      document.querySelectorAll('.toggle-detail-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var row = btn.closest('tr');
+          if (!row) return;
+          row.classList.toggle('collapsed');
+          btn.textContent = row.classList.contains('collapsed') ? '\u25B6' : '\u25BC';
+          btn.setAttribute('title', row.classList.contains('collapsed') ? 'Expand row' : 'Collapse row');
+          btn.setAttribute('aria-label', row.classList.contains('collapsed') ? 'Expand row' : 'Collapse row');
         });
       });
 

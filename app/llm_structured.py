@@ -1988,3 +1988,48 @@ def enrich_social_posts_with_llm(posts: List[dict], batch_size: int = 12) -> Lis
                 out.setdefault("executive_summary", "")
                 result.append(out)
     return result
+
+
+def research_operating_model_llm(
+    competitor_name: str,
+    primary_domain: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Use OpenAI to describe the company's operating model for furnished rental / hospitality:
+    - Revenue share (split % with property owners)
+    - Owned and managed (they own and operate; typically no revenue share)
+    - Master lease / lease arbitrage (they lease from owners and sublease)
+
+    Returns 1-3 sentences or None if API unavailable.
+    """
+    client = _openai_client()
+    if not client:
+        return None
+    name = (competitor_name or "").strip() or "the company"
+    domain = (primary_domain or "").strip()
+    context = f"Company: {name}"
+    if domain:
+        context += f" (website: {domain})"
+    system = (
+        "You are a researcher summarizing how furnished rental or short-term rental operators make money. "
+        "Based on public information (website, press, industry knowledge), classify the operating model in 1-3 short sentences. "
+        "Use one or more of: (1) Revenue share — state the typical split with owners if known (e.g. 70/30). "
+        "(2) Owned and managed — they own and operate their own properties; no revenue share. "
+        "(3) Master lease / lease arbitrage — they lease from owners and sublease to guests. "
+        "If unclear, say so. Be concise; no bullet lists."
+    )
+    user = (
+        f"{context}\n\n"
+        "Describe this company's current operating model (revenue share, owned/managed, or master lease / lease arbitrage). "
+        "One to three sentences only."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            max_tokens=300,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        return content if content else None
+    except Exception:
+        return None
