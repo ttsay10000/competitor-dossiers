@@ -225,6 +225,14 @@ def _is_rove_source(url: str) -> bool:
     return "rovetravel.com" in host
 
 
+def _is_rove_search_url(url: str) -> bool:
+    """True if URL is Rove's search page (need js_exhaust first so we scroll to get full list, not ~10 from sitemap)."""
+    if not _is_rove_source(url):
+        return False
+    path = (urlparse(url).path or "").rstrip("/") or "/"
+    return path.lower() == "/search"
+
+
 def _is_rove_property_url(candidate_url: str, source_url: str) -> bool:
     """
     For Rove (rovetravel.com), only accept /listing/<slug> URLs as individual properties.
@@ -1835,7 +1843,7 @@ def collect_asset_snapshot(
                 "raw_content": fetched.text,
                 "raw_hash": fetched.raw_hash,
                 "properties": normalize_properties(properties),
-                    "note": "llm",
+                "note": "llm",
             }
         properties = extract_properties_from_html(fetched.text, source_url)
         return {
@@ -1892,7 +1900,13 @@ def collect_asset_snapshot(
         if strategy == "js_exhaust":
             if _playwright_available():
                 load_more = opts.get("load_more") or {}
-                fetched = fetch_url_js_exhaust(source_url, load_more)
+                try:
+                    fetched = fetch_url_js_exhaust(source_url, load_more)
+                except Exception:
+                    # Playwright failed (timeout, crash, etc.); for Kasa we can fall back to HTML-only.
+                    if _is_kasa_locations_url(source_url):
+                        return _fetch_without_browser()
+                    raise
                 parsed = urlparse(source_url)
                 base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else source_url
                 # Kasa locations: parse "View details Apartment/Hotel Name" under each city (77 properties, not 44 city links).
@@ -2018,6 +2032,10 @@ def collect_asset_snapshot(
         # Landing locations page: try landing_locations first so we never run generic HTML/link extraction (which can let cities through).
         if chain and _is_landing_locations_url(source_url) and (chain[0] if chain else None) != "landing_locations":
             chain = ["landing_locations"] + list(chain)
+        # Rove search: try js_exhaust first so we scroll to get full list; sitemap often has only ~10 /listing/ URLs (DB may have stale chain order).
+        if chain and _is_rove_search_url(source_url) and (chain[0] if chain else None) != "js_exhaust":
+            rest = [s for s in chain if s != "js_exhaust"]
+            chain = ["js_exhaust"] + rest
     # Seed-added competitors often have no extra_options; accept any non-empty result (min_accept=1).
     # Explicit strategy_chain in opts keeps stricter min (5) unless they set min_properties_accept.
     using_default_chain = chain == _DEFAULT_ASSET_STRATEGY_CHAIN
