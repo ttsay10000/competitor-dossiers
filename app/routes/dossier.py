@@ -776,12 +776,31 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         d = (item.get("date") or "").strip()
         return (d[:10] if len(d) >= 10 else d) or "0000-00-00"
     top_news = sorted(top_news, key=_top_news_date_key, reverse=True)
-    # If top news is empty but we have press items, pull in 1-2 most recent as fallback
-    if not top_news and press_90d:
+    # If top news is empty, prefer topic-level fallback from press_groups (major stories), not individual articles
+    if not top_news and press_groups:
+        for g in press_groups[:5]:
+            bullet = (g.get("group_title") or "").strip()
+            summary = (g.get("one_line_summary") or "").strip()
+            if summary:
+                bullet = f"{bullet}: {summary}" if bullet else summary
+            if not bullet:
+                bullet = "—"
+            articles = g.get("articles") or []
+            latest_url = (articles[0].get("url") or articles[0].get("link") or "").strip() if articles else None
+            top_news.append({
+                "bullet": bullet,
+                "date": (g.get("group_latest_date") or "").strip()[:10] or None,
+                "url": latest_url if (latest_url and latest_url.startswith("http")) else None,
+            })
+        top_news = sorted(top_news, key=_top_news_date_key, reverse=True)
+    elif not top_news and press_90d:
+        # Last resort: 2 most recent article titles only when we have no groups
         for art in press_90d[:2]:
+            url = (art.get("url") or art.get("link") or "").strip()
             top_news.append({
                 "bullet": art.get("display_title") or art.get("title") or "—",
                 "date": (art.get("date") or "").strip()[:10] or None,
+                "url": url if (url and url.startswith("http")) else None,
             })
         top_news = sorted(top_news, key=_top_news_date_key, reverse=True)
 
@@ -1277,8 +1296,12 @@ def force_refresh_and_reset_baseline(request: Request):
             events_deleted = clear_all_events(session)
         logging.info("Force refresh: cleared %d snapshot(s) and %d event(s) (all channels, all competitors).", deleted, events_deleted)
         run_all_channels()
-        advance_baseline_after_full_refresh()  # Set baseline AFTER run so new snapshots become the baseline
-        return RedirectResponse(url="/competitors?refreshed=1&forced=1", status_code=303)
+        baseline_at = advance_baseline_after_full_refresh()  # Set baseline AFTER run so new snapshots become the baseline
+        baseline_str = to_eastern(baseline_at) if baseline_at else ""
+        q = "refreshed=1&forced=1"
+        if baseline_str:
+            q += "&baseline_date=" + urllib.parse.quote(baseline_str)
+        return RedirectResponse(url="/competitors?" + q, status_code=303)
     except Exception as e:
         logging.exception("Force refresh failed: %s", e)
         return RedirectResponse(url="/competitors?force_refresh=failed", status_code=303)

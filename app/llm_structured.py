@@ -230,6 +230,20 @@ def _infer_state_from_name_if_missing(prop: dict) -> dict:
     return out
 
 
+def enrich_properties_url_and_rules_only(properties: List[dict]) -> List[dict]:
+    """
+    Enrich properties with state only using URL (Avantstay-style path) and rule-based
+    name/market inference. No LLM. Used for Vacasa and other large portfolios where we
+    only need state-level location; HTML/data-* from the collector (e.g. data-state on
+    links) is already on each property, and this fills in missing state from URL or name.
+    """
+    if not properties:
+        return properties
+    working = [_assign_state_from_url(p) for p in properties]
+    working = [_infer_state_from_name_if_missing(p) for p in working]
+    return working
+
+
 def enrich_properties_with_llm(
     properties: List[dict],
     raw_content: Optional[str] = None,
@@ -1392,17 +1406,23 @@ def summarize_top_news_llm(competitor_name: str, press_groups: List[dict], *, da
         except ValueError:
             return None
 
-    # Only include groups with at least one article in the past `days` (e.g. 21 = 2-3 weeks for exec summary)
+    # Prefer groups with at least one article in the past `days` (e.g. 21 = 2-3 weeks for exec summary)
     recent_groups = []
     for g in press_groups:
         gdate = _parse_group_date(g)
         if gdate is not None and gdate >= cutoff_date:
             recent_groups.append(g)
+    # If no groups in window, use most recent groups by date so we still show topic-level news (not raw articles)
+    if not recent_groups:
+        with_date = [(g, _parse_group_date(g)) for g in press_groups if _parse_group_date(g) is not None]
+        with_date.sort(key=lambda x: -(x[1].toordinal() if x[1] else 0))
+        recent_groups = [g for g, _ in with_date[:15]]
+
     if not recent_groups:
         return []
 
     lines = []
-    for g in recent_groups[:25]:  # cap to avoid huge context
+    for idx, g in enumerate(recent_groups[:25]):  # cap to avoid huge context
         title = (g.get("group_title") or "News").strip()
         summary = (g.get("one_line_summary") or "").strip()
         gdate = g.get("group_latest_date") or ""
@@ -1412,28 +1432,30 @@ def summarize_top_news_llm(competitor_name: str, press_groups: List[dict], *, da
             t = (a.get("title") or a.get("display_title") or "").strip() or "—"
             d = (a.get("date") or "").strip()[:10] if (a.get("date") or "").strip() else "no date"
             art_bits.append(f"  - {d} | {t}")
-        block = f"Group: {title}\n  Date: {gdate}\n  Summary: {summary}\n" + "\n".join(art_bits)
+        block = f"Group index {idx}: {title}\n  Date: {gdate}\n  Summary: {summary}\n" + "\n".join(art_bits)
         lines.append(block)
 
     system = (
         "You are a business analyst summarizing competitor press for an executive dashboard.\n\n"
-        "You receive the final grouped press: each block has a group topic (headline), a one-line summary, "
-        "the latest article date, and recent article titles with dates. Include both grouped stories and "
-        "recent press releases (e.g. PR Newswire).\n\n"
+        "You receive the final grouped press: each block is ONE STORY/TOPIC (group_title, one_line_summary, "
+        "latest article date, and article titles). Each block = one distinct story (e.g. one partnership, one opening, one hire). "
+        "Each block is labeled with \"Group index N\" (0-based) — you must return that same index for the bullet so we can link to the article.\n\n"
         "Output 3-5 key bullets of the most interesting news from a business perspective (partnerships, "
-        "expansion, funding, leadership, openings, strategy). Each bullet should be one clear sentence. "
-        "Include the relevant date when the news happened (use the article/group date).\n\n"
+        "expansion, funding, leadership, openings, strategy). Each bullet = ONE STORY/TOPIC: use the group headline and summary; "
+        "do NOT list individual article titles. Synthesize one clear sentence per distinct story. "
+        "Include the relevant date and the group_index (the N from \"Group index N\") for that story.\n\n"
         "Return a JSON object with one key: \"bullets\". Value is an array of objects, each with:\n"
-        "  \"bullet\": one sentence summarizing the news (business-focused),\n"
-        "  \"date\": \"YYYY-MM-DD\" (the relevant date for that news).\n\n"
-        "Rules: Only use information from the input. Prefer most recent and most business-relevant. "
+        "  \"bullet\": one sentence summarizing that story (business-focused, from the group),\n"
+        "  \"date\": \"YYYY-MM-DD\" (the relevant date for that news),\n"
+        "  \"group_index\": number (0-based index of the group this bullet summarizes; must match one of the Group index N labels above).\n\n"
+        "Rules: Only use information from the input. One bullet per group/story; prefer most recent and most business-relevant. "
         "Return only valid JSON, no markdown or extra text."
     )
     user = (
         f"Company: {competitor_name}\n\n"
-        f"Below are press groups from the past {days} days. Summarize the most interesting business news as 3-5 bullets with dates.\n\n"
+        f"Below are press groups from the past {days} days. Summarize the most interesting business news as 3-5 bullets with dates and group_index.\n\n"
         + "\n\n".join(lines)
-        + '\n\nReturn only valid JSON: {"bullets": [{"bullet": "...", "date": "YYYY-MM-DD"}, ...]}'
+        + '\n\nReturn only valid JSON: {"bullets": [{"bullet": "...", "date": "YYYY-MM-DD", "group_index": 0}, ...]}'
     )
 
     try:
@@ -1462,13 +1484,31 @@ def summarize_top_news_llm(competitor_name: str, press_groups: List[dict], *, da
         if not isinstance(bullets_raw, list):
             return None
         result = []
+        n_groups = len(recent_groups)
         for b in bullets_raw[:5]:
             if not isinstance(b, dict):
                 continue
             bullet = (b.get("bullet") or b.get("text") or "").strip()
             date_val = (b.get("date") or "").strip()[:10]
+            group_index = b.get("group_index")
+            if isinstance(group_index, (int, float)):
+                gi = int(group_index)
+            else:
+                gi = -1
+            url = None
+            if 0 <= gi < n_groups:
+                arts = (recent_groups[gi].get("articles") or [])
+                if arts:
+                    first = arts[0]
+                    url = (first.get("url") or first.get("link") or "").strip()
+                    if url and not url.startswith("http"):
+                        url = None
             if bullet:
-                result.append({"bullet": bullet, "date": date_val if len(date_val) >= 10 else None})
+                result.append({
+                    "bullet": bullet,
+                    "date": date_val if len(date_val) >= 10 else None,
+                    "url": url or None,
+                })
         return result if result else None
     except Exception:
         return None

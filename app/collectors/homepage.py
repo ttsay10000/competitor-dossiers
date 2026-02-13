@@ -18,11 +18,22 @@ NOISE_PATTERNS = [
     re.compile(r"cookie\s*(?:notice|banner|policy)", re.I),
     re.compile(r"we\s+use\s+cookies", re.I),
     re.compile(r"all\s+rights\s+reserved", re.I),
+    # Common dynamic / UI noise
+    re.compile(r"viewed\s+on\s+[\w\s,/-]+", re.I),
+    re.compile(r"page\s+\d+\s+of\s+\d+", re.I),
+    re.compile(r"\bpage\s+\d+\b", re.I),
+    re.compile(r"last\s+updated\s*:?\s*[\w\s,/:]+", re.I),
+    re.compile(r"session[_-]?id\s*[=:]\s*\S+", re.I),
+    re.compile(r"\b\d{10,}\b"),  # long numeric IDs (session/tracking)
 ]
 
 
-def extract_visible_text(html: str) -> str:
-    """Extract visible body text from HTML; drop script/style; normalize whitespace."""
+def extract_visible_text(html: str, content_selector: Optional[str] = None) -> str:
+    """Extract visible body text from HTML; drop script/style; normalize whitespace.
+
+    If content_selector is set (e.g. from HOMEPAGE_CONTENT_SELECTOR), only that element's
+    text is used, reducing nav/footer noise. If the selector matches nothing, falls back to full body.
+    """
     if not (html or "").strip():
         return ""
     try:
@@ -30,7 +41,14 @@ def extract_visible_text(html: str) -> str:
         for tag in soup.find_all(["script", "style", "noscript"]):
             tag.decompose()
         body = soup.find("body") or soup
-        text = body.get_text(separator="\n", strip=True) if body else ""
+        root = body
+        if content_selector and body:
+            selected = body.select_one(content_selector)
+            if selected is not None:
+                for tag in selected.find_all(["script", "style", "noscript"]):
+                    tag.decompose()
+                root = selected
+        text = root.get_text(separator="\n", strip=True) if root else ""
     except Exception:
         text = html[:50000] if html else ""
     # Normalize: collapse runs of whitespace to single space, then single newlines
@@ -48,9 +66,16 @@ def normalize_noise(text: str) -> str:
     return out
 
 
-def content_hash(text: str) -> str:
-    """SHA256 of normalized visible text for meaningful-change detection."""
+def content_hash(text: str, sort_lines: bool = True) -> str:
+    """SHA256 of normalized visible text for meaningful-change detection.
+
+    When sort_lines is True (default), lines are sorted before hashing so that
+    reordering of list/content does not trigger a change event.
+    """
     normalized = normalize_noise(text) if text else ""
+    if sort_lines and normalized:
+        lines = [ln.strip() for ln in normalized.splitlines() if ln.strip()]
+        normalized = "\n".join(sorted(lines))
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
@@ -82,12 +107,16 @@ def build_composite_hash(pages: list[dict[str, Any]]) -> str:
 VISIBLE_TEXT_SNIPPET_LEN = 4000
 
 
-def _structured_page(page: dict[str, Any], detect_phrases: Callable[[str], list[str]]) -> dict[str, Any]:
+def _structured_page(
+    page: dict[str, Any],
+    detect_phrases: Callable[[str], list[str]],
+    content_selector: Optional[str] = None,
+) -> dict[str, Any]:
     """Build one entry for structured_json.pages: url, raw_hash, content_hash, coming_soon_phrases, visible_text_snippet."""
     url = page.get("source_url") or ""
     raw_hash = page.get("raw_hash") or ""
     raw = (page.get("raw_content") or "").strip()
-    text = extract_visible_text(raw) if raw else ""
+    text = extract_visible_text(raw, content_selector=content_selector) if raw else ""
     ch = content_hash(text)
     phrases = detect_phrases(text) if text else []
     snippet = (text or "")[:VISIBLE_TEXT_SNIPPET_LEN]
@@ -121,7 +150,9 @@ def build_structured_json(
     else:
         pages = [snapshot]
 
-    structured_pages = [_structured_page(p, detect) for p in pages]
+    from ..config import settings
+    content_selector = getattr(settings, "homepage_content_selector", None)
+    structured_pages = [_structured_page(p, detect, content_selector=content_selector) for p in pages]
     return {
         "pages": structured_pages,
         "fetched_at": fetched_at,

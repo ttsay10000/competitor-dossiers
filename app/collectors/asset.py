@@ -69,6 +69,38 @@ def expand_sitemap(url: str) -> list[str]:
     return urls
 
 
+# AKA (stayaka.com): property URLs are single-segment slugs like /hotel-aka-backbay or /aka-central-park.
+# Sitemap often contains hundreds of other single-segment URLs (locations, cities, etc.); only count these.
+_RE_AKA_PROPERTY_PATH = re.compile(
+    r"^/(?:hotel-aka-|aka-)[a-z0-9-]+(?:\?|/$|$)",
+    re.IGNORECASE,
+)
+
+
+def _is_aka_source(url: str) -> bool:
+    """True if URL's host suggests AKA (stayaka.com) so we apply stricter sitemap filtering."""
+    if not url:
+        return False
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    return "stayaka" in host or host.endswith("aka.com")
+
+
+def _is_aka_property_url(candidate_url: str, source_url: str) -> bool:
+    """
+    True if candidate_url is from the same host as source_url and looks like an AKA property page.
+    Used when source is AKA to avoid counting 200+ non-property sitemap URLs (e.g. /new-york-city).
+    """
+    if not _is_aka_source(source_url):
+        return True  # Not AKA source: no extra filter
+    parsed_c = urlparse(candidate_url)
+    parsed_s = urlparse(source_url)
+    if (parsed_c.netloc or "").lower() != (parsed_s.netloc or "").lower():
+        return False
+    path = (parsed_c.path or "").rstrip("/") or "/"
+    return bool(_RE_AKA_PROPERTY_PATH.match(path))
+
+
 def is_property_like(url: str) -> bool:
     """True if URL looks like a property/location page (for HTML link and sitemap filtering)."""
     u = (url or "").strip()
@@ -134,12 +166,20 @@ def _is_junk_property_link(link_text: str, href: str) -> bool:
         return True
     if text.startswith("all ") and ("properties" in text or "locations" in text):
         return True
-    # Site-wide navigation and legal links (common across competitors, including Placemakr).
+    # Kasa: "Go to location City, ST" is the city-level link, not an individual property (properties are "View details Apartment/Hotel Name" under each city).
+    if text.strip().lower().startswith("go to location "):
+        return True
+    # Site-wide navigation and legal links (common across competitors, including Kasa, Placemakr).
     nav_labels = {
         "extended stays",
         "extended stay",
         "corporate stays",
         "corporate stay",
+        "corporate housing",
+        "corporate partnerships",
+        "multifamily partners",
+        "hotel partners",
+        "the kasa experience",
         "business",
         "residents",
         "about",
@@ -157,6 +197,8 @@ def _is_junk_property_link(link_text: str, href: str) -> bool:
         "faqs",
         "help",
         "support",
+        "leasing",
+        "groups",
     }
     if text in nav_labels:
         return True
@@ -171,6 +213,28 @@ def _link_in_empty_landing_section(link) -> bool:
             break
         text = (parent.get_text() or "").strip()
         if "no properties available" in text.lower():
+            return True
+        parent = getattr(parent, "parent", None)
+    return False
+
+
+def _link_in_footer(link) -> bool:
+    """True if link is inside a footer (e.g. site footer with many location links — exclude from property count)."""
+    parent = link.parent
+    for _ in range(25):
+        if parent is None or parent.name in ("body", "html"):
+            break
+        name = getattr(parent, "name", None) or ""
+        if name == "footer":
+            return True
+        role = (parent.get("role") or "").strip().lower()
+        if role == "contentinfo":
+            return True
+        cls = (parent.get("class") or [])
+        if isinstance(cls, str):
+            cls = [cls]
+        cls_str = " ".join(c.lower() for c in cls if isinstance(c, str))
+        if "footer" in cls_str or "site-footer" in cls_str or "page-footer" in cls_str:
             return True
         parent = getattr(parent, "parent", None)
     return False
@@ -268,6 +332,68 @@ def _extract_landing_locations_html(html: str, source_url: str, base_url: str) -
     return properties, location_counts
 
 
+def _is_kasa_locations_url(url: str) -> bool:
+    """True if URL is Kasa's locations page (kasa.com/locations)."""
+    if not url:
+        return False
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "").rstrip("/") or "/"
+    return ("kasa.com" in host or "kasaliving.com" in host) and path == "/locations"
+
+
+def _extract_kasa_locations_html(html: str, source_url: str, base_url: str) -> list[dict[str, Any]]:
+    """
+    Parse Kasa (kasa.com/locations) page: 44 cities, each with multiple properties.
+    Structure: h2 = "City, ST", then links "Go to location City, ST" (city — skip) and
+    "View details Apartment/Hotel Property Name" (one per property). We count each
+    "View details" row as one property (~77 total), not the city links.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    root = _main_content_root(soup)
+    if not root:
+        return []
+    properties: list[dict[str, Any]] = []
+    current_market: Optional[str] = None
+
+    for el in root.find_all(["h2", "a"]):
+        if el.name == "h2":
+            text = (el.get_text() or "").strip()
+            if _RE_LANDING_LOCATION.match(text) and len(text) < 80:
+                current_market = text
+            continue
+
+        if el.name == "a" and current_market:
+            href = (el.get("href") or "").strip()
+            text = (el.get_text() or "").strip()
+            if not href or not text:
+                continue
+            # "Go to location City, ST" = city link, not a property
+            if text.lower().startswith("go to location "):
+                continue
+            # "View details Apartment/Hotel Property Name" or "View detailsApartment..." = one property
+            lower = text.lower()
+            if "view details" not in lower:
+                continue
+            idx = lower.find("view details")
+            name = (text[idx + len("view details") :].strip() or text).strip()
+            if not name or len(name) < 2:
+                continue
+            url_val = urljoin(base_url, href) if href and not href.startswith("http") else href
+            if not url_val:
+                url_val = href
+            properties.append({
+                "name": name,
+                "url": url_val,
+                "market": current_market,
+                "state": None,
+                "city": None,
+                "status": None,
+            })
+
+    return properties
+
+
 def _location_attrs_from_element(el) -> dict[str, str]:
     """Extract data-city, data-state, data-region, data-market, data-location from element if present."""
     out: dict[str, str] = {}
@@ -307,6 +433,8 @@ def extract_properties_from_html(html: str, source_url: str = "") -> list[dict[s
     soup = BeautifulSoup(html, "html.parser")
     is_landing = "hellolanding.com" in (source_url or "").lower()
     properties = []
+    parsed_source = urlparse(source_url or "")
+    base_url = f"{parsed_source.scheme}://{parsed_source.netloc}" if parsed_source.scheme and parsed_source.netloc else (source_url or "")
     for link in soup.find_all("a"):
         href = link.get("href") or ""
         text = (link.get_text() or "").strip()
@@ -318,6 +446,13 @@ def extract_properties_from_html(html: str, source_url: str = "") -> list[dict[s
             continue
         if is_landing and _link_in_empty_landing_section(link):
             continue
+        if _link_in_footer(link):
+            continue
+        # AKA: only count real property slugs (/hotel-aka-*, /aka-*), not /locations/*, /exclusive-offers, /live-it, etc.
+        if _is_aka_source(source_url):
+            abs_url = urljoin(base_url, href) if href and not href.startswith("http") else href
+            if not _is_aka_property_url(abs_url, source_url):
+                continue
         prop: dict[str, Any] = {
             "url": href,
             "name": text,
@@ -363,17 +498,35 @@ _RE_LARK_DETAIL_H2 = re.compile(
 )
 
 
+def _main_content_root(soup: Any) -> Optional[Any]:
+    """Return the main content element (main, [role=main], or body) so we avoid parsing footer/nav."""
+    body = soup.find("body") or soup
+    if not body:
+        return None
+    main = body.find("main")
+    if main:
+        return main
+    for el in body.find_all(attrs={"role": "main"}):
+        if el:
+            return el
+    return body
+
+
 def _extract_lark_style_blocks(html: str, base_url: str) -> List[dict[str, Any]]:
     """
     Parse Lark-style portfolio HTML. Two patterns supported:
     1. Property per block: <h2> (property name) followed by <ul> with location ("City, ST") and details.
     2. Location as section header: <h2> is "City, ST"; <ul> contains one or more properties (each <li>
        may have a link to the property). We emit one block per property so names are property names, not location.
+    Only parses within main content (main or body) to avoid counting footer location lists (e.g. Kasa).
     Returns list of {"name", "location_line", "details_list", "url"}.
     """
     soup = BeautifulSoup(html, "html.parser")
+    root = _main_content_root(soup)
+    if not root:
+        return []
     blocks = []
-    for h2 in soup.find_all("h2"):
+    for h2 in root.find_all("h2"):
         h2_text = (h2.get_text() or "").strip()
         if not h2_text or len(h2_text) < 2:
             continue
@@ -503,14 +656,14 @@ def _lark_blocks_to_text(blocks: List[dict[str, Any]], max_chars: int = _LLM_EXT
 
 
 def _html_to_text_for_llm(html: str, max_chars: int = _LLM_EXTRACT_MAX_CHARS) -> str:
-    """Reduce HTML to plain text for LLM (strip scripts, get body text, include location data-*, truncate)."""
+    """Reduce HTML to plain text for LLM (strip scripts, main content only to skip footer, include location data-*, truncate)."""
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup.find_all(["script", "style", "noscript"]):
         tag.decompose()
-    body = soup.find("body") or soup
+    root = _main_content_root(soup) or soup.find("body") or soup
     # Collect location metadata from data-* and aria-label so card locations are visible to the LLM
     location_lines = []
-    for el in body.find_all(True) if body else []:
+    for el in (root.find_all(True) if root else []):
         parts = []
         for attr in _LOCATION_ATTRS:
             val = el.get(attr)
@@ -518,7 +671,7 @@ def _html_to_text_for_llm(html: str, max_chars: int = _LLM_EXTRACT_MAX_CHARS) ->
                 parts.append(f"{attr}={val}")
         if parts:
             location_lines.append(" ".join(parts))
-    text = body.get_text(separator="\n", strip=True)
+    text = root.get_text(separator="\n", strip=True) if root else ""
     if location_lines:
         text = text + "\n\n[Location metadata from page]\n" + "\n".join(location_lines[:500])
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -776,6 +929,9 @@ def _is_detail_line_or_junk_name(name: str) -> bool:
         "view all properties",
     }:
         return True
+    # "View details Apartment/Hotel Property Name" is a valid property name (Kasa locations page); only drop bare "View ..." CTAs.
+    if lower.startswith("view details ") and len(n) > 20:
+        return False
     if lower.startswith(("book ", "view ", "stay ", "reserve ")):
         return True
     # Landing: "View all homes in City, ST" image collector — never a property.
@@ -813,6 +969,9 @@ def normalize_properties(properties: list[dict[str, Any]]) -> list[dict[str, Any
         name = (prop.get("name") or "").strip()
         if _is_detail_line_or_junk_name(name):
             continue
+        # Kasa: "View details Apartment/Hotel Property Name" -> store as "Apartment/Hotel Property Name"
+        if name.lower().startswith("view details ") and len(name) > 13:
+            name = name[13:].strip()
 
         raw_url = prop.get("url")
         market_val = (prop.get("market") or "").strip() or None
@@ -1274,7 +1433,12 @@ def collect_asset_snapshot(
                     if not url:
                         continue
                     # If this looks like a property/location URL, keep it.
-                    if is_property_like(url):
+                    if not is_property_like(url):
+                        pass
+                    elif not _is_aka_property_url(url, source_url):
+                        # AKA sitemaps list 200+ single-segment URLs; only count real property slugs (/hotel-aka-*, /aka-*).
+                        pass
+                    else:
                         property_urls.add(url)
                         continue
 
@@ -1442,9 +1606,20 @@ def collect_asset_snapshot(
             if _playwright_available():
                 load_more = opts.get("load_more") or {}
                 fetched = fetch_url_js_exhaust(source_url, load_more)
+                parsed = urlparse(source_url)
+                base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else source_url
+                # Kasa locations: parse "View details Apartment/Hotel Name" under each city (77 properties, not 44 city links).
+                if _is_kasa_locations_url(source_url):
+                    kasa_props = _extract_kasa_locations_html(fetched.text, source_url, base_url)
+                    if kasa_props:
+                        return {
+                            "source_url": fetched.url,
+                            "raw_content": fetched.text,
+                            "raw_hash": fetched.raw_hash,
+                            "properties": normalize_properties(kasa_props),
+                            "note": "js_exhaust_kasa_locations",
+                        }
                 if opts.get("llm_extract"):
-                    parsed = urlparse(source_url)
-                    base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else source_url
                     lark_blocks = _extract_lark_style_blocks(fetched.text, base_url)
                     if lark_blocks:
                         properties = _extract_properties_via_llm_from_blocks(lark_blocks, source_url)

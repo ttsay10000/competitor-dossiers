@@ -1,1 +1,294 @@
-{"competitors":[{"name":"AvantStay","primary_domain":"avantstay.com","sources":[{"channel":"asset","url":"https://avantstay.com/search","confidence":"low","js_required":true,"use_sitemap_first":true,"extra_options":{"llm_extract":true,"strategy_chain":["sitemap_first","html"],"min_properties_accept":5}},{"channel":"press","url":"https://avantstay.com/blog/","confidence":"high"},{"channel":"talent","url":"https://careers.kula.ai/avantstay","confidence":"high"},{"channel":"social","url":"https://www.linkedin.com/company/avantstay/posts/?feedView=all","confidence":"high","extra_options":{"platform":"linkedin"}}]},{"name":"Blueground","primary_domain":"theblueground.com","sources":[{"channel":"asset","url":"https://www.theblueground.com/destinations","confidence":"medium","extra_options":{"strategy":"blueground_destinations"}},{"channel":"press","url":"https://www.theblueground.com/blog","confidence":"medium"},{"channel":"talent","url":"https://www.theblueground.com/careers","confidence":"medium","js_required":true},{"channel":"social","url":"https://www.linkedin.com/company/blueground-co/posts/?feedView=all","confidence":"high","extra_options":{"platform":"linkedin"}}]},{"name":"Landing","primary_domain":"hellolanding.com","sources":[{"channel":"asset","url":"https://www.hellolanding.com/locations","confidence":"high","extra_options":{"strategy":"landing_locations"}},{"channel":"press","url":"https://www.hellolanding.com/blog","confidence":"medium","extra_options":{"google_news_search_phrases":["landing furnished rentals"]}},{"channel":"talent","url":"https://www.hellolanding.com/p/careers/","confidence":"medium"},{"channel":"social","url":"https://www.linkedin.com/company/hellolanding/posts/?feedView=all","confidence":"high","extra_options":{"platform":"linkedin"}}]},{"name":"Lark","primary_domain":"larkhospitality.com","sources":[{"channel":"asset","url":"https://www.larkhospitality.com/portfolio/","confidence":"high","js_required":true,"extra_options":{"strategy":"js_exhaust","load_more":{"button_text":"Load more hotels","post_load_wait_ms":3000,"click_selector":["a:has-text('Load more hotels')","button:has-text('Load more hotels')",":text('Load more hotels')","button:has-text('Load more')","button:has-text('Load More')","a:has-text('Load more')","a:has-text('Load More')","button:has-text('View more')","a:has-text('View more')","[data-testid='load-more']","button:has-text('Show more')","a:has-text('Show more')"],"stop_when_selector_gone":true,"wait_after_click_ms":2000,"wait_for_selector_timeout_ms":10000,"wait_after_gone_ms":3000,"wait_reappear_attempts":5,"max_clicks":200},"llm_extract":true}},{"channel":"press","url":"https://www.larkhospitality.com/press/","confidence":"high","extra_options":{"press_search_name":"Lark Hotels"}},{"channel":"talent","url":"https://ats.wizehire.com/career-site/lark-hospitality","confidence":"high"},{"channel":"social","url":"https://www.linkedin.com/company/lark-hotels/posts/?feedView=all","confidence":"high","extra_options":{"platform":"linkedin"}}]},{"name":"Placemakr","primary_domain":"placemakr.com","sources":[{"channel":"asset","url":"https://www.placemakr.com/locations","confidence":"high","extra_options":{"strategy_chain":["html"],"min_properties_accept":1}},{"channel":"homepage","url":"https://www.placemakr.com","confidence":"high","extra_options":{"product_paths":["/locations"]}},{"channel":"press","url":"https://www.placemakr.com/blog","confidence":"high"},{"channel":"talent","url":"https://jobs.lever.co/placemakr","confidence":"high"},{"channel":"social","url":"https://www.linkedin.com/company/placemakr/posts/?feedView=all","confidence":"high","extra_options":{"platform":"linkedin"}}]},{"name":"Rove","primary_domain":"rovetravel.com","sources":[{"channel":"asset","url":"https://rovetravel.com/search","confidence":"high"},{"channel":"press","url":"https://rovetravel.com","confidence":"medium","extra_options":{"google_news_search_phrases":["rove travel furnished rentals"]}},{"channel":"talent","url":"https://jobs.gem.com/rove","confidence":"high"},{"channel":"social","url":"https://www.linkedin.com/company/rovetravel/posts/?feedView=all","confidence":"high","extra_options":{"platform":"linkedin"}}]},{"name":"Vacasa","primary_domain":"vacasa.com","sources":[{"channel":"asset","url":"https://www.vacasa.com/search?place=/usa/","confidence":"high","extra_options":{"strategy_chain":["html"],"min_properties_accept":1}},{"channel":"press","url":"https://www.vacasa.com/blog","confidence":"medium"},{"channel":"talent","url":"https://job-boards.greenhouse.io/vacasa","confidence":"medium"},{"channel":"social","url":"https://www.linkedin.com/company/vacasa/posts/?feedView=all","confidence":"high","extra_options":{"platform":"linkedin"}}]},{"name":"Kasa Living","primary_domain":"kasa.com","sources":[{"channel":"asset","url":"https://kasa.com/locations","confidence":"high","js_required":true,"extra_options":{"strategy":"js_exhaust","load_more":{"button_text":"Load more","post_load_wait_ms":3000,"click_selector":["a:has-text('Load more')","button:has-text('Load more')",":text('Load more')","button:has-text('Load more')","button:has-text('Load More')","a:has-text('Load more')","a:has-text('Load More')","button:has-text('View more')","a:has-text('View more')","[data-testid='load-more']","button:has-text('Show more')","a:has-text('Show more')"],"stop_when_selector_gone":true,"wait_after_click_ms":2000,"wait_for_selector_timeout_ms":10000,"wait_after_gone_ms":3000,"wait_reappear_attempts":5,"max_clicks":200},"llm_extract":true}},{"channel":"press","url":"https://kasa.com/blog","confidence":"medium"},{"channel":"talent","url":"https://kasa.com/careers","confidence":"high"},{"channel":"social","url":"https://www.linkedin.com/company/kasa-living/posts/?feedView=all","confidence":"high","extra_options":{"platform":"linkedin"}}]}]}
+{
+"competitors": [
+{
+"name": "AvantStay",
+"primary_domain": "avantstay.com",
+"sources": [
+{
+"channel": "asset",
+"url": "https://avantstay.com/search",
+"confidence": "low",
+"js_required": true,
+"use_sitemap_first": true,
+"extra_options": {
+"llm_extract": true,
+"strategy_chain": [
+"sitemap_first",
+"html"
+],
+"min_properties_accept": 5
+}
+},
+{
+"channel": "talent",
+"url": "https://careers.kula.ai/avantstay",
+"confidence": "high"
+},
+{
+"channel": "social",
+"url": "https://www.linkedin.com/company/avantstay/posts/?feedView=all",
+"confidence": "high",
+"extra_options": {
+"platform": "linkedin"
+}
+}
+]
+},
+{
+"name": "Blueground",
+"primary_domain": "theblueground.com",
+"sources": [
+{
+"channel": "asset",
+"url": "https://www.theblueground.com/destinations",
+"confidence": "medium",
+"extra_options": {
+"strategy": "blueground_destinations",
+"max_destinations": null
+}
+},
+{
+"channel": "talent",
+"url": "https://www.theblueground.com/careers",
+"confidence": "medium",
+"js_required": true
+},
+{
+"channel": "social",
+"url": "https://www.linkedin.com/company/blueground-co/posts/?feedView=all",
+"confidence": "high",
+"extra_options": {
+"platform": "linkedin"
+}
+}
+]
+},
+{
+"name": "Landing",
+"primary_domain": "hellolanding.com",
+"sources": [
+{
+"channel": "asset",
+"url": "https://www.hellolanding.com/locations",
+"confidence": "high",
+"extra_options": {
+"strategy": "landing_locations"
+}
+},
+{
+"channel": "talent",
+"url": "https://www.hellolanding.com/p/careers/",
+"confidence": "medium"
+},
+{
+"channel": "social",
+"url": "https://www.linkedin.com/company/hellolanding/posts/?feedView=all",
+"confidence": "high",
+"extra_options": {
+"platform": "linkedin"
+}
+}
+]
+},
+{
+"name": "Lark",
+"primary_domain": "larkhospitality.com",
+"sources": [
+{
+"channel": "asset",
+"url": "https://www.larkhospitality.com/portfolio/",
+"confidence": "high",
+"js_required": true,
+"extra_options": {
+"strategy": "js_exhaust",
+"load_more": {
+"button_text": "Load more hotels",
+"post_load_wait_ms": 3000,
+"click_selector": [
+"a:has-text('Load more hotels')",
+"button:has-text('Load more hotels')",
+":text('Load more hotels')",
+"button:has-text('Load more')",
+"button:has-text('Load More')",
+"a:has-text('Load more')",
+"a:has-text('Load More')",
+"button:has-text('View more')",
+"a:has-text('View more')",
+"[data-testid='load-more']",
+"button:has-text('Show more')",
+"a:has-text('Show more')"
+],
+"stop_when_selector_gone": true,
+"wait_after_click_ms": 2000,
+"wait_for_selector_timeout_ms": 10000,
+"wait_after_gone_ms": 3000,
+"wait_reappear_attempts": 5,
+"max_clicks": 200
+},
+"llm_extract": true
+}
+},
+{
+"channel": "talent",
+"url": "https://ats.wizehire.com/career-site/lark-hospitality",
+"confidence": "high"
+},
+{
+"channel": "social",
+"url": "https://www.linkedin.com/company/lark-hotels/posts/?feedView=all",
+"confidence": "high",
+"extra_options": {
+"platform": "linkedin"
+}
+}
+]
+},
+{
+"name": "Placemakr",
+"primary_domain": "placemakr.com",
+"sources": [
+{
+"channel": "asset",
+"url": "https://www.placemakr.com/locations",
+"confidence": "high",
+"extra_options": {
+"strategy_chain": [
+"html"
+],
+"min_properties_accept": 1
+}
+},
+{
+"channel": "homepage",
+"url": "https://www.placemakr.com",
+"confidence": "high",
+"extra_options": {
+"product_paths": [
+"/locations"
+]
+}
+},
+{
+"channel": "talent",
+"url": "https://jobs.lever.co/placemakr",
+"confidence": "high"
+},
+{
+"channel": "social",
+"url": "https://www.linkedin.com/company/placemakr/posts/?feedView=all",
+"confidence": "high",
+"extra_options": {
+"platform": "linkedin"
+}
+}
+]
+},
+{
+"name": "Rove",
+"primary_domain": "rovetravel.com",
+"sources": [
+{
+"channel": "asset",
+"url": "https://rovetravel.com/search",
+"confidence": "high"
+},
+{
+"channel": "talent",
+"url": "https://jobs.gem.com/rove",
+"confidence": "high"
+},
+{
+"channel": "social",
+"url": "https://www.linkedin.com/company/rovetravel/posts/?feedView=all",
+"confidence": "high",
+"extra_options": {
+"platform": "linkedin"
+}
+}
+]
+},
+{
+"name": "Vacasa",
+"primary_domain": "vacasa.com",
+"sources": [
+{
+"channel": "asset",
+"url": "https://www.vacasa.com/search?place=/usa/",
+"confidence": "high",
+"extra_options": {
+"strategy_chain": [
+"html"
+],
+"min_properties_accept": 1
+}
+},
+{
+"channel": "talent",
+"url": "https://job-boards.greenhouse.io/vacasa",
+"confidence": "medium"
+},
+{
+"channel": "social",
+"url": "https://www.linkedin.com/company/vacasa/posts/?feedView=all",
+"confidence": "high",
+"extra_options": {
+"platform": "linkedin"
+}
+}
+]
+},
+{
+"name": "Kasa Living",
+"primary_domain": "kasa.com",
+"sources": [
+{
+"channel": "asset",
+"url": "https://kasa.com/locations",
+"confidence": "high",
+"js_required": true,
+"extra_options": {
+"strategy": "js_exhaust",
+"load_more": {
+"button_text": "Load more",
+"post_load_wait_ms": 3000,
+"click_selector": [
+"a:has-text('Load more')",
+"button:has-text('Load more')",
+":text('Load more')",
+"button:has-text('Load more')",
+"button:has-text('Load More')",
+"a:has-text('Load more')",
+"a:has-text('Load More')",
+"button:has-text('View more')",
+"a:has-text('View more')",
+"[data-testid='load-more']",
+"button:has-text('Show more')",
+"a:has-text('Show more')"
+],
+"stop_when_selector_gone": true,
+"wait_after_click_ms": 2000,
+"wait_for_selector_timeout_ms": 10000,
+"wait_after_gone_ms": 3000,
+"wait_reappear_attempts": 5,
+"max_clicks": 200
+},
+"llm_extract": true
+}
+},
+{
+"channel": "talent",
+"url": "https://kasa.com/careers",
+"confidence": "high"
+},
+{
+"channel": "social",
+"url": "https://www.linkedin.com/company/kasa-living/posts/?feedView=all",
+"confidence": "high",
+"extra_options": {
+"platform": "linkedin"
+}
+}
+]
+}
+]
+}

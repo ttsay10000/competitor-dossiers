@@ -127,6 +127,9 @@ def extract_press_from_html(html: str, base_url: Optional[str] = None) -> list[d
             continue
         url = href if href.startswith("http") else (urljoin(base_url or "", href) if base_url else href)
         date_val = _find_date_for_link(link)
+        # Only keep links that have a publication date so we don't treat blog category/nav links (e.g. "City Guides", "Seasonal Travel") as news.
+        if date_val is None:
+            continue
         items.append({"title": title, "url": url, "date": date_val, "source": None})
     return items
 

@@ -315,10 +315,15 @@ def asset_location_display_label(loc: str) -> str:
 
 
 def _normalize_state_for_display(state: str) -> str:
-    """Convert 2-letter US state abbrev to full name for consistent grouping across all competitors."""
+    """Convert 2-letter US state abbrev to full name for consistent grouping across all competitors.
+    Normalize DC variants (Washington D.C., District of Columbia) to 'Washington DC' so they merge with state-level aggregation."""
     s = (state or "").strip()
     if len(s) == 2 and s.lower() in US_STATE_ABBREV:
         return US_STATE_ABBREV[s.lower()]
+    # Normalize DC so "Washington D.C.", "Washington, D.C.", "District of Columbia" merge with "Washington DC"
+    lower = s.lower()
+    if lower in ("washington d.c.", "washington d. c.", "washington, d.c.", "district of columbia", "washington dc"):
+        return "Washington DC"
     return s
 
 

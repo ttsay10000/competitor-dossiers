@@ -58,6 +58,13 @@
     .competitor-card .actions-cell .action-remove { color: #b84a2b; }
     .competitor-card .actions-cell .action-remove:hover { text-decoration: underline; }
     .competitors-status-legend { font-size: 10px; color: var(--muted, #6c757d); margin-bottom: 12px; }
+    .run-status-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .run-status-table th, .run-status-table td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border, #e5e7eb); }
+    .run-status-table th { font-weight: 600; color: var(--muted, #6c757d); font-size: 11px; text-transform: uppercase; }
+    .run-status-table .channel-cell { min-width: 48px; white-space: nowrap; }
+    .run-status-table .channel-status.success { color: #0d8a0d; }
+    .run-status-table .channel-status.error { color: #b84a2b; }
+    .run-status-table .channel-status.running { color: #b8860b; }
   </style>
   <h1>Dossiers</h1>
 
@@ -99,28 +106,15 @@
   {% endif %}
   <div class="card">
     <h3>Existing</h3>
-    <p class="competitors-status-legend">Data / Status: T=Talent, A=Asset, P=Press, W=Website, S=Social, R=Reviews.</p>
+    <p class="competitors-status-legend">T=Talent, A=Asset, P=Press, W=Website, Pr=Public Records, S=Social, R=Reviews. See Run status table below for per-channel status and timers.</p>
+    <p class="meta" style="margin: -8px 0 12px 0;">{{ competitors|length }} competitor{{ 's' if competitors|length != 1 else '' }} included</p>
     {% if competitors|length == 0 %}
     <p class="muted">No competitors yet.</p>
     {% else %}
     {% for competitor in competitors %}
     <section class="competitor-card" data-competitor-id="{{ competitor.id }}">
-      <p class="aka"><a href="/dossier/{{ competitor.id }}" title="Open dossier">{{ competitor.name }}</a></p>
+      <p class="aka">{% if competitor.primary_domain %}<a href="{{ competitor.primary_domain if competitor.primary_domain.startswith('http') else 'https://' ~ competitor.primary_domain }}" target="_blank" rel="noopener" title="Open company site">{{ competitor.name }}</a>{% else %}{{ competitor.name }}{% endif %}</p>
       <p class="domain">{{ competitor.primary_domain or "—" }}</p>
-
-      <div class="stats-grid">
-        <div class="stats-left">
-          <div class="stat-line"><span class="stat-label">Date added:</span> {% if competitor.created_at %}{{ competitor.created_at.strftime('%Y-%m-%d') }}{% else %}—{% endif %}</div>
-          <div class="stat-line"><span class="stat-label">Last refresh:</span> {{ competitor.last_refresh or "—" }}</div>
-          <div class="stat-line"><span class="stat-label">Baseline set:</span> {{ competitor.baseline_set or "—" }}</div>
-        </div>
-        <div class="stats-right">
-          <div class="stat-line"><span class="stat-label">Total properties:</span> {{ competitor.total_properties or 0 }}</div>
-          <div class="stat-line"><span class="stat-label">Total markets (states):</span> {{ competitor.total_markets_states or 0 }}</div>
-          <div class="stat-line"><span class="stat-label">Jobs available:</span> {{ competitor.total_jobs or 0 }}</div>
-          <div class="stat-line"><span class="stat-label">Website changes:</span> {{ competitor.recent_website_changes_count or 0 }}</div>
-        </div>
-      </div>
 
       <div class="latest-news">
         <h4>Latest news</h4>
@@ -138,19 +132,6 @@
 
       <div class="view-dossier-wrap">
         <a href="/dossier/{{ competitor.id }}" class="view-dossier-btn">View dossier</a>
-      </div>
-
-      <div class="data-status">
-        {% set has = competitor.has_snapshots or {} %}
-        {% set runs = competitor.last_runs or {} %}
-        {% for ch in display_channels %}
-        {% set letter = channel_letters.get(ch, ch[0]|upper) %}
-        <span title="{{ ch }}: {% if has.get(ch) %}has data{% else %}no data{% endif %}{% if runs.get(ch) %}; last run: {{ runs[ch].status }}{% endif %}">
-          {{ letter }}:{% if has.get(ch) %}✓{% else %}—{% endif %}
-          {% if runs.get(ch) %}<span style="{% if runs[ch].status == 'success' %}color: #0d8a0d;{% elif runs[ch].status == 'running' %}color: #b8860b;{% elif runs[ch].status == 'error' %}color: #b84a2b;{% endif %}">({{ runs[ch].status }})</span>{% endif %}
-        </span>
-        {% if not loop.last %} · {% endif %}
-        {% endfor %}
       </div>
 
       <div class="actions-cell">
@@ -178,21 +159,74 @@
     </div>
   </div>
 
-  <div class="card mt-16">
+  <div class="card mt-16" style="border: 1px solid #e5e7eb; background: #f9fafb;">
     <h3>Refresh selected channels (all competitors)</h3>
-    <p class="meta" style="margin-top: 4px;">Run chosen collectors for every competitor. Run log appears below until you refresh or leave the page.</p>
+    <p class="meta" style="margin-top: 4px;">Run chosen collectors for every competitor. Run status table below tracks progress with timers.</p>
     <form method="post" action="/competitors/run-selected-channels" class="run-channels-form run-channels-inline" style="margin-top: 12px;" id="global-run-channels-form">
-      <div class="run-channels-checkboxes">
+      <div class="run-channels-checkboxes run-channels-checkboxes-nowrap">
         <label><input type="checkbox" name="channels" value="talent" /> Talent</label>
         <label><input type="checkbox" name="channels" value="asset" /> Asset</label>
         <label><input type="checkbox" name="channels" value="press" /> Press</label>
         <label><input type="checkbox" name="channels" value="homepage" /> Website</label>
         <label><input type="checkbox" name="channels" value="public_records" /> Public Records</label>
-        <label><input type="checkbox" name="channels" value="reviews" /> Reviews</label>
         <label><input type="checkbox" name="channels" value="social" /> Social</label>
+        <label><input type="checkbox" name="channels" value="reviews" /> Reviews</label>
       </div>
       <button type="submit">Run selected channels</button>
     </form>
+  </div>
+
+  <div id="run-status-section" class="card mt-16" style="border-left: 4px solid var(--accent, #0d6efd);">
+    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;">
+      <div>
+        <h3 style="margin: 0;">Run status</h3>
+        <p class="meta card-desc" style="margin: 4px 0 0 0;">Track collector runs per competitor. T=Talent, A=Asset, P=Press, W=Website, Pr=Public Records, S=Social, R=Reviews. ✓=has data, —=no data. Timers update during runs.</p>
+      </div>
+      <button type="button" id="cancel-run-btn" class="secondary" style="display: none;">Cancel run</button>
+    </div>
+    {% if competitors|length == 0 %}
+    <p class="muted">No competitors yet.</p>
+    {% else %}
+    <div class="run-status-table-wrap" style="overflow-x: auto;">
+      <table class="run-status-table">
+        <thead>
+          <tr>
+            <th>Competitor</th>
+            <th>Date added</th>
+            <th>Last refresh</th>
+            <th>Baseline set</th>
+            {% for ch in display_channels %}
+            <th>{{ channel_letters.get(ch, ch[0]|upper) }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for competitor in competitors %}
+          <tr data-competitor-id="{{ competitor.id }}">
+            <td>
+              {% if competitor.primary_domain %}<a href="{{ competitor.primary_domain if competitor.primary_domain.startswith('http') else 'https://' ~ competitor.primary_domain }}" target="_blank" rel="noopener">{{ competitor.name }}</a>{% else %}{{ competitor.name }}{% endif %}
+              <br><a href="/dossier/{{ competitor.id }}" class="meta" style="font-size: 11px;">View dossier</a>
+            </td>
+            <td>{% if competitor.created_at %}{{ competitor.created_at.strftime('%Y-%m-%d') }}{% else %}—{% endif %}</td>
+            <td>{{ competitor.last_refresh or "—" }}</td>
+            <td>{{ competitor.baseline_set or "—" }}</td>
+            {% for ch in display_channels %}
+            {% set has = competitor.has_snapshots or {} %}
+            {% set runs = competitor.last_runs or {} %}
+            {% set letter = channel_letters.get(ch, ch[0]|upper) %}
+            <td class="channel-cell" data-competitor-id="{{ competitor.id }}" data-channel="{{ ch }}" title="{{ ch }}: {% if has.get(ch) %}has data{% else %}no data{% endif %}{% if runs.get(ch) %}; last run: {{ runs[ch].status }}{% endif %}">
+              <span class="channel-data">{{ letter }}:{% if has.get(ch) %}✓{% else %}—{% endif %}</span>
+              {% if runs.get(ch) %}
+              <span class="channel-status {{ runs[ch].status }}" data-status="{{ runs[ch].status }}">({{ runs[ch].status }})</span>
+              {% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
   </div>
 
   <div class="card mt-16" style="border-left: 4px solid var(--warning, #b8860b);">
@@ -200,8 +234,8 @@
     <p class="meta" style="margin-top: 4px;">The <strong>seed file</strong> (<code>seed_data.json</code>) is the canonical list of competitors and sources in your repo. It’s used on deploy and when you want to sync between the database and the file.</p>
     <ul class="meta" style="margin: 8px 0 0 0; padding-left: 20px;">
       <li><strong>Run seed</strong> — <em>File → DB.</em> Use when the seed file was updated (e.g. you pulled from git or edited <code>seed_data.json</code> by hand) and you want to load that into the database. Loads <code>seed_data.json</code> into the DB.</li>
-      <li><strong>Export seed</strong> — <em>DB → file.</em> Use when you’ve added or edited competitors in the UI and you want to save that into the seed file so it’s in the repo and on other envs. Writes the current DB to <code>seed_data.json</code>. You do <em>not</em> need to click Run seed after this.</li>
-      <li><strong>Force refresh &amp; reset baseline</strong> — Runs seed (file → DB), then deletes all snapshots, runs all collectors, and sets each competitor’s comparison date to now. Use after editing the seed file, changing press/LLM logic, or when runs are still skipping.</li>
+      <li><strong>Export seed</strong> — <em>DB → file.</em> Use when you’ve added or edited competitors in the UI and want to persist them to the seed file. Writes the current DB to <code>seed_data.json</code>. Do this whenever you add competitors via the UI so the file stays in sync. You do <em>not</em> need to click Run seed after this.</li>
+      <li><strong>Force refresh &amp; reset baseline</strong> — Runs <strong>seed (file → DB)</strong> first, then deletes all snapshots and events, runs all collectors for all channels, then sets each competitor’s baseline to the time the run completed (so “Baseline set” shows that date). Use when the seed file is up to date (e.g. after <strong>Export seed</strong> if you added in UI), after editing the seed file, or when changing press/LLM logic. Does <em>not</em> run Export seed; use <strong>Export seed</strong> separately to save UI changes back to the file.</li>
     </ul>
     <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px;">
       <form method="post" action="/dossier/run-seed" style="display: inline-block;" title="Load seed_data.json into the database (file → DB).">
@@ -252,52 +286,78 @@
       var params = new URLSearchParams(window.location.search);
       if ((params.get('refreshed') || params.get('seed_run') || params.get('export_seed') || params.get('force_refresh')) && statusEl) {
         if (refreshTimerId) clearInterval(refreshTimerId);
-        if (params.get('refreshed')) statusEl.textContent = 'Refresh complete.';
-        else if (params.get('seed_run')) statusEl.textContent = 'Seed run complete (file → DB).';
+        var baselineDate = params.get('baseline_date');
+        if (params.get('refreshed')) {
+          statusEl.textContent = baselineDate ? 'Refresh complete. Baseline set to ' + decodeURIComponent(baselineDate) + '.' : 'Refresh complete.';
+        } else if (params.get('seed_run')) statusEl.textContent = 'Seed run complete (file → DB).';
         else if (params.get('export_seed') === '1') statusEl.textContent = 'Export seed complete (DB → file).';
         else if (params.get('export_seed') === 'failed') { statusEl.textContent = 'Export seed failed (check server logs).'; statusEl.style.color = 'var(--warning, #b8860b)'; }
         else if (params.get('force_refresh') === 'failed') { statusEl.textContent = 'Force refresh failed (check server logs). If another refresh is running, wait for it to finish.'; statusEl.style.color = 'var(--warning, #b8860b)'; }
         else statusEl.textContent = '';
         if (params.get('refreshed') || params.get('seed_run') || params.get('export_seed') === '1') statusEl.style.color = 'var(--accent)';
-        setTimeout(function() { statusEl.textContent = ''; statusEl.style.color = ''; }, 5000);
+        setTimeout(function() { statusEl.textContent = ''; statusEl.style.color = ''; }, 8000);
         if (window.history && window.history.replaceState) {
-          var q = window.location.search.replace(/[?&]refreshed=1/, '').replace(/[?&]forced=1/, '').replace(/[?&]seed_run=1/, '').replace(/[?&]export_seed=[^&]+/, '').replace(/[?&]force_refresh=[^&]+/, '').replace(/^\?&/, '?').replace(/&$/, '');
+          var q = window.location.search.replace(/[?&]refreshed=1/, '').replace(/[?&]forced=1/, '').replace(/[?&]seed_run=1/, '').replace(/[?&]export_seed=[^&]+/, '').replace(/[?&]force_refresh=[^&]+/, '').replace(/[?&]baseline_date=[^&]+/, '').replace(/^\?&/, '?').replace(/&$/, '');
           window.history.replaceState({}, '', window.location.pathname + (q || ''));
         }
       }
     })();
   </script>
 
-  <div id="global-run-status-card" class="card mt-16" style="display: none; border-left: 4px solid var(--accent, #0d6efd);">
-    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
-      <div>
-        <h3 style="margin: 0;">Run status</h3>
-        <p class="meta card-desc" style="margin: 4px 0 0 0;">Channels running for all competitors. Timers update every few seconds. Log stays until you refresh or navigate away.</p>
-      </div>
-      <button type="button" id="cancel-run-btn" class="secondary" style="display: none;">Cancel run</button>
-    </div>
-    <ul id="global-run-status-list" style="margin: 12px 0 0 0; padding-left: 20px; list-style: none;"></ul>
-  </div>
-
   <script>
     (function() {
-      var runStatusCard = document.getElementById('global-run-status-card');
-      var runStatusList = document.getElementById('global-run-status-list');
       var params = new URLSearchParams(window.location.search);
       var started = params.get('started') === '1';
       var runStartTs = parseInt(params.get('run_start_ts') || '0', 10);
       var channelsParam = params.get('channels');
       var requestedChannels = channelsParam ? channelsParam.split(',').map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean) : [];
 
-      var CHANNEL_LABELS = { talent: 'Talent', asset: 'Asset', press: 'Press', homepage: 'Website', public_records: 'Public Records', social: 'Social', reviews: 'Reviews' };
-      function channelLabel(ch) { return CHANNEL_LABELS[ch] || ch.charAt(0).toUpperCase() + ch.slice(1); }
+      function formatElapsed(ms) {
+        var sec = Math.floor(ms / 1000);
+        if (sec < 60) return sec + 's';
+        var min = Math.floor(sec / 60);
+        var s = sec % 60;
+        return min + 'm' + (s < 10 ? '0' : '') + s + 's';
+      }
 
-      if (runStatusCard && runStatusList && started && runStartTs && requestedChannels.length) {
-        runStatusCard.style.display = 'block';
+      function updateCellFromRun(cell, data, runStartDate) {
+        if (!cell) return;
+        var dataSpan = cell.querySelector('.channel-status');
+        if (!dataSpan) dataSpan = document.createElement('span');
+        else dataSpan.parentNode.removeChild(dataSpan);
+        dataSpan = document.createElement('span');
+        dataSpan.className = 'channel-status ' + (data.status || '');
+        if (data.status === 'running') {
+          var created = data.created_at ? new Date(data.created_at) : new Date();
+          var tick = function() {
+            var elapsed = Date.now() - created.getTime();
+            dataSpan.textContent = '(' + formatElapsed(elapsed) + ')';
+            dataSpan.style.color = '#b8860b';
+          };
+          tick();
+          dataSpan._timerId = setInterval(tick, 1000);
+        } else {
+          clearInterval(dataSpan._timerId);
+          var text = data.status === 'success' ? 'Success' : (data.status === 'error' ? 'Failure' : (data.status === 'cancelled' ? 'Cancelled' : data.status || ''));
+          if (data.created_at && data.status !== 'running') {
+            var created = new Date(data.created_at);
+            var dur = Math.floor((created - runStartDate) / 1000);
+            if (dur >= 0) text += ' ' + dur + 's';
+          }
+          dataSpan.textContent = '(' + text + ')';
+          dataSpan.style.color = data.status === 'success' ? '#0d8a0d' : (data.status === 'error' ? '#b84a2b' : (data.status === 'cancelled' ? '#6c757d' : ''));
+        }
+        cell.appendChild(dataSpan);
+      }
+
+      if (started && runStartTs && requestedChannels.length) {
+        var cancelBtn = document.getElementById('cancel-run-btn');
+        if (cancelBtn) cancelBtn.style.display = 'inline-block';
         var pollIntervalMs = 2000;
         var pollTimerId = null;
+        var runStartDate = new Date(runStartTs * 1000);
 
-        function renderRunStatus(data) {
+        function applyRunStatus(data) {
           var runningByKey = {};
           (data.running || []).forEach(function(r) {
             runningByKey[r.competitor_id + ':' + r.channel] = r;
@@ -306,35 +366,30 @@
           (data.completed || []).forEach(function(c) {
             completedByKey[c.competitor_id + ':' + c.channel] = c;
           });
-          var now = new Date();
-          var runStartDate = new Date(runStartTs * 1000);
-          var html = '';
-          var allDone = true;
-          (data.running || []).forEach(function(r) {
-            allDone = false;
-            var startedAt = r.created_at ? new Date(r.created_at) : now;
-            var sec = Math.floor((now - startedAt) / 1000);
-            html += '<li style="margin-bottom: 6px;"><strong>' + (r.competitor_name || '') + '</strong> · ' + channelLabel(r.channel) + ': <span style="color: #7d6a00;">running</span> <span class="meta">(' + sec + ' s)</span></li>';
+          requestedChannels.forEach(function(ch) {
+            document.querySelectorAll('.channel-cell[data-channel="' + ch + '"]').forEach(function(cell) {
+              var cid = parseInt(cell.getAttribute('data-competitor-id'), 10);
+              var key = cid + ':' + ch;
+              var running = runningByKey[key];
+              var completed = completedByKey[key];
+              var statusSpan = cell.querySelector('.channel-status');
+              if (statusSpan && statusSpan._timerId) clearInterval(statusSpan._timerId);
+              if (statusSpan) statusSpan.remove();
+              if (running) {
+                updateCellFromRun(cell, { status: 'running', created_at: running.created_at }, runStartDate);
+              } else if (completed) {
+                updateCellFromRun(cell, { status: completed.status, created_at: completed.created_at, message: completed.message }, runStartDate);
+              }
+            });
           });
-          (data.completed || []).forEach(function(c) {
-            var created = c.created_at ? new Date(c.created_at) : null;
-            var afterStart = created && created >= runStartDate;
-            if (!afterStart) return;
-            var color = c.status === 'success' ? 'var(--accent)' : (c.status === 'error' ? '#b84a2b' : (c.status === 'cancelled' ? '#6c757d' : ''));
-            var statusText = c.status === 'success' ? 'Success' : (c.status === 'error' ? 'Failure' : (c.status === 'cancelled' ? 'Cancelled' : c.status));
-            var msg = c.message ? ' — ' + c.message : '';
-            html += '<li style="margin-bottom: 6px;"><strong>' + (c.competitor_name || '') + '</strong> · ' + channelLabel(c.channel) + ': <span style="color:' + color + '">' + statusText + '</span>' + (msg ? ' <span class="meta">' + msg + '</span>' : '') + '</li>';
-          });
-          if ((data.running || []).length > 0) allDone = false;
-          runStatusList.innerHTML = html || '<li class="meta">Loading…</li>';
-          var cancelBtn = document.getElementById('cancel-run-btn');
           if (cancelBtn) cancelBtn.style.display = (data.running || []).length > 0 ? 'inline-block' : 'none';
-          if (allDone) {
-            if (pollTimerId) { clearInterval(pollTimerId); pollTimerId = null; }
+          if ((data.running || []).length === 0 && pollTimerId) {
+            clearInterval(pollTimerId);
+            pollTimerId = null;
           }
         }
 
-        document.getElementById('cancel-run-btn')?.addEventListener('click', function() {
+        cancelBtn && cancelBtn.addEventListener('click', function() {
           var btn = this;
           btn.disabled = true;
           btn.textContent = 'Cancelling…';
@@ -355,7 +410,7 @@
             .then(function(r) { return r.json(); })
             .then(function(data) {
               if (data.error) return;
-              renderRunStatus(data);
+              applyRunStatus(data);
             })
             .catch(function() {});
         }

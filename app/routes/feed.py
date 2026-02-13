@@ -65,6 +65,16 @@ def feed(request: Request, competitor_id: Optional[int] = None, severity: Option
         nav_competitors = competitors_data
         last_refreshed = get_last_refreshed(session)
 
+    # Event Feed filter uses same channel labels (category value -> display name)
+    category_labels = {
+        "talent": "Talent",
+        "asset": "Asset",
+        "partner": "Partner",
+        "capital": "Capital",
+        "narrative": "Narrative",
+        "press": "Press",
+        "public_record": "Public Record",
+    }
     return request.app.state.templates.TemplateResponse(
         "feed.html",
         {
@@ -78,9 +88,27 @@ def feed(request: Request, competitor_id: Optional[int] = None, severity: Option
             "show_low": bool(show_low),
             "last_runs": last_runs,
             "last_refreshed": last_refreshed,
+            "category_labels": category_labels,
         },
     )
 
+
+# Feed view: filter by channels (standardized labels). Event category -> channel key for grouping.
+FEED_CHANNEL_LABELS = {
+    "talent": "Talent",
+    "asset": "Asset",
+    "press": "Press",
+    "public_record": "Public Record",
+}
+CATEGORY_TO_CHANNEL = {
+    "talent": "talent",
+    "asset": "asset",
+    "press": "press",
+    "partner": "press",
+    "capital": "press",
+    "narrative": "press",
+    "public_record": "public_record",
+}
 
 # Topic filters for feed view: category -> list of {value, label, types} (types = event type or prefix to match)
 FEED_TOPIC_OPTIONS = {
@@ -125,7 +153,7 @@ FEED_TOPIC_OPTIONS = {
 
 
 def _events_for_dashboard(session):
-    """Load recent events for dashboard feed view: one-liner + date added + category/type for filtering."""
+    """Load recent events for dashboard feed view: one-liner + date added + channel/type for filtering."""
     rows = (
         session.query(Event)
         .order_by(Event.detected_at.desc())
@@ -137,12 +165,14 @@ def _events_for_dashboard(session):
     if competitor_ids:
         for c in session.query(Competitor).filter(Competitor.id.in_(competitor_ids)).all():
             competitor_names[c.id] = c.name
-    categories = set()
+    channel_keys = set()
     events = []
     for e in rows:
-        categories.add(e.category)
+        ch = CATEGORY_TO_CHANNEL.get(e.category, e.category)
+        channel_keys.add(ch)
         events.append({
             "category": e.category,
+            "channel_key": ch,
             "type": e.type,
             "severity": e.severity,
             "title": e.title,
@@ -151,10 +181,30 @@ def _events_for_dashboard(session):
             "detected_at_short": e.detected_at.strftime("%b %d"),
             "competitor_name": competitor_names.get(e.competitor_id, ""),
         })
-    # Add virtual "press" category when we have any press-derived events (partner, capital, narrative)
-    if categories & {"partner", "capital", "narrative"}:
-        categories.add("press")
-    return events, sorted(categories)
+    # Order: Talent, Asset, Press, Public Record
+    order = ("talent", "asset", "press", "public_record")
+    feed_channels = sorted(channel_keys, key=lambda c: (order.index(c) if c in order else 99, c))
+    return events, feed_channels
+
+
+def _feed_topics_grouped(feed_channels):
+    """Build topics for the Topics dropdown, grouped by channel: list of {channel_key, channel_label, topics: [{value, label, types}]}."""
+    grouped = []
+    for ch in feed_channels:
+        label = FEED_CHANNEL_LABELS.get(ch, ch.replace("_", " ").title())
+        topics = []
+        for cat, opts in FEED_TOPIC_OPTIONS.items():
+            if CATEGORY_TO_CHANNEL.get(cat) != ch:
+                continue
+            for opt in opts:
+                topics.append({
+                    "value": opt["value"],
+                    "label": opt["label"],
+                    "types": opt.get("types") or [],
+                })
+        if topics:
+            grouped.append({"channel_key": ch, "channel_label": label, "topics": topics})
+    return grouped
 
 
 @router.get("/digest")
@@ -168,7 +218,8 @@ def digest(request: Request):
         all_competitors = session.query(Competitor).order_by(Competitor.created_at.desc()).all()
         nav_competitors = [{"id": c.id, "name": c.name, "created_at": c.created_at} for c in all_competitors]
         last_refreshed = get_last_refreshed(session)
-        feed_events, feed_categories = _events_for_dashboard(session)
+        feed_events, feed_channels = _events_for_dashboard(session)
+        feed_topics_grouped = _feed_topics_grouped(feed_channels)
     return request.app.state.templates.TemplateResponse(
         "digest.html",
         {
@@ -178,8 +229,9 @@ def digest(request: Request):
             "nav_competitors": nav_competitors,
             "send_enabled": settings.digest_send_enabled,
             "feed_events": feed_events,
-            "feed_categories": feed_categories,
-            "feed_topic_options": FEED_TOPIC_OPTIONS,
+            "feed_channels": feed_channels,
+            "feed_channel_labels": FEED_CHANNEL_LABELS,
+            "feed_topics_grouped": feed_topics_grouped,
         },
     )
 

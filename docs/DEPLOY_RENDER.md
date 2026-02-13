@@ -23,7 +23,7 @@ Set in Dashboard → Service → Environment. Use your key from https://platform
 1. **Create a Render account** and (if needed) a Postgres database.
 2. **Connect your repo** (GitHub/GitLab) to Render — either via **Blueprint** (repo has `render.yaml`) or by adding a Web Service + Cron manually.
 3. **Set environment variables on Render** (Dashboard → your Web Service and Cron job, or an Environment Group they share):
-   - **`DATABASE_URL`** — required. Use the **internal** URL Render shows for the database (e.g. `postgresql://user:pass@dpg-xxx-a/DATABASE`) so the web and cron can reach it from inside Render.
+   - **`DATABASE_URL`** — required. Use the **internal** URL Render shows for the database (e.g. `postgresql://user:pass@dpg-xxx-a/DATABASE`) so the web service can reach it. For the **cron job**, if you see "Connection refused" to the internal host (e.g. `10.x.x.x`), either: (1) set **`CRON_DB_STARTUP_DELAY=5`** on the cron job so the private network is ready before connecting (the app will sleep 5s on Render before DB connect), or (2) set the cron job’s **`DATABASE_URL`** to the **external** Postgres URL (from the Postgres instance’s *External* tab in the Dashboard) so the cron connects over the public endpoint instead of the private network.
    - **`OPENAI_API_KEY`** — optional but recommended; needed for executive summary, location cleanup, and LLM-based extraction.
    - **`PLAYWRIGHT_ENABLED`** — already set in `render.yaml` and the Dockerfile for both web and cron; you only need to add it in the Dashboard if you override env (e.g. env group) and want it explicit.
 
@@ -167,6 +167,7 @@ Redeploying reuses **cached Docker layers**. If an earlier build had a failed or
 
 - **Web:** Your app URL (e.g. `https://competitor-dossiers.onrender.com`). Health: `GET /health` (includes `playwright_enabled`).
 - **Cron:** Runs automatically on the schedule in `render.yaml` (e.g. weekly). Check Dashboard → Cron job → Logs.
+- **Cron "Connection refused" to Postgres:** The app waits 5 seconds on Render before connecting (so the private network is ready). To change the delay, set `CRON_DB_STARTUP_DELAY=5` (or `0` to disable) on the cron job. If it still fails, set the cron job’s `DATABASE_URL` to the **external** Postgres URL (Postgres → Connect → External).
 - **First time:** Seed competitors and sources (Dashboard shell or run `python -m app.seed` locally with `DATABASE_URL` pointing at Render Postgres).
 
 ## Summary

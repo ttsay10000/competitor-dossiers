@@ -6,7 +6,7 @@ from urllib.parse import urljoin, urlparse
 
 from .collectors.talent import collect_talent_snapshot, build_structured_json as build_talent_structured
 from .collectors.asset import collect_asset_snapshot, build_structured_json as build_asset_structured
-from .collectors.press import collect_press_snapshot, build_structured_json as build_press_structured
+from .collectors.press import build_structured_json as build_press_structured
 from .collectors.global_press import collect_google_news_items, collect_prnewswire_items
 from .collectors.homepage import (
     build_composite_hash,
@@ -22,6 +22,7 @@ from .diff.talent_diff import diff_jobs, count_recent_by_capability
 from .diff.asset_diff import diff_properties, extract_markets
 from .llm_structured import (
     enrich_properties_with_llm,
+    enrich_properties_url_and_rules_only,
     enrich_jobs_with_llm,
     enrich_press_items_with_llm,
     enrich_social_posts_with_llm,
@@ -58,6 +59,10 @@ from .rules.social_rules import build_social_signal_event
 # All channels that support per-competitor seed baseline (SEED_MODE): first snapshot
 # per competitor/channel persists as baseline; no diff or events until the next run.
 RUNNER_CHANNELS = ("talent", "asset", "press", "homepage", "public_records", "reviews", "social")
+
+# Competitors that skip LLM for asset enrichment and use only URL/HTML + rule-based state (e.g. Vacasa).
+# All other competitors use enrich_properties_with_llm. Add names here normalized to lowercase.
+ASSET_ENRICH_URL_AND_RULES_ONLY = frozenset({"vacasa"})
 
 # Common paths to probe for digital footprint when product_paths is not set per endpoint.
 # Crawled for every competitor (homepage or primary_domain) to detect changes / coming-soon signals.
@@ -712,13 +717,20 @@ def run_asset(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                 print(f"[asset] Step 1 — Collect: {raw_count} properties (strategy: {note})")
                 structured = build_asset_structured(snapshot)
                 before_enrich = len(structured.get("properties") or [])
-                structured["properties"] = enrich_properties_with_llm(
-                    structured.get("properties") or [],
-                    raw_content=snapshot.get("raw_content"),
-                )
+                competitor_name_normalized = (competitor.name or "").strip().lower()
+                if competitor_name_normalized in ASSET_ENRICH_URL_AND_RULES_ONLY:
+                    structured["properties"] = enrich_properties_url_and_rules_only(
+                        structured.get("properties") or [],
+                    )
+                    print(f"[asset] Step 2 — build_structured: {before_enrich} → enrich (URL/rules only, no LLM): {len(structured.get('properties') or [])} properties")
+                else:
+                    structured["properties"] = enrich_properties_with_llm(
+                        structured.get("properties") or [],
+                        raw_content=snapshot.get("raw_content"),
+                    )
+                    current_props = structured.get("properties") or []
+                    print(f"[asset] Step 2 — build_structured: {before_enrich} → enrich_properties_with_llm: {len(current_props)} properties")
                 current_props = structured.get("properties") or []
-                after_enrich = len(current_props)
-                print(f"[asset] Step 2 — build_structured: {before_enrich} → enrich_properties_with_llm: {after_enrich} properties")
                 if current_props:
                     endpoint_used = endpoint
                     break
@@ -879,13 +891,10 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                 if endpoint.channel == "press"
             ]
 
-            # Primary sources: Google News + PR Newswire (by competitor name). No user press endpoint required.
-            # Optional: user-added company blog/news URLs are merged in when present.
+            # Press sources: Google News + PR Newswire only (by competitor name). User press endpoints are not used.
             print(
                 f"\n[{datetime.now(timezone.utc).isoformat()}] === PRESS: {competitor.name} "
-                f"(Google News + PR Newswire"
-                + (f", +{len(endpoints)} user endpoint(s))" if endpoints else " only")
-                + " ==="
+                f"(Google News + PR Newswire) ==="
             )
 
             # Search name for Google News and PR Newswire (company name; override via press_search_name on any endpoint).
@@ -939,9 +948,9 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                 except Exception as e:
                     print(f"[press] Step 1 — Google News failed: {e}")
 
-            # 2) PR Newswire: skip for Landing and Rove (name matches wrong companies); run for all others.
+            # 2) PR Newswire: skip for AKA, Landing, Rove (ambiguous names / wrong companies); run for all others.
             prn_items = []
-            _prnewswire_skip = {"landing", "rove"}
+            _prnewswire_skip = {"aka", "landing", "rove"}
             if press_search_name and (competitor.name or "").strip().lower() not in _prnewswire_skip:
                 try:
                     prn_items = collect_prnewswire_items(
@@ -958,53 +967,14 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
             elif press_search_name and (competitor.name or "").strip().lower() in _prnewswire_skip:
                 print(f"[press] Step 2 — PR Newswire skipped (ambiguous name: {competitor.name!r})")
 
-            # 3) Optional: user-provided company blog/news URLs (supplementary; not required for press to run).
-            endpoint_count = 0
-            for endpoint in endpoints:
-                if _is_cancelled(is_cancelled):
-                    return
-                try:
-                    snapshot = collect_press_snapshot(endpoint.url)
-                except Exception as exc:
-                    log_run(
-                        session,
-                        competitor.id,
-                        "press",
-                        "error",
-                        message=str(exc),
-                        extra={"url": endpoint.url},
-                    )
-                    continue
-                items = snapshot.get("items") or []
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
-                    url = (item.get("url") or item.get("link") or "").strip()
-                    if url and not url.startswith("http"):
-                        from urllib.parse import urljoin
-
-                        url = urljoin(snapshot.get("source_url") or endpoint.url, url)
-                    raw_items.append(
-                        {
-                            "title": item.get("title"),
-                            "url": url,
-                            "date": item.get("date"),
-                            "source": item.get("source") or snapshot.get("source_url"),
-                            "provider": "press_endpoint",
-                        }
-                    )
-                    endpoint_count += 1
-                source_meta.append({"type": "press_endpoint", "url": endpoint.url})
-            print(f"[press] Step 3 — User press endpoints (optional): {endpoint_count} items")
-
             by_provider = {}
             for it in raw_items:
                 p = (it.get("provider") or "").strip() or "unknown"
                 by_provider[p] = by_provider.get(p, 0) + 1
-            print(f"[press] Step 4 — Raw total: {len(raw_items)} by source: {by_provider}")
+            print(f"[press] Step 3 — Raw total: {len(raw_items)} by source: {by_provider}")
 
             if not raw_items:
-                print(f"[press] Step 4 — Raw total: 0 → skipping (no items from Google News, PR Newswire, or user endpoints)")
+                print(f"[press] Step 3 — Raw total: 0 → skipping (no items from Google News or PR Newswire)")
                 log_run(
                     session,
                     competitor.id,
@@ -1029,7 +999,7 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                 filtered_items.append(item)
 
             if not filtered_items:
-                print(f"[press] Step 5 — After 90d window: 0 items → skipping (all outside window)")
+                print(f"[press] Step 4 — After 90d window: 0 items → skipping (all outside window)")
                 log_run(
                     session,
                     competitor.id,
@@ -1048,7 +1018,7 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
             if len(combined) > max_raw:
                 combined = combined[:max_raw]
             filtered_items = combined
-            print(f"[press] Step 5 — After 90d window + cap (PR first, all PR kept) (max_raw={max_raw}): {len(filtered_items)} items")
+            print(f"[press] Step 4 — After 90d window + cap (PR first, all PR kept) (max_raw={max_raw}): {len(filtered_items)} items")
 
             # 4) Load previous snapshot for diff/events and for fallback when enrichment returns no groups.
             # We always run full cleaning + grouping on the full pull so late articles join the right groups and new topics appear.
@@ -1293,7 +1263,7 @@ def run_press_local(competitor_name: Optional[str] = None) -> None:
             except Exception as e:
                 print(f"[press] Google News failed: {e}")
 
-        _prnewswire_skip = {"landing", "rove"}
+        _prnewswire_skip = {"aka", "landing", "rove"}
         if (display_name or "").strip().lower() not in _prnewswire_skip:
             try:
                 prn_items = collect_prnewswire_items(
@@ -1844,7 +1814,7 @@ def clear_baseline_before_force_refresh() -> None:
             c.reporting_baseline_at = None
 
 
-def advance_baseline_after_full_refresh() -> None:
+def advance_baseline_after_full_refresh() -> datetime:
     """
     Set every competitor's reporting_baseline_at to now.
     Call this after a full refresh (all channels) so the executive summary and dossier
@@ -1852,6 +1822,7 @@ def advance_baseline_after_full_refresh() -> None:
     changed since the last run (e.g. last 7 days) instead of the full period since first reset.
     Also deletes old website/digital-footprint events (homepage_updated, coming_soon) so we
     only retain changes since this baseline—no heavy running log.
+    Commits explicitly so the "Baseline set" column on /competitors shows the date immediately.
     """
     with get_session() as session:
         now = datetime.now(timezone.utc)
@@ -1863,6 +1834,8 @@ def advance_baseline_after_full_refresh() -> None:
                 Event.type.in_(DIGITAL_FOOTPRINT_EVENT_TYPES),
                 Event.detected_at < now,
             ).delete(synchronize_session=False)
+        session.commit()
+    return now
 
 
 def run(

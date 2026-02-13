@@ -52,6 +52,9 @@ class Settings:
         self.smtp_password = (os.getenv("SMTP_PASSWORD") or "").strip() or None
         self.smtp_use_tls = (os.getenv("SMTP_USE_TLS", "true").strip().lower() not in ("0", "false", "no"))
         self.mail_from = (os.getenv("MAIL_FROM") or "").strip() or None
+        # Homepage/digital footprint: optional CSS selector to hash only main content (e.g. "main", "#content").
+        # When set, only that element's text is used for change detection; reduces nav/footer noise.
+        self.homepage_content_selector = (os.getenv("HOMEPAGE_CONTENT_SELECTOR") or "").strip() or None
 
     @property
     def digest_send_enabled(self) -> bool:

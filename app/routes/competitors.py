@@ -31,7 +31,7 @@ router = APIRouter()
 CANCELLED_RUN_STARTS: set[int] = set()
 
 # Main channels for status display (order: T A P W S R)
-DISPLAY_CHANNELS = ("talent", "asset", "press", "homepage", "social", "reviews")
+DISPLAY_CHANNELS = ("talent", "asset", "press", "homepage", "public_records", "social", "reviews")
 
 # Order to run channels when user selects multiple (quickest to longest). Unlisted channels run last.
 CHANNEL_RUN_ORDER = ("talent", "press", "homepage", "social", "asset", "reviews")
@@ -42,7 +42,7 @@ def _sort_channels_by_run_order(channels: list[str]) -> list[str]:
     order = {ch: i for i, ch in enumerate(CHANNEL_RUN_ORDER)}
     return sorted(channels, key=lambda c: order.get(c, len(CHANNEL_RUN_ORDER)))
 # Single-letter labels for Data/Status column: W=website/digital footprint, S=social, R=reviews
-CHANNEL_LETTERS = {"talent": "T", "asset": "A", "press": "P", "homepage": "W", "social": "S", "reviews": "R"}
+CHANNEL_LETTERS = {"talent": "T", "asset": "A", "press": "P", "homepage": "W", "public_records": "Pr", "reviews": "R", "social": "S"}
 
 
 def _sync_seed_file() -> bool:
@@ -140,7 +140,17 @@ def _competitor_topline_summary(session, c: Competitor) -> dict:
         .first()
     )
     if latest_press:
-        items = (latest_press.structured_json or {}).get("canonical_items") or (latest_press.structured_json or {}).get("items", [])
+        struct = latest_press.structured_json or {}
+        # Prefer press_groups (grouped output) when available (e.g. Kasa) — flatten to get articles.
+        press_groups = struct.get("press_groups") or []
+        if press_groups:
+            items = []
+            for g in press_groups:
+                for art in (g.get("articles") or []) if isinstance(g, dict) else []:
+                    if isinstance(art, dict):
+                        items.append(art)
+        else:
+            items = struct.get("canonical_items") or struct.get("items", [])
         items = [i for i in items if isinstance(i, dict)]
         latest_news_count = len(items)
         for item in items[:5]:

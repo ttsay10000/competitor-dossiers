@@ -40,7 +40,6 @@ SEED_COMPETITORS = [
                 "confidence": "high",
                 "extra_options": {"strategy_chain": ["html"], "min_properties_accept": 1},
             },
-            {"channel": "press", "url": "https://www.placemakr.com/blog", "confidence": "high"},
         ],
     },
     {
@@ -60,7 +59,6 @@ SEED_COMPETITORS = [
                     "min_properties_accept": 5,
                 },
             },
-            {"channel": "press", "url": "https://avantstay.com/blog/", "confidence": "high"},
         ],
     },
     # Lark: single strategy "js_exhaust" only (no strategy_chain). Running Lark in the same
@@ -105,12 +103,6 @@ SEED_COMPETITORS = [
                     "llm_extract": True,
                 },
             },
-            {
-                "channel": "press",
-                "url": "https://www.larkhospitality.com/press/",
-                "confidence": "high",
-                "extra_options": {"press_search_name": "Lark Hotels"},
-            },
         ],
     },
     # Blueground: same Playwright as Lark/AvantStay (talent=JS careers, asset=blueground_destinations).
@@ -123,14 +115,12 @@ SEED_COMPETITORS = [
                 "channel": "asset",
                 "url": "https://www.theblueground.com/destinations",
                 "confidence": "medium",
-                "extra_options": {"strategy": "blueground_destinations"},
+                "extra_options": {"strategy": "blueground_destinations", "max_destinations": None},
             },
-            {"channel": "press", "url": "https://www.theblueground.com/blog", "confidence": "medium"},
         ],
     },
     # Fallback list must include all competitors that are in seed_data.json so that if the file
     # is missing or unreadable on deploy (e.g. Render), the DB still gets them and cron runs include them.
-    # Include both asset and press so runners see endpoints regardless of how the competitor was added.
     {
         "name": "Landing",
         "primary_domain": "hellolanding.com",
@@ -141,12 +131,6 @@ SEED_COMPETITORS = [
                 "confidence": "high",
                 "extra_options": {"strategy": "landing_locations"},
             },
-            {
-                "channel": "press",
-                "url": "https://www.hellolanding.com/blog",
-                "confidence": "medium",
-                "extra_options": {"google_news_search_phrases": ["landing furnished rentals"]},
-            },
             {"channel": "talent", "url": "https://www.hellolanding.com/p/careers/", "confidence": "medium"},
         ],
     },
@@ -155,12 +139,6 @@ SEED_COMPETITORS = [
         "primary_domain": "rovetravel.com",
         "sources": [
             {"channel": "asset", "url": "https://rovetravel.com/search", "confidence": "high"},
-            {
-                "channel": "press",
-                "url": "https://rovetravel.com",
-                "confidence": "medium",
-                "extra_options": {"google_news_search_phrases": ["rove travel furnished rentals"]},
-            },
             {"channel": "talent", "url": "https://jobs.gem.com/rove", "confidence": "high"},
         ],
     },
@@ -175,7 +153,6 @@ SEED_COMPETITORS = [
                 "confidence": "high",
                 "extra_options": {"strategy_chain": ["html"], "min_properties_accept": 1},
             },
-            {"channel": "press", "url": "https://www.vacasa.com/blog", "confidence": "medium"},
             {"channel": "talent", "url": "https://job-boards.greenhouse.io/vacasa", "confidence": "medium"},
         ],
     },
@@ -217,7 +194,6 @@ SEED_COMPETITORS = [
                     "llm_extract": True,
                 },
             },
-            {"channel": "press", "url": "https://kasa.com/blog", "confidence": "medium"},
             {"channel": "talent", "url": "https://kasa.com/careers", "confidence": "high"},
             {
                 "channel": "social",

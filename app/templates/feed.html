@@ -37,15 +37,16 @@
           </select>
         </div>
         <div>
-          <label>Category</label>
+          <label>Channel</label>
           <select name="category">
             <option value="">All</option>
-            <option value="talent" {% if selected_category == "talent" %}selected{% endif %}>talent</option>
-            <option value="asset" {% if selected_category == "asset" %}selected{% endif %}>asset</option>
-            <option value="partner" {% if selected_category == "partner" %}selected{% endif %}>partner</option>
-            <option value="capital" {% if selected_category == "capital" %}selected{% endif %}>capital</option>
-            <option value="narrative" {% if selected_category == "narrative" %}selected{% endif %}>narrative</option>
-            <option value="public_record" {% if selected_category == "public_record" %}selected{% endif %}>public_record</option>
+            <option value="talent" {% if selected_category == "talent" %}selected{% endif %}>{{ category_labels.get('talent', 'Talent') }}</option>
+            <option value="asset" {% if selected_category == "asset" %}selected{% endif %}>{{ category_labels.get('asset', 'Asset') }}</option>
+            <option value="partner" {% if selected_category == "partner" %}selected{% endif %}>{{ category_labels.get('partner', 'Partner') }}</option>
+            <option value="capital" {% if selected_category == "capital" %}selected{% endif %}>{{ category_labels.get('capital', 'Capital') }}</option>
+            <option value="narrative" {% if selected_category == "narrative" %}selected{% endif %}>{{ category_labels.get('narrative', 'Narrative') }}</option>
+            <option value="press" {% if selected_category == "press" %}selected{% endif %}>{{ category_labels.get('press', 'Press') }}</option>
+            <option value="public_record" {% if selected_category == "public_record" %}selected{% endif %}>{{ category_labels.get('public_record', 'Public Record') }}</option>
           </select>
         </div>
         <div>
@@ -81,7 +82,7 @@
       </div>
     </div>
     <div class="meta">
-      {% if event.competitor_name %}<strong>{{ event.competitor_name }}</strong> · {% endif %}{{ event.category }} · {{ event.type }} · detected {{ event.detected_at_str }}
+      {% if event.competitor_name %}<strong>{{ event.competitor_name }}</strong> · {% endif %}{{ category_labels.get(event.category, event.category) }} · {{ event.type }} · detected {{ event.detected_at_str }}
     </div>
     {% if event.why_it_matters %}
     <div style="margin-top: 8px;">

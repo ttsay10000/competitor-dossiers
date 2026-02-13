@@ -131,18 +131,33 @@ def _is_significant_review(r: dict) -> bool:
     return False
 
 
+def _normalize_dc_label(loc: str) -> str:
+    """If location is a DC variant (Washington D.C., District of Columbia, etc.), return 'Washington DC' for consistent merging."""
+    s = (loc or "").strip()
+    lower = s.lower()
+    if lower in ("washington d.c.", "washington d. c.", "washington, d.c.", "district of columbia", "washington dc"):
+        return "Washington DC"
+    return s
+
+
 def _location_label_to_state(loc: str) -> str:
     """Map a location label (e.g. 'California - Palm Springs' or 'Texas') to state for aggregation."""
     s = (loc or "").strip()
     if not s:
         return "Other"
-    # Normalize DC so "District of Columbia" and "Washington DC" merge into one row.
+    # Normalize DC so "Washington D.C.", "District of Columbia", and "Washington DC" merge into one row.
+    dc_normalized = _normalize_dc_label(s)
+    if dc_normalized != s:
+        return dc_normalized
     if s == "District of Columbia":
         return "Washington DC"
     if s in _US_STATES or s == "Other":
         return s
     if " - " in s:
         part = s.split(" - ", 1)[0].strip()
+        dc_part = _normalize_dc_label(part)
+        if dc_part != part:
+            return dc_part
         if part == "District of Columbia":
             return "Washington DC"
         if part in _US_STATES:
@@ -913,6 +928,7 @@ YOUR JOB — follow these two steps in order:
 Step 1 — Consolidate and clean state-level rows:
 - Merge duplicate state rows (same US state name) into a single row; sum "count" and "keys".
 - Normalize state names to full US state names (e.g. CA → California, Florida → Florida).
+- Treat "Washington D.C.", "Washington, D.C.", and "District of Columbia" as the same as "Washington DC"; merge into one row with location "Washington DC".
 - Do not yet change any region/city/geographical labels.
 
 Step 2 — Map regions/cities/geographical labels to states:
@@ -982,12 +998,13 @@ OUTPUT FORMAT:
 
         counts = [
             {
-                "location": (r.get("location") or "").strip(),
+                "location": _normalize_dc_label((r.get("location") or "").strip()),
                 "count": _int(r.get("count"), 0),
                 "keys": _int(r.get("keys"), 0),
             }
             for r in counts
             if isinstance(r, dict) and r.get("location") is not None
+            and (r.get("location") or "").strip()
         ]
         # Sum by exact location label from LLM (same label may appear multiple times). Keep original
         # region labels when LLM could not map to a state — do not force them to "Other".

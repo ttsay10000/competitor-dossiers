@@ -1,5 +1,7 @@
 import argparse
+import os
 import sys
+import time
 
 from .db import check_db_connection, get_session
 from .models import Competitor
@@ -54,6 +56,13 @@ def main() -> None:
     print(f"[cli] PLAYWRIGHT_ENABLED={getattr(settings, 'playwright_enabled', False)}", flush=True)
 
     if not args.local:
+        # On Render, cron jobs can hit "Connection refused" to internal Postgres because the
+        # private network may not be ready in the first few seconds after the job starts.
+        if os.getenv("RENDER"):
+            delay = int(os.getenv("CRON_DB_STARTUP_DELAY", "5"))
+            if delay > 0:
+                print(f"[cli] Waiting {delay}s for private network before DB connect...", flush=True)
+                time.sleep(delay)
         try:
             check_db_connection()
         except RuntimeError as e:

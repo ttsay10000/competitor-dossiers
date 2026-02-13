@@ -51,8 +51,8 @@
             <label><input type="checkbox" name="channels" value="asset" {% if not _has.get('asset') %}checked{% endif %} /> Asset</label>
             <label><input type="checkbox" name="channels" value="press" {% if not _has.get('press') %}checked{% endif %} /> Press</label>
             <label><input type="checkbox" name="channels" value="homepage" {% if not _has.get('homepage') %}checked{% endif %} /> Website</label>
-            <label><input type="checkbox" name="channels" value="reviews" {% if not _has.get('reviews') %}checked{% endif %} /> Reviews</label>
             <label><input type="checkbox" name="channels" value="social" {% if not _has.get('social') %}checked{% endif %} /> Social</label>
+            <label><input type="checkbox" name="channels" value="reviews" {% if not _has.get('reviews') %}checked{% endif %} /> Reviews</label>
           </div>
           <button type="submit">Run selected channels</button>
         </form>
@@ -276,7 +276,11 @@
           {% for item in top_news %}
           <li>
             {% if item.get('date') %}<span class="meta" style="font-weight: 500;">{{ item.date }}</span> — {% endif %}
+            {% if item.get('url') %}
+            <a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.get('bullet') or item.get('title') or '—' }}</a>
+            {% else %}
             {{ item.get('bullet') or item.get('title') or '—' }}
+            {% endif %}
           </li>
           {% endfor %}
         </ul>
