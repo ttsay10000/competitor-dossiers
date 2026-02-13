@@ -422,7 +422,7 @@ async def competitors_run_selected_channels(request: Request):
     thread = threading.Thread(target=_run_all, daemon=True)
     thread.start()
 
-        redirect_url = f"/competitors?started=1&run_start_ts={run_start_ts}&channels=" + ",".join(channels)
+    redirect_url = f"/competitors?started=1&run_start_ts={run_start_ts}&channels=" + ",".join(channels)
     return RedirectResponse(url=redirect_url, status_code=HTTP_303_SEE_OTHER)
 
 
