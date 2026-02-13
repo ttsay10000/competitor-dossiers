@@ -95,6 +95,7 @@ def runs(
         logs = [
             {
                 "created_at_str": to_eastern(log.created_at),
+                "created_at_ts": int(log.created_at.timestamp()) if log.created_at else None,
                 "competitor_id": log.competitor_id,
                 "channel": log.channel,
                 "status": log.status,

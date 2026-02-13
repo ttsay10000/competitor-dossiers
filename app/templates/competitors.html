@@ -176,9 +176,14 @@
   </div>
 
   <div id="global-run-status-card" class="card mt-16" style="display: none; border-left: 4px solid var(--accent, #0d6efd);">
-    <h3>Run status</h3>
-    <p class="meta card-desc">Channels running for all competitors. Timers update every few seconds. Log stays until you refresh or navigate away.</p>
-    <ul id="global-run-status-list" style="margin: 0; padding-left: 20px; list-style: none;"></ul>
+    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+      <div>
+        <h3 style="margin: 0;">Run status</h3>
+        <p class="meta card-desc" style="margin: 4px 0 0 0;">Channels running for all competitors. Timers update every few seconds. Log stays until you refresh or navigate away.</p>
+      </div>
+      <button type="button" id="cancel-run-btn" class="secondary" style="display: none;">Cancel run</button>
+    </div>
+    <ul id="global-run-status-list" style="margin: 12px 0 0 0; padding-left: 20px; list-style: none;"></ul>
   </div>
 
   <script>
@@ -222,17 +227,35 @@
             var created = c.created_at ? new Date(c.created_at) : null;
             var afterStart = created && created >= runStartDate;
             if (!afterStart) return;
-            var color = c.status === 'success' ? 'var(--accent)' : (c.status === 'error' ? '#b84a2b' : '');
-            var statusText = c.status === 'success' ? 'Success' : (c.status === 'error' ? 'Failure' : c.status);
+            var color = c.status === 'success' ? 'var(--accent)' : (c.status === 'error' ? '#b84a2b' : (c.status === 'cancelled' ? '#6c757d' : ''));
+            var statusText = c.status === 'success' ? 'Success' : (c.status === 'error' ? 'Failure' : (c.status === 'cancelled' ? 'Cancelled' : c.status));
             var msg = c.message ? ' — ' + c.message : '';
             html += '<li style="margin-bottom: 6px;"><strong>' + (c.competitor_name || '') + '</strong> · ' + channelLabel(c.channel) + ': <span style="color:' + color + '">' + statusText + '</span>' + (msg ? ' <span class="meta">' + msg + '</span>' : '') + '</li>';
           });
           if ((data.running || []).length > 0) allDone = false;
           runStatusList.innerHTML = html || '<li class="meta">Loading…</li>';
+          var cancelBtn = document.getElementById('cancel-run-btn');
+          if (cancelBtn) cancelBtn.style.display = (data.running || []).length > 0 ? 'inline-block' : 'none';
           if (allDone) {
             if (pollTimerId) { clearInterval(pollTimerId); pollTimerId = null; }
           }
         }
+
+        document.getElementById('cancel-run-btn')?.addEventListener('click', function() {
+          var btn = this;
+          btn.disabled = true;
+          btn.textContent = 'Cancelling…';
+          fetch('/competitors/cancel-run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ run_start_ts: runStartTs })
+          })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+              if (data.ok) { btn.textContent = 'Cancelled'; poll(); }
+            })
+            .catch(function() { btn.disabled = false; btn.textContent = 'Cancel run'; });
+        });
 
         function poll() {
           fetch('/competitors/run-status?run_start_ts=' + runStartTs + '&channels=' + encodeURIComponent(requestedChannels.join(',')))

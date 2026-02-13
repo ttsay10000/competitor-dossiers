@@ -56,12 +56,15 @@
       .runs-table th:nth-child(2), .runs-table td:nth-child(2) { width: 10%; min-width: 5em; }
       .runs-table th:nth-child(3), .runs-table td:nth-child(3) { width: 5em; white-space: nowrap; }
       .runs-table th:nth-child(4), .runs-table td:nth-child(4) { width: 7em; white-space: nowrap; }
-      .runs-table th:nth-child(5), .runs-table td:nth-child(5) { min-width: 10em; overflow-wrap: break-word; word-break: break-word; white-space: normal; }
-      .runs-table th:nth-child(6), .runs-table td:nth-child(6) { min-width: 10em; overflow-wrap: break-word; word-break: break-word; white-space: normal; font-size: 12px; }
+      .runs-table th:nth-child(5), .runs-table td:nth-child(5) { width: 6em; white-space: nowrap; }
+      .runs-table th:nth-child(6), .runs-table td:nth-child(6) { min-width: 10em; overflow-wrap: break-word; word-break: break-word; white-space: normal; }
+      .runs-table th:nth-child(7), .runs-table td:nth-child(7) { min-width: 10em; overflow-wrap: break-word; word-break: break-word; font-size: 12px; }
       .status-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
       .status-success { background: #d4edda; color: #155724; }
       .status-skipped { background: #fff3cd; color: #856404; }
       .status-error { background: #f8d7da; color: #721c24; }
+      .status-running { background: #cce5ff; color: #004085; }
+      .status-cancelled { background: #e9ecef; color: #6c757d; }
       .run-details-url { word-break: break-all; color: var(--accent); }
     </style>
     <table class="runs-table">
@@ -71,6 +74,7 @@
           <th>Competitor</th>
           <th>Channel</th>
           <th>Status</th>
+          <th>Elapsed</th>
           <th>Message</th>
           <th>Details</th>
         </tr>
@@ -83,6 +87,13 @@
           <td>{{ log.channel }}</td>
           <td>
             <span class="status-badge status-{{ log.status }}">{{ log.status }}</span>
+          </td>
+          <td class="muted">
+            {% if log.status == "running" and log.created_at_ts %}
+            <span class="run-elapsed" data-started-at="{{ log.created_at_ts }}">—</span>
+            {% else %}
+            —
+            {% endif %}
           </td>
           <td title="{{ log.message or '' }}">
             {% if log.display_message %}
@@ -103,10 +114,28 @@
         {% endfor %}
         {% if logs|length == 0 %}
         <tr>
-          <td colspan="6" class="muted">No runs yet.</td>
+          <td colspan="7" class="muted">No runs yet.</td>
         </tr>
         {% endif %}
       </tbody>
     </table>
   </div>
+
+  <script>
+    (function() {
+      function updateElapsed() {
+        var now = Math.floor(Date.now() / 1000);
+        document.querySelectorAll('.run-elapsed').forEach(function(el) {
+          var started = parseInt(el.getAttribute('data-started-at'), 10);
+          if (!started) return;
+          var sec = now - started;
+          if (sec < 60) el.textContent = sec + ' s';
+          else if (sec < 3600) el.textContent = Math.floor(sec / 60) + ' m';
+          else el.textContent = Math.floor(sec / 3600) + ' h';
+        });
+      }
+      updateElapsed();
+      setInterval(updateElapsed, 1000);
+    })();
+  </script>
 {% endblock %}

@@ -1,5 +1,6 @@
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlencode
 from typing import Optional
 
@@ -21,8 +22,20 @@ from ..validation import validate_url_format, suggest_urls_from_domain
 
 router = APIRouter()
 
+# Run start timestamps that the user requested to cancel. Workers check this and skip remaining jobs.
+CANCELLED_RUN_STARTS: set[int] = set()
+
 # Main channels for status display (order: T A P W S R)
 DISPLAY_CHANNELS = ("talent", "asset", "press", "homepage", "social", "reviews")
+
+# Order to run channels when user selects multiple (quickest to longest). Unlisted channels run last.
+CHANNEL_RUN_ORDER = ("talent", "press", "homepage", "social", "asset", "reviews")
+
+
+def _sort_channels_by_run_order(channels: list[str]) -> list[str]:
+    """Return channels sorted by CHANNEL_RUN_ORDER (quickest first). Channels not in order run last."""
+    order = {ch: i for i, ch in enumerate(CHANNEL_RUN_ORDER)}
+    return sorted(channels, key=lambda c: order.get(c, len(CHANNEL_RUN_ORDER)))
 # Single-letter labels for Data/Status column: W=website/digital footprint, S=social, R=reviews
 CHANNEL_LETTERS = {"talent": "T", "asset": "A", "press": "P", "homepage": "W", "social": "S", "reviews": "R"}
 
@@ -323,6 +336,8 @@ async def competitor_run_now(request: Request, competitor_id: int):
             channels = _parse_channels(form.get("channels"))
     if channels is None:
         channels = _parse_channels(request.query_params.get("channels"))
+    if channels:
+        channels = _sort_channels_by_run_order(channels)
 
     run_start_ts = int(datetime.now(timezone.utc).timestamp())
     with get_session() as session:
@@ -368,6 +383,7 @@ async def competitors_run_selected_channels(request: Request):
     channels = _parse_channels(",".join(ch_list)) if ch_list else _parse_channels(form.get("channels") if form else None)
     if not channels:
         return RedirectResponse(url="/competitors", status_code=HTTP_303_SEE_OTHER)
+    channels = _sort_channels_by_run_order(channels)
 
     run_start_ts = int(datetime.now(timezone.utc).timestamp())
     competitor_names = []
@@ -387,18 +403,56 @@ async def competitors_run_selected_channels(request: Request):
                     )
                 )
 
+    # channels already sorted by CHANNEL_RUN_ORDER (talent → press → website → social → asset → reviews)
     channels_list = list(channels)
-    def _run_all():
+    jobs = [(run_start_ts, name, ch) for ch in channels_list for name in competitor_names]
+
+    def _run_one(args):
+        run_ts, name, ch = args
+        if run_ts in CANCELLED_RUN_STARTS:
+            return
         from ..runner import run
-        for name in competitor_names:
-            for ch in channels_list:
-                run(channel=ch, competitor_name=name)
+        run(channel=ch, competitor_name=name)
+
+    def _run_all():
+        max_workers = min(3, len(jobs)) or 1
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            list(executor.map(_run_one, jobs))
 
     thread = threading.Thread(target=_run_all, daemon=True)
     thread.start()
 
-    redirect_url = f"/competitors?started=1&run_start_ts={run_start_ts}&channels=" + ",".join(channels)
+        redirect_url = f"/competitors?started=1&run_start_ts={run_start_ts}&channels=" + ",".join(channels)
     return RedirectResponse(url=redirect_url, status_code=HTTP_303_SEE_OTHER)
+
+
+@router.post("/competitors/cancel-run")
+async def competitors_cancel_run(request: Request):
+    """Mark a run as cancelled: set CANCELLED_RUN_STARTS so workers skip remaining jobs, and set RunLog status to cancelled."""
+    run_start_ts = request.query_params.get("run_start_ts")
+    if not run_start_ts:
+        try:
+            body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+            run_start_ts = body.get("run_start_ts")
+        except Exception:
+            pass
+    if not run_start_ts:
+        form = await request.form()
+        run_start_ts = form.get("run_start_ts") if form else None
+    if not run_start_ts:
+        return JSONResponse(content={"error": "run_start_ts required"}, status_code=400)
+    run_start_ts = int(run_start_ts)
+
+    CANCELLED_RUN_STARTS.add(run_start_ts)
+
+    with get_session() as session:
+        running = session.query(RunLog).filter(RunLog.status == "running").all()
+        for log in running:
+            if isinstance(log.extra_json, dict) and log.extra_json.get("started_at") == run_start_ts:
+                log.status = "cancelled"
+        session.commit()
+
+    return JSONResponse(content={"ok": True})
 
 
 @router.get("/competitors/run-status")
@@ -425,7 +479,7 @@ def competitors_run_status(request: Request):
         completed_logs = (
             session.query(RunLog)
             .filter(
-                RunLog.status.in_(["success", "error", "skipped"]),
+                RunLog.status.in_(["success", "error", "skipped", "cancelled"]),
                 RunLog.channel.in_(requested_channels),
             )
             .order_by(RunLog.created_at.desc())

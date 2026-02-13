@@ -23,6 +23,8 @@ from .diff.asset_diff import diff_properties, extract_markets
 from .llm_structured import enrich_properties_with_llm, enrich_jobs_with_llm, enrich_press_items_with_llm, enrich_social_posts_with_llm
 from .diff.press_diff import diff_items
 from .diff.social_diff import diff_social_posts
+from sqlalchemy.orm import selectinload
+
 from .models import Competitor, CompetitorReviewProperty, SourceEndpoint, Snapshot, Event, Capability, RunLog
 from .rules.talent_rules import (
     assign_job_flags,
@@ -565,7 +567,12 @@ def run_talent(competitor_name: Optional[str] = None) -> None:
 
 def run_asset(competitor_name: Optional[str] = None) -> None:
     with get_session() as session:
-        competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        competitors = (
+            session.query(Competitor)
+            .options(selectinload(Competitor.source_endpoints))
+            .order_by(Competitor.name.asc())
+            .all()
+        )
         if competitor_name:
             competitors = _filter_competitors_by_name(competitors, competitor_name)
         else:
@@ -575,7 +582,7 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
             return
         for competitor in competitors:
             endpoints_ordered = _endpoints_ordered([
-                e for e in competitor.source_endpoints if e.channel == "asset"
+                e for e in (competitor.source_endpoints or []) if e.channel == "asset"
             ])
             if not endpoints_ordered:
                 continue
@@ -782,7 +789,12 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
 
 def run_press(competitor_name: Optional[str] = None) -> None:
     with get_session() as session:
-        competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        competitors = (
+            session.query(Competitor)
+            .options(selectinload(Competitor.source_endpoints))
+            .order_by(Competitor.name.asc())
+            .all()
+        )
         if competitor_name:
             competitors = _filter_competitors_by_name(competitors, competitor_name)
         else:
@@ -793,17 +805,20 @@ def run_press(competitor_name: Optional[str] = None) -> None:
         for competitor in competitors:
             endpoints = [
                 endpoint
-                for endpoint in competitor.source_endpoints
+                for endpoint in (competitor.source_endpoints or [])
                 if endpoint.channel == "press"
             ]
 
+            # Primary sources: Google News + PR Newswire (by competitor name). No user press endpoint required.
+            # Optional: user-added company blog/news URLs are merged in when present.
             print(
                 f"\n[{datetime.now(timezone.utc).isoformat()}] === PRESS: {competitor.name} "
-                f"({len(endpoints)} user endpoint(s)) ==="
+                f"(Google News + PR Newswire"
+                + (f", +{len(endpoints)} user endpoint(s))" if endpoints else " only")
+                + " ==="
             )
 
-            # Optional press search name for external sources (Google News, PR Newswire, etc.).
-            # Use when display name is ambiguous (e.g. "Lark") but press uses a fuller name ("Lark Hotels").
+            # Search name for Google News and PR Newswire (company name; override via press_search_name on any endpoint).
             press_search_name = competitor.name
             from_endpoint = False
             for ep in endpoints:
@@ -812,20 +827,55 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                     press_search_name = (opts.get("press_search_name") or "").strip() or press_search_name
                     from_endpoint = True
                     break
-            # Fallback when no endpoint has press_search_name (e.g. Lark added via UI): use canonical search name
-            # so "Lark" and "Lark Hotels" both get external search with "Lark Hotels" (Google News also fetches "Lark").
             if not from_endpoint and press_search_name:
                 _press_search_fallback = {"lark": "Lark Hotels"}
                 key = press_search_name.strip().lower()
                 if key in _press_search_fallback:
                     press_search_name = _press_search_fallback[key]
 
-            # 1) User-provided company news links (if any). Highest priority for dedup.
-            # 2) and 3) Google News + PR Newswire always run for every competitor (using competitor name),
-            #    even when there are zero press endpoints—so press can populate without a blog/news URL.
             raw_items: list[dict] = []
             source_meta: list[dict] = []
+            window_days = 90
+            max_per_source = settings.press_max_items_per_source
 
+            # 1) Google News (primary). Does not depend on user press endpoints.
+            gn_items = []
+            if getattr(settings, "press_enable_google_news", True) and press_search_name:
+                try:
+                    gn_items = collect_google_news_items(
+                        press_search_name,
+                        max_items=min(50, max_per_source * 2),
+                        window_days=window_days,
+                    )
+                    raw_items.extend(gn_items)
+                    if gn_items:
+                        source_meta.append({"type": "google_news"})
+                    print(f"[press] Step 1 — Google News (90d): {len(gn_items)} items")
+                    if not gn_items and press_search_name:
+                        print(
+                            f"[press]   (0 items for {press_search_name!r}; RSS may omit if exact phrase not in headline)"
+                        )
+                except Exception as e:
+                    print(f"[press] Step 1 — Google News failed: {e}")
+
+            # 2) PR Newswire (primary). Company page + search by name; does not depend on user press endpoints.
+            prn_items = []
+            if press_search_name:
+                try:
+                    prn_items = collect_prnewswire_items(
+                        press_search_name,
+                        max_items=100,
+                        window_days=window_days,
+                    )
+                    raw_items.extend(prn_items)
+                    if prn_items:
+                        source_meta.append({"type": "prnewswire"})
+                    print(f"[press] Step 2 — PR Newswire (90d): {len(prn_items)} items")
+                except Exception as e:
+                    print(f"[press] Step 2 — PR Newswire failed: {e}")
+
+            # 3) Optional: user-provided company blog/news URLs (supplementary; not required for press to run).
+            endpoint_count = 0
             for endpoint in endpoints:
                 try:
                     snapshot = collect_press_snapshot(endpoint.url)
@@ -857,51 +907,10 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                             "provider": "press_endpoint",
                         }
                     )
+                    endpoint_count += 1
                 source_meta.append({"type": "press_endpoint", "url": endpoint.url})
+            print(f"[press] Step 3 — User press endpoints (optional): {endpoint_count} items")
 
-            endpoint_count = sum(1 for it in raw_items if (it.get("provider") or "").strip() == "press_endpoint")
-            print(f"[press] Step 1 — User press endpoints: {endpoint_count} items")
-
-            max_per_source = settings.press_max_items_per_source
-            # Only user press endpoints, PR Newswire, and Google News (90-day window).
-            window_days = 90
-
-            # 2) Google News: 90-day window, quoted competitor name (and first-word + partnership fallbacks).
-            gn_items = []
-            if getattr(settings, "press_enable_google_news", True) and press_search_name:
-                try:
-                    gn_items = collect_google_news_items(
-                        press_search_name,
-                        max_items=min(50, max_per_source * 2),
-                        window_days=window_days,
-                    )
-                    raw_items.extend(gn_items)
-                    if gn_items:
-                        source_meta.append({"type": "google_news"})
-                    print(f"[press] Step 2 — Google News (90d): {len(gn_items)} items")
-                    if not gn_items and press_search_name:
-                        print(
-                            f"[press]   (0 items for {press_search_name!r}; RSS may omit if exact phrase not in headline)"
-                        )
-                except Exception as e:
-                    print(f"[press] Step 2 — Google News failed: {e}")
-
-            # 3) PR Newswire (company name search). 90-day window to match Google News.
-            prn_items = []
-            try:
-                prn_items = collect_prnewswire_items(
-                    press_search_name,
-                    max_items=100,
-                    window_days=window_days,
-                )
-                raw_items.extend(prn_items)
-                if prn_items:
-                    source_meta.append({"type": "prnewswire"})
-            except Exception as e:
-                print(f"[press] Step 3 — PR Newswire failed: {e}")
-            print(f"[press] Step 3 — PR Newswire (90d): {len(prn_items)} items")
-
-            # Log raw counts per source.
             by_provider = {}
             for it in raw_items:
                 p = (it.get("provider") or "").strip() or "unknown"
@@ -909,14 +918,14 @@ def run_press(competitor_name: Optional[str] = None) -> None:
             print(f"[press] Step 4 — Raw total: {len(raw_items)} by source: {by_provider}")
 
             if not raw_items:
-                print(f"[press] Step 4 — Raw total: 0 → skipping (no items)")
+                print(f"[press] Step 4 — Raw total: 0 → skipping (no items from Google News, PR Newswire, or user endpoints)")
                 log_run(
                     session,
                     competitor.id,
                     "press",
                     "skipped",
                     message="no_press_items",
-                    extra={"endpoints": [ep.url for ep in endpoints]},
+                    extra={"search_name": press_search_name},
                 )
                 continue
 

@@ -571,16 +571,8 @@ def collect_prnewswire_items(
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
     company_slug = re.sub(r"[^a-z0-9]", "", company_name.lower())
 
-    # Fast path: check company page first. If 404, no PR Newswire presence — skip search + Playwright.
-    if company_slug:
-        try:
-            company_page_url = f"https://www.prnewswire.com/news/{company_slug}/"
-            head_or_get = fetch_url(company_page_url, timeout=15, headers={"User-Agent": USER_AGENT_BROWSER})
-            if head_or_get.status_code == 404:
-                return []
-        except Exception:
-            pass
-
+    # Do not short-circuit on company page 404: the page may be JS-only (e.g. Blueground) or
+    # the slug may differ; keyword search and company page fetch with Playwright in 1b still find releases.
     query = quote_plus(company_name)
     # Request 100 results per page; pull all links that appear (up to max_items=100).
     search_url = (

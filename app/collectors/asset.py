@@ -935,16 +935,45 @@ def _fetch_blueground_destinations(
     Returns (raw_html, raw_hash, properties).
     """
     opts = extra_options or {}
-    max_dest = opts.get("max_destinations")  # None = all; set to 5-10 for testing
+    max_dest = opts.get("max_destinations")  # None = use default below; set explicitly for full run
+    if max_dest is None and "max_destinations" not in opts:
+        max_dest = 30  # default so we get data without 565-page run or rate limits
+    elif max_dest is None:
+        max_dest = None  # explicit full run
 
     parsed = urlparse(source_url)
     base = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else source_url
     properties: List[dict[str, Any]] = []
     raw_html_parts: List[str] = []
 
+    def _parse_usa_links(html: str) -> List[tuple[str, str, str]]:
+        s = BeautifulSoup(html, "html.parser")
+        out: List[tuple[str, str, str]] = []
+        seen_slugs: set[str] = set()
+        for a in s.find_all("a", href=True):
+            href = (a.get("href") or "").strip()
+            if "/m/furnished-apartments/" not in href:
+                continue
+            match = re.search(r"/m/furnished-apartments/([a-z0-9-]+)", href, re.IGNORECASE)
+            if not match:
+                continue
+            slug = match.group(1).lower()
+            if not slug.endswith("-usa"):
+                continue
+            if "canada" in slug or slug.endswith("-on") or slug.endswith("-bc") or slug.endswith("-ab"):
+                continue
+            if slug in seen_slugs:
+                continue
+            seen_slugs.add(slug)
+            full_url = urljoin(base, href)
+            city, state = _parse_blueground_slug_city_state(slug)
+            out.append((full_url, city, state))
+        return out
+
     # Step 1: get USA destination links from /destinations.
-    # Use Playwright when available so we get full HTML (site may serve minimal/bot content to plain requests).
+    # Try Playwright first when available; if we get 0 USA links, try the other fetch method.
     print(f"[asset] Blueground: fetching destinations page...", flush=True)
+    fetched = None
     if _playwright_available():
         try:
             fetched = fetch_url_js(source_url)
@@ -955,31 +984,22 @@ def _fetch_blueground_destinations(
     if fetched.status_code != 200 or not fetched.text:
         raise RuntimeError(f"Blueground destinations fetch failed: {fetched.status_code}")
     raw_html_parts.append(fetched.text)
-    soup = BeautifulSoup(fetched.text, "html.parser")
-    usa_links: List[tuple[str, str, str]] = []
-    seen_slugs: set[str] = set()
-    for a in soup.find_all("a", href=True):
-        href = (a.get("href") or "").strip()
-        if "/m/furnished-apartments/" not in href:
-            continue
-        match = re.search(r"/m/furnished-apartments/([a-z0-9-]+)", href, re.IGNORECASE)
-        if not match:
-            continue
-        slug = match.group(1).lower()
-        if not slug.endswith("-usa"):
-            continue
-        if "canada" in slug or slug.endswith("-on") or slug.endswith("-bc") or slug.endswith("-ab"):
-            continue
-        if slug in seen_slugs:
-            continue
-        seen_slugs.add(slug)
-        full_url = urljoin(base, href)
-        city, state = _parse_blueground_slug_city_state(slug)
-        usa_links.append((full_url, city, state))
+    usa_links = _parse_usa_links(fetched.text)
+    if not usa_links and _playwright_available():
+        print(f"[asset] Blueground: Playwright HTML had no USA links; trying HTTP fetch for destinations", flush=True)
+        try:
+            alt = fetch_url(source_url)
+            if alt.status_code == 200 and alt.text:
+                usa_links = _parse_usa_links(alt.text)
+                raw_html_parts[0] = alt.text
+        except Exception:
+            pass
+    if not usa_links:
+        print(f"[asset] Blueground: HTTP fetch had no USA links; using destinations page HTML as-is", flush=True)
 
     if max_dest is not None:
         usa_links = usa_links[:max_dest]
-        print(f"[asset] Blueground: using batch of {max_dest} destinations (testing limit; omit extra_options.max_destinations for full run)", flush=True)
+        print(f"[asset] Blueground: using batch of {max_dest} destinations (set extra_options.max_destinations to null for full run)", flush=True)
     else:
         print(f"[asset] Blueground: full North America USA run (all destinations)", flush=True)
 
@@ -1020,6 +1040,7 @@ def _fetch_blueground_destinations(
             })
         return out
 
+    use_js_for_dest = _playwright_available()
     for i, (dest_url, city, state) in enumerate(usa_links):
         print(f"[asset] Blueground: destination {i + 1}/{len(usa_links)} — {city}, {state} ({dest_url})", flush=True)
         try:
@@ -1029,6 +1050,14 @@ def _fetch_blueground_destinations(
                 continue
             raw_html_parts.append(dest_fetched.text)
             props = _extract_properties_from_dest_page(dest_fetched.text, dest_url, city, state)
+            if not props and use_js_for_dest:
+                try:
+                    dest_fetched = fetch_url_js(dest_url)
+                    if dest_fetched.status_code == 200 and dest_fetched.text:
+                        raw_html_parts[-1] = dest_fetched.text
+                        props = _extract_properties_from_dest_page(dest_fetched.text, dest_url, city, state)
+                except Exception:
+                    pass
             properties.extend(props)
             print(f"[asset] Blueground:   found {len(props)} properties (total so far: {len(properties)})", flush=True)
         except Exception as e:
@@ -1042,13 +1071,14 @@ def _fetch_blueground_destinations(
     return (combined, raw_hash, properties)
 
 
-# Default minimum properties to "accept" a strategy result when using strategy_chain.
-# If a strategy returns fewer than this, we try the next in the chain (avoids "succeeding" with wrong process).
+# When a source explicitly sets strategy_chain in extra_options, we only "accept" a strategy result
+# if it has at least this many properties; otherwise we try the next in the chain (avoids accepting
+# a wrong/partial strategy, e.g. HTML returning 2 links when sitemap would return thousands).
+# Sources with no extra_options use the default chain with min_accept=1 (see below).
 _ASSET_CHAIN_MIN_PROPERTIES = 5
 
-# When a source has no strategy_chain and no explicit strategy, we use this chain so new competitors
-# (name + URL only) are tried with all three methods; we only accept when one returns >= min_properties_accept.
-# Order: sitemap first (works for many property/vacation-rental sites), then JS exhaust (Lark-style), then HTML.
+# When a source has no strategy_chain and no explicit strategy, we try this chain and accept the
+# first result with >= 1 property (so seed-added competitors are never excluded by a strict minimum).
 _DEFAULT_ASSET_STRATEGY_CHAIN = ["sitemap_first", "js_exhaust", "html"]
 
 
@@ -1352,16 +1382,20 @@ def collect_asset_snapshot(
 
     # --- Strategy chain: try strategies in order until one returns >= min_properties ---
     # Use explicit chain, or default chain for unknown sources (no strategy_chain and no explicit strategy).
-    # That way new competitors (name + URL only) get sitemap → js_exhaust → html and never "succeed" with 0–4 from HTML.
-    # When a source has an explicit single strategy (e.g. Lark "js_exhaust" + load_more + llm_extract), use that only—
-    # do not use strategy_chain so we get full block extraction and ~69 properties, not chain fallback with fewer.
+    # When a source has an explicit single strategy (e.g. Lark "js_exhaust" + load_more), use that only.
     chain = opts.get("strategy_chain")
     if opts.get("strategy") is not None:
-        chain = None  # Single strategy takes precedence (Lark, etc.)
+        chain = None  # Single strategy takes precedence (Lark, Blueground, etc.)
     if opts.get("strategy") is None:
         if chain is None or (isinstance(chain, list) and len(chain) == 0):
             chain = _DEFAULT_ASSET_STRATEGY_CHAIN
-    min_accept = opts.get("min_properties_accept", _ASSET_CHAIN_MIN_PROPERTIES)
+    # Seed-added competitors often have no extra_options; accept any non-empty result (min_accept=1).
+    # Explicit strategy_chain in opts keeps stricter min (5) unless they set min_properties_accept.
+    using_default_chain = chain == _DEFAULT_ASSET_STRATEGY_CHAIN
+    if "min_properties_accept" in opts:
+        min_accept = opts["min_properties_accept"]
+    else:
+        min_accept = 1 if using_default_chain else _ASSET_CHAIN_MIN_PROPERTIES
     if chain:
         last_snapshot: Optional[Dict[str, Any]] = None
         for strategy_name in chain:
@@ -1377,11 +1411,16 @@ def collect_asset_snapshot(
                     last_snapshot = snapshot
             except Exception:
                 continue
+        # Return best we got (even 0) so the run persists and logs instead of raising.
         if last_snapshot:
             return last_snapshot
-        raise RuntimeError(
-            f"Asset strategy_chain exhausted with no result: tried {chain!r} for {source_url}"
-        )
+        return {
+            "source_url": source_url,
+            "raw_content": "",
+            "raw_hash": None,
+            "properties": [],
+            "note": "chain_exhausted",
+        }
 
     # --- Single strategy (explicit strategy in opts, no chain) ---
     strategy = _infer_strategy()

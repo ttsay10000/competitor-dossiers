@@ -114,7 +114,6 @@ SEED_COMPETITORS = [
         ],
     },
     # Blueground: same Playwright as Lark/AvantStay (talent=JS careers, asset=blueground_destinations).
-    # Only in seed_data.json when file is used; fallback below so DB has Blueground if file is missing.
     {
         "name": "Blueground",
         "primary_domain": "theblueground.com",
@@ -127,6 +126,54 @@ SEED_COMPETITORS = [
                 "extra_options": {"strategy": "blueground_destinations"},
             },
             {"channel": "press", "url": "https://www.theblueground.com/blog", "confidence": "medium"},
+        ],
+    },
+    # Fallback list must include all competitors that are in seed_data.json so that if the file
+    # is missing or unreadable on deploy (e.g. Render), the DB still gets them and cron runs include them.
+    # Include both asset and press so runners see endpoints regardless of how the competitor was added.
+    {
+        "name": "Landing",
+        "primary_domain": "hellolanding.com",
+        "sources": [
+            {"channel": "asset", "url": "https://www.hellolanding.com/locations", "confidence": "high"},
+            {"channel": "press", "url": "https://www.hellolanding.com/blog", "confidence": "medium"},
+            {"channel": "talent", "url": "https://www.hellolanding.com/p/careers/", "confidence": "medium"},
+        ],
+    },
+    {
+        "name": "Rove",
+        "primary_domain": "rovetravel.com",
+        "sources": [
+            {"channel": "asset", "url": "https://rovetravel.com/search", "confidence": "high"},
+            {"channel": "talent", "url": "https://jobs.gem.com/rove", "confidence": "high"},
+        ],
+    },
+    {
+        "name": "Vacasa",
+        "primary_domain": "vacasa.com",
+        "sources": [
+            {
+                "channel": "asset",
+                "url": "https://www.vacasa.com/search?place=/usa/",
+                "confidence": "high",
+                "js_required": True,
+                "extra_options": {
+                    "strategy_chain": ["sitemap_first", "js_exhaust", "html"],
+                    "min_properties_accept": 5,
+                    "enrich_sitemap_locations": True,
+                    "enrich_sitemap_max_fetches": 500,
+                    "enrich_sitemap_delay_sec": 0.3,
+                    "load_more": {
+                        "scroll_window": True,
+                        "max_scrolls": 2000,
+                        "scroll_wait_sec": 1.5,
+                        "scroll_no_progress_limit": 5,
+                        "scroll_batch_wait_sec": 0.5,
+                    },
+                },
+            },
+            {"channel": "press", "url": "https://www.vacasa.com/blog", "confidence": "medium"},
+            {"channel": "talent", "url": "https://job-boards.greenhouse.io/vacasa", "confidence": "medium"},
         ],
     },
 ]
@@ -221,7 +268,14 @@ def run_seed() -> None:
                 entry.get("primary_domain"),
                 is_active=entry.get("is_active", True),
             )
-            for source in entry.get("sources", []):
+            # Prefer "sources" (list); allow "source" (single dict) so typos don't leave competitor with no endpoints.
+            raw_sources = entry.get("sources") if entry.get("sources") is not None else entry.get("source")
+            if isinstance(raw_sources, dict):
+                raw_sources = [raw_sources]
+            sources = raw_sources if isinstance(raw_sources, list) else []
+            for source in sources:
+                if not isinstance(source, dict) or not source.get("channel") or not source.get("url"):
+                    continue
                 upsert_source(
                     session,
                     competitor.id,
