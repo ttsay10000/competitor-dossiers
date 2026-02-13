@@ -931,15 +931,13 @@ def _fetch_blueground_destinations(
     Blueground-specific: destinations page -> each North America USA destination page
     (/m/furnished-apartments/acton-ma-usa) has property links (/p/furnished-apartments/bos-XXX).
     Scrape the destination page directly for those links (no Search click needed).
-    extra_options.max_destinations: optional limit for testing (omit for full run of all USA destinations).
+    extra_options.max_destinations: optional limit for testing (e.g. 2 or 30); omit for full run of all USA destinations.
     Returns (raw_html, raw_hash, properties).
     """
     opts = extra_options or {}
-    max_dest = opts.get("max_destinations")  # None = use default below; set explicitly for full run
-    if max_dest is None and "max_destinations" not in opts:
-        max_dest = 30  # default so we get data without 565-page run or rate limits
-    elif max_dest is None:
-        max_dest = None  # explicit full run
+    max_dest = opts.get("max_destinations")  # None or absent = full run; number = limit for testing
+    if max_dest is not None:
+        max_dest = int(max_dest)
 
     parsed = urlparse(source_url)
     base = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else source_url
