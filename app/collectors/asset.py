@@ -940,16 +940,24 @@ def _is_detail_line_or_junk_name(name: str) -> bool:
     return False
 
 
+def _location_tuple(prop: dict[str, Any]) -> tuple[str, str, str]:
+    """Normalized (market, city, state) for dedupe key — same name/URL in different cities stay separate."""
+    market = ((prop.get("market") or "").strip() or "").lower()
+    city = ((prop.get("city") or "").strip() or "").lower()
+    state = ((prop.get("state") or "").strip() or "").lower()
+    return (market, city, state)
+
+
 def normalize_properties(properties: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
-    Normalize property dicts and deduplicate by URL (and by name/market when URL is missing).
+    Normalize property dicts and deduplicate by URL+location (and by name+location when URL is missing).
 
-    This keeps counts aligned with the real number of distinct properties on a page
-    (e.g. Placemakr's locations, which have multiple links like "All Properties", CTAs, etc.).
+    Same property name or same URL in different cities/markets are NOT combined — only dedupe when
+    both identifier and location match (e.g. cross-city listings like "The 55 Elm Club" in Hartford
+    vs New Haven remain separate).
     """
     normalized: list[dict[str, Any]] = []
-    seen_url_keys: set[str] = set()
-    seen_name_market: set[tuple[str, str]] = set()
+    seen_keys: set[tuple[Any, ...]] = set()
 
     def _url_key(url: Optional[str]) -> str:
         """Normalize URL to a path-only key for deduping (handles relative vs absolute)."""
@@ -975,16 +983,15 @@ def normalize_properties(properties: list[dict[str, Any]]) -> list[dict[str, Any
 
         raw_url = prop.get("url")
         market_val = (prop.get("market") or "").strip() or None
-        key = _url_key(raw_url)
-        if key:
-            if key in seen_url_keys:
-                continue
-            seen_url_keys.add(key)
+        url_key = _url_key(raw_url)
+        loc = _location_tuple(prop)
+        if url_key:
+            dedupe_key = ("url", url_key, loc)
         else:
-            nm = (name, market_val or "")
-            if nm in seen_name_market:
-                continue
-            seen_name_market.add(nm)
+            dedupe_key = ("name", name.lower(), loc)
+        if dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
 
         normalized.append(
             {

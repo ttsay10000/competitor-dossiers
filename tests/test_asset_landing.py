@@ -79,6 +79,22 @@ class TestLandingAssetFlow(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["name"], "Park South")
 
+    def test_normalize_properties_does_not_dedupe_same_name_different_city(self) -> None:
+        """Same property name in different cities/markets must remain separate (cross-city listings)."""
+        props = [
+            {"url": None, "name": "The 55 Elm Club", "market": "Hartford, CT", "city": None, "state": None},
+            {"url": None, "name": "The 55 Elm Club", "market": "New Haven, CT", "city": None, "state": None},
+            {"url": "https://example.com/legacy-fort-clarke", "name": "Legacy at Fort Clarke", "market": "Gainesville, FL", "city": None, "state": None},
+            {"url": "https://example.com/legacy-fort-clarke", "name": "Legacy at Fort Clarke", "market": "Ocala, FL", "city": None, "state": None},
+        ]
+        out = normalize_properties(props)
+        self.assertEqual(len(out), 4, "Same name/URL in different cities should not be combined")
+        markets = [p["market"] for p in out]
+        self.assertIn("Hartford, CT", markets)
+        self.assertIn("New Haven, CT", markets)
+        self.assertIn("Gainesville, FL", markets)
+        self.assertIn("Ocala, FL", markets)
+
 
 if __name__ == "__main__":
     unittest.main()
