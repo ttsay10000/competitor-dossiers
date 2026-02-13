@@ -8,6 +8,15 @@
   </div>
   {% endif %}
 
+  {% if running_run_start_ts %}
+  <div class="card" role="status" style="border-left: 6px solid #b8860b;">
+    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+      <p style="margin: 0;">A run is in progress. Remaining jobs will stop after you cancel (they may take a moment to notice).</p>
+      <button type="button" id="runs-cancel-btn" class="secondary" data-run-start-ts="{{ running_run_start_ts }}">Cancel run</button>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="card">
     <form method="get" action="/runs">
       <div class="row">
@@ -123,6 +132,23 @@
 
   <script>
     (function() {
+      document.getElementById('runs-cancel-btn')?.addEventListener('click', function() {
+        var ts = this.getAttribute('data-run-start-ts');
+        if (!ts) return;
+        this.disabled = true;
+        this.textContent = 'Cancelling…';
+        fetch('/competitors/cancel-run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ run_start_ts: parseInt(ts, 10) })
+        })
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (data.ok) window.location.reload();
+          })
+          .catch(function() { document.getElementById('runs-cancel-btn').disabled = false; document.getElementById('runs-cancel-btn').textContent = 'Cancel run'; });
+      });
+
       function updateElapsed() {
         var now = Math.floor(Date.now() / 1000);
         document.querySelectorAll('.run-elapsed').forEach(function(el) {

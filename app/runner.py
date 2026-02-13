@@ -1652,17 +1652,29 @@ def run_reviews(competitor_name: Optional[str] = None) -> None:
             print(f"[reviews] Done. {ok_count}/{len(props)} properties.")
 
 
+# Website/digital-footprint event types; we only keep these since last baseline (no running log).
+DIGITAL_FOOTPRINT_EVENT_TYPES = ("narrative.homepage_updated", "narrative.coming_soon")
+
+
 def advance_baseline_after_full_refresh() -> None:
     """
     Set every competitor's reporting_baseline_at to now.
     Call this after a full refresh (all channels) so the executive summary and dossier
     compare against the last refresh, not the original baseline—surfacing only what
     changed since the last run (e.g. last 7 days) instead of the full period since first reset.
+    Also deletes old website/digital-footprint events (homepage_updated, coming_soon) so we
+    only retain changes since this baseline—no heavy running log.
     """
     with get_session() as session:
         now = datetime.now(timezone.utc)
         for c in session.query(Competitor).all():
             c.reporting_baseline_at = now
+            # Keep only website-change events since this baseline; drop older ones.
+            session.query(Event).filter(
+                Event.competitor_id == c.id,
+                Event.type.in_(DIGITAL_FOOTPRINT_EVENT_TYPES),
+                Event.detected_at < now,
+            ).delete(synchronize_session=False)
 
 
 def run(

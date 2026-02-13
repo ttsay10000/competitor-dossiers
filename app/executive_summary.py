@@ -232,6 +232,26 @@ def _build_context_text(context: Dict[str, Any]) -> str:
                 "Only baseline data available (no refresh since). Summarize current state where applicable."
             )
 
+    # Detect "no changes" case: refresh happened but no property/job/event deltas.
+    events_week = context.get("events_this_week") or []
+    asset_added = context.get("asset_added_since_baseline") or 0
+    asset_removed = context.get("asset_removed_since_baseline") or 0
+    jobs_added = context.get("jobs_added_since_baseline") or 0
+    jobs_removed = context.get("jobs_removed_since_baseline") or 0
+    no_changes = (
+        has_any_refresh
+        and asset_added == 0
+        and asset_removed == 0
+        and jobs_added == 0
+        and jobs_removed == 0
+        and not events_week
+    )
+    if no_changes:
+        parts.append(
+            "No changes since last refresh: properties, jobs, and signals unchanged. "
+            "Include this in your summary (e.g. a bullet noting 'No changes to properties, jobs, or signals since last refresh')."
+        )
+
     # 1. Asset: changes vs baseline (added/removed per state) when we have a refresh; else baseline footprint only.
     if has_asset_refresh:
         added = context.get("asset_added_since_baseline") or 0
@@ -358,18 +378,13 @@ def generate_executive_summary(context: Dict[str, Any]) -> Optional[str]:
 
     system = """You are an AI Chief of Staff writing a competitive intelligence brief for Kasa's CEO and exec team. Be concise and executive-level: scannable in 30 seconds. Filter noise, cluster related updates, and translate changes into clear implications and actions.
 
-The data you receive contains ONLY: (1) Top news from the past 2-3 weeks; (2) Asset/property changes vs baseline (or baseline footprint if no refresh); (3) Job count changes vs baseline (or baseline count if no refresh); (4) Website/digital footprint changes since last refresh; (5) Social media and review updates (new or significant). When the input says "only baseline" or "no refresh yet", summarize current state; when it says "changes since baseline", summarize only those changes.
+The data you receive contains ONLY: (1) Top news from the past 2-3 weeks; (2) Asset/property changes vs baseline (or baseline footprint if no refresh); (3) Job count changes vs baseline (or baseline count if no refresh); (4) Website/digital footprint changes since last refresh; (5) Social media and review updates (new or significant). When the input says "only baseline" or "no refresh yet", summarize current state; when it says "changes since baseline", summarize only those changes. When the input says "No changes since last refresh", include a brief bullet noting this (e.g. "No changes to properties, jobs, or signals since last refresh")—this is common and worth stating explicitly.
 
 PRIORITY: Lead with (1) news/press, (2) asset/footprint, (3) talent/hiring, (4) digital footprint. Include social/review sentiment only when it reflects major change. Do not restate every datapoint—only changes that materially alter competitive dynamics (market entry/exit, meaningful inventory, pricing/fees, key hiring, major product/positioning, partnerships, regulatory). Drop cosmetic or one-off items.
 
 Return in this exact structure. Do NOT start with "EXECUTIVE SUMMARY" or any top-level header—the page already has a header. Use only single newlines between bullets and sections.
 
-• (3–5 bullets): most important shifts, why it matters, risk/opportunity (Low/Med/High). One line per bullet where possible; no paragraph-length bullets. Concrete and decisive.
-
-IMPACT ON KASA / RECOMMENDED ACTION
-• (1–2 bullets): specific risk or opportunity for Kasa. End with one line: RECOMMENDED ACTION: [Ignore / Monitor / Copy / Counter-position / Pre-empt / Partner], plus one short phrase why.
-
-INDUSTRY CONTEXT (optional, 0–2 bullets): only if this competitor's moves reflect a broader trend worth calling out.
+• (3–5 bullets): most important shifts, why it matters. One line per bullet where possible; no paragraph-length bullets. Concrete and decisive.
 
 Format: bullet character • for every list item (never dash -). No "EXECUTIVE SUMMARY" at top. Style: bullets only, no fluff, concrete language, strong verbs, ~120–200 words total."""
 
@@ -415,7 +430,7 @@ def generate_rollup_summary(per_competitor_summaries: List[Tuple[int, str, str]]
     if not blocks:
         return None
     combined = "\n\n".join(blocks)
-    system = """You are an AI Chief of Staff for Kasa's exec team. You are given executive summaries for several competitors (each block below is one competitor, with a header "--- Name (id=...) ---"). Each summary has top-line bullets and may include IMPACT ON KASA / RECOMMENDED ACTION. Pull out concrete facts from the summaries to write the roll-up; do NOT include recommended actions in the output.
+    system = """You are an AI Chief of Staff for Kasa's exec team. You are given executive summaries for several competitors (each block below is one competitor, with a header "--- Name (id=...) ---"). Pull out concrete facts from the summaries to write the roll-up.
 
 Output exactly two parts:
 
@@ -613,19 +628,21 @@ def format_rollup_summary_for_display(text: Optional[str]) -> Optional[str]:
 # EXECUTIVE SUMMARY is not included—we strip that line so the page header is the only title.
 _EXEC_SUMMARY_SECTION_HEADERS = frozenset({
     "Key takeaways",
+})
+
+# Sections to strip from display (no longer generated; hide if present in older summaries).
+_STRIP_SECTIONS = frozenset({
     "IMPACT ON KASA / RECOMMENDED ACTION",
     "INDUSTRY CONTEXT",
 })
 
-# Recommended action line gets bold + accent color (e.g. "RECOMMENDED ACTION: Monitor").
-RECOMMENDED_ACTION_CSS_COLOR = "#0d6efd"
-
 
 def format_executive_summary_for_display(text: Optional[str]) -> Optional[str]:
     """
-    Escape summary text, bold section headers, and highlight RECOMMENDED ACTION with color.
-    Strips a leading EXECUTIVE SUMMARY line, normalizes dashes to bullets (•), removes
-    blank lines before section headers, and collapses multiple consecutive blank lines to one.
+    Escape summary text, bold section headers.
+    Strips a leading EXECUTIVE SUMMARY line, removes IMPACT ON KASA / RECOMMENDED ACTION
+    and INDUSTRY CONTEXT sections, normalizes dashes to bullets (•), removes blank lines
+    before section headers, and collapses multiple consecutive blank lines to one.
     """
     if not text or not isinstance(text, str):
         return text
@@ -634,6 +651,29 @@ def format_executive_summary_for_display(text: Optional[str]) -> Optional[str]:
     # Strip leading "EXECUTIVE SUMMARY" or "EXECUTIVE SUMMARY:" line so the page header is the only title.
     while lines and lines[0].strip().upper() in ("EXECUTIVE SUMMARY", "EXECUTIVE SUMMARY:"):
         lines.pop(0)
+    # Remove IMPACT ON KASA / RECOMMENDED ACTION and INDUSTRY CONTEXT sections (and their content).
+    strip_headers_upper = {h.upper() for h in _STRIP_SECTIONS}
+    filtered = []
+    in_strip_section = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.upper() in strip_headers_upper:
+            in_strip_section = True
+            continue
+        if in_strip_section and stripped and stripped in _EXEC_SUMMARY_SECTION_HEADERS:
+            in_strip_section = False
+        if in_strip_section:
+            # Still in a strip section: skip bullet lines until next section or blank+section.
+            if stripped and not (stripped.startswith("- ") or stripped.startswith("• ") or stripped.startswith("* ")):
+                # Could be start of next section (e.g. "Key takeaways")
+                if stripped in _EXEC_SUMMARY_SECTION_HEADERS:
+                    in_strip_section = False
+                else:
+                    continue  # other non-bullet line inside strip section
+            else:
+                continue  # bullet under strip section
+        filtered.append(line)
+    lines = filtered
     # Collapse multiple consecutive blank lines to a single blank line (reduces spacing between bullets).
     collapsed = []
     prev_blank = False
@@ -672,7 +712,7 @@ def format_executive_summary_for_display(text: Optional[str]) -> Optional[str]:
                 j += 1
             if j < len(lines):
                 next_stripped = lines[j].strip().upper()
-                if next_stripped in section_headers_upper or next_stripped.startswith("RECOMMENDED ACTION:"):
+                if next_stripped in section_headers_upper:
                     continue  # drop this blank line before header
         tightened.append(line)
     lines = tightened
@@ -683,17 +723,11 @@ def format_executive_summary_for_display(text: Optional[str]) -> Optional[str]:
         if line.startswith("- ") and not line.startswith("• "):
             line = "• " + line[2:]
         escaped = html.escape(line)
-        # One blank line before section headers and RECOMMENDED ACTION for consistent spacing.
+        # One blank line before section headers for consistent spacing.
         is_section_header = stripped in _EXEC_SUMMARY_SECTION_HEADERS
-        is_recommended_action = stripped.upper().startswith("RECOMMENDED ACTION:")
-        if (is_section_header or is_recommended_action) and out:
+        if is_section_header and out:
             out.append("")
-        if is_recommended_action:
-            out.append(
-                "<strong><span style=\"color: " + RECOMMENDED_ACTION_CSS_COLOR + ";\">"
-                + html.escape(stripped) + "</span></strong>"
-            )
-        elif is_section_header:
+        if is_section_header:
             out.append("<strong>" + html.escape(stripped) + "</strong>")
         else:
             out.append(escaped)

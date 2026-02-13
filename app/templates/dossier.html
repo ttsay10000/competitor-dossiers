@@ -14,6 +14,15 @@
       <p class="meta mt-4">{{ error }}</p>
     </div>
   {% endif %}
+  {% if run_blocked %}
+    <div class="card mb-16" style="border-left: 6px solid #b8860b;">
+      <strong>Refresh not started</strong>
+      <p class="meta mt-4">A refresh is already running for this competitor (same channel(s)). Wait for it to finish or <a href="/runs">cancel it on the Run status page</a>.</p>
+      {% if run_blocked_running %}
+      <p class="meta mt-2">Currently running: {{ run_blocked_running }}</p>
+      {% endif %}
+    </div>
+  {% endif %}
   <div class="card mb-16">
     <strong>Refresh or populate data</strong>
     {% set _channels = display_channels | default(['talent', 'asset', 'press', 'homepage', 'reviews', 'social']) %}
@@ -439,7 +448,7 @@
     <!-- Website changes / digital footprint -->
     <div id="website-changes" class="card dossier-section mb-24">
       <strong>Website changes / digital footprint</strong>
-      <p class="meta card-desc">Homepage, product page, or coming-soon changes that may signal strategy or pipeline shifts.</p>
+      <p class="meta card-desc">Changes since last refresh only (no running log). Force refresh sets the baseline; only URL/site/page changes after that are shown.</p>
       {% if digital_footprint_events|length %}
         <ul class="card-list">
           {% for event in digital_footprint_events %}
@@ -452,7 +461,7 @@
           {% endfor %}
         </ul>
       {% else %}
-        <div class="meta">No website or digital footprint changes in the past 90 days.</div>
+        <div class="meta">No website or digital footprint changes since last refresh.</div>
       {% endif %}
     </div>
 

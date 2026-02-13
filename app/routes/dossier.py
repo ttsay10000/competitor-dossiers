@@ -330,7 +330,7 @@ def format_dossier_preview_text(context: dict) -> str:
         if len(df_events) > 5:
             lines.append(f"  … and {len(df_events) - 5} more")
     else:
-        lines.append("  No website or digital footprint changes in the past 90 days.")
+        lines.append("  No website or digital footprint changes since last refresh.")
     lines.append("")
     lines.append("--- Social media updates ---")
     social_posts = context.get("social_posts") or []
@@ -696,12 +696,20 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
 
     # Properties by location (state/city) for high-level week-over-week tracking.
     # Aggregate count and total keys per location (keys parsed from property details).
-    location_counts = {}
-    location_keys = {}
+    # When snapshot has location_counts (e.g. Landing), use it so 0-property markets appear (upcoming areas).
+    raw_location_counts = (latest_asset.structured_json or {}).get("location_counts", []) if latest_asset else []
+    location_counts: dict[str, int] = {}
+    location_keys: dict[str, int] = {}
     for p in asset_props:
         loc = infer_location_for_property(p)
         location_counts[loc] = location_counts.get(loc, 0) + 1
         location_keys[loc] = location_keys.get(loc, 0) + parse_keys_from_details(p.get("details"))
+    if raw_location_counts:
+        for item in raw_location_counts:
+            if isinstance(item, dict) and "market" in item and "count" in item:
+                m = (item.get("market") or "").strip()
+                if m:
+                    location_counts[m] = int(item.get("count", 0))
     properties_by_location = [
         {"location": loc, "count": n, "keys": location_keys.get(loc, 0)}
         for loc, n in sorted(location_counts.items(), key=lambda x: (-x[1], x[0]))
@@ -714,6 +722,12 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
             "name": (p.get("name") or "").strip() or "Unnamed",
             "details": (p.get("details") or "").strip() or None,
         })
+    if raw_location_counts:
+        for item in raw_location_counts:
+            if isinstance(item, dict) and "market" in item:
+                m = (item.get("market") or "").strip()
+                if m and m not in by_loc_list:
+                    by_loc_list[m] = []
     def _location_sort_key(item):
         loc, plist = item
         is_trailing = 1 if (loc or "").strip() in ("Other", "Unspecified") else 0
@@ -1145,8 +1159,9 @@ def export_seed_from_ui(request: Request):
 def force_refresh_and_reset_baseline(request: Request):
     """
     Run seed first (seed_data.json → DB), then clear all snapshots (every channel, every
-    competitor), set each competitor's reporting_baseline_at to now, then run all channels
-    for all active competitors. Ensures DB is in sync with seed before full re-enrich.
+    competitor), run all channels for all active competitors, then set each competitor's
+    reporting_baseline_at to now. The first refresh establishes the baseline; subsequent
+    refreshes compare against it so executive summaries surface what changed.
     """
     from ..runner import run as run_all_channels, advance_baseline_after_full_refresh, clear_all_snapshots
     from ..db import get_session
@@ -1158,8 +1173,8 @@ def force_refresh_and_reset_baseline(request: Request):
         with get_session() as session:
             deleted = clear_all_snapshots(session, channel=None)
         logging.info("Force refresh: cleared %d snapshot(s) (all channels, all competitors).", deleted)
-        advance_baseline_after_full_refresh()
         run_all_channels()
+        advance_baseline_after_full_refresh()  # Set baseline AFTER run so new snapshots become the baseline
         return RedirectResponse(url="/competitors?refreshed=1&forced=1", status_code=303)
     except Exception as e:
         logging.exception("Force refresh failed: %s", e)
@@ -1220,6 +1235,8 @@ def dossier(request: Request, competitor_id: int):
             context["executive_summary_lazy"] = bool(settings.openai_api_key)
             context["properties_refinement_available"] = bool(settings.openai_api_key)
             context["review_error"] = request.query_params.get("review_error")
+            context["run_blocked"] = request.query_params.get("run_blocked") == "1"
+            context["run_blocked_running"] = request.query_params.get("running") or ""
     except Exception as exc:
         import traceback
         traceback.print_exc()

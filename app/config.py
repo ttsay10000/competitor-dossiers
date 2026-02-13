@@ -45,6 +45,23 @@ class Settings:
         # LinkedIn: path to saved Playwright storage state from a logged-in session.
         # Run: python3 -m scripts.save_linkedin_session  (then log in in the browser)
         self.linkedin_storage_state_path = (os.getenv("LINKEDIN_STORAGE_STATE_PATH") or "").strip().rstrip("/") or None
+        # Email report (digest) send: optional SMTP. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, DIGEST_FROM_EMAIL to enable "Send" button.
+        self.smtp_host = (os.getenv("SMTP_HOST") or "").strip() or None
+        self.smtp_port = int((os.getenv("SMTP_PORT") or "587").strip())
+        self.smtp_user = (os.getenv("SMTP_USER") or "").strip() or None
+        self.smtp_password = (os.getenv("SMTP_PASSWORD") or "").strip() or None
+        self.smtp_use_tls = (os.getenv("SMTP_USE_TLS", "true").strip().lower() not in ("0", "false", "no"))
+        self.digest_from_email = (os.getenv("DIGEST_FROM_EMAIL") or "").strip() or None
+
+    @property
+    def digest_send_enabled(self) -> bool:
+        """True if SMTP is configured enough to send the digest email."""
+        return bool(
+            self.smtp_host
+            and self.digest_from_email
+            and self.smtp_user
+            and self.smtp_password
+        )
 
 
 settings = Settings()

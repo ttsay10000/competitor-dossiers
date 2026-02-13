@@ -13,7 +13,7 @@
       <h3 style="margin: 0;">Competitors</h3>
       <p class="meta" style="margin-top: 4px;">Manage the list of competitors and open their dossiers.</p>
     </div>
-    <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+    <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
       <form method="post" action="/dossier/run-seed" style="display: inline-block;" title="Load seed_data.json into the database (file → DB).">
         <button type="submit" class="secondary">Run seed</button>
       </form>
@@ -27,6 +27,15 @@
       <a href="/competitors/new"><button>Add competitor</button></a>
     </div>
   </div>
+  {% if run_blocked %}
+  <div class="card mt-16" style="border-left: 6px solid #b8860b;">
+    <strong>Refresh not started</strong>
+    <p class="meta mt-4">Some channels are already running for one or more competitors. Wait for them to finish or <a href="/runs">cancel from the Run status page</a>.</p>
+    {% if run_blocked_running %}
+    <p class="meta mt-2">Currently running: {{ run_blocked_running }}</p>
+    {% endif %}
+  </div>
+  {% endif %}
   <script>
     (function() {
       var statusEl = document.getElementById('refresh-status');
@@ -81,9 +90,10 @@
   <p class="meta" style="margin: -8px 0 12px 0;">
     <strong>Run seed</strong>: loads <code>seed_data.json</code> into the database (file → DB).<br>
     <strong>Export seed</strong>: writes the current DB to <code>seed_data.json</code> (DB → file).<br>
-    <strong>Force refresh &amp; reset baseline</strong>: runs seed first (file → DB), then deletes <em>all</em> snapshots, sets each competitor’s comparison date to now, and runs all collectors. Use after editing the seed file, changing press/LLM logic, or when runs are still skipping.</p>
+    <strong>Force refresh &amp; reset baseline</strong>: runs seed first (file → DB), then deletes <em>all</em> snapshots, runs all collectors, then sets each competitor’s comparison date to now. That first run establishes the baseline; the next refresh will surface changes in the executive summary. Use after editing the seed file, changing press/LLM logic, or when runs are still skipping.</p>
   <div class="card" id="rollup-card">
     <h3>Recent updates</h3>
+    <p class="meta" style="margin: -4px 0 8px 0;"><a href="/digest">Email report</a> (weekly digest)</p>
     <div id="rollup-content" class="rollup-box" style="max-height: 280px; overflow-y: auto; white-space: pre-wrap; font-size: 14px; line-height: 1.5;">Loading…</div>
   </div>
   <script>

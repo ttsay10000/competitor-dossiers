@@ -1,10 +1,22 @@
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from datetime import datetime, timedelta, timezone
 
+from .config import settings
 from .db import get_session
 from .models import Competitor, Event
 
 
 SEVERITY_ORDER = {"high": 0, "med": 1, "low": 2}
+
+# Simple check: at least one @ and a dot in the local part or domain
+def _is_valid_email(s: str) -> bool:
+    s = (s or "").strip()
+    if not s or "@" not in s:
+        return False
+    local, _, domain = s.partition("@")
+    return bool(local and domain and "." in domain)
 
 
 def build_weekly_digest(days: int = 7, per_competitor: int = 3) -> str:
@@ -40,6 +52,34 @@ def build_weekly_digest(days: int = 7, per_competitor: int = 3) -> str:
 def print_weekly_digest(days: int = 7, per_competitor: int = 3) -> None:
     digest = build_weekly_digest(days=days, per_competitor=per_competitor)
     print(digest)
+
+
+def send_weekly_digest(to_emails: list[str], days: int = 7, per_competitor: int = 3) -> tuple[bool, str]:
+    """
+    Build the weekly digest and send it to the given addresses via SMTP.
+    Returns (success, message). Uses settings.smtp_* and settings.digest_from_email.
+    """
+    if not settings.digest_send_enabled:
+        return False, "Email send is not configured (set SMTP_* and DIGEST_FROM_EMAIL)."
+    to_emails = [e.strip() for e in to_emails if _is_valid_email(e.strip())]
+    if not to_emails:
+        return False, "No valid email addresses provided."
+    body = build_weekly_digest(days=days, per_competitor=per_competitor)
+    subject = f"Competitor Signals — Weekly Digest ({datetime.now(timezone.utc).strftime('%Y-%m-%d')})"
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = settings.digest_from_email
+    msg["To"] = ", ".join(to_emails)
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+    try:
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+            if settings.smtp_use_tls:
+                server.starttls()
+            server.login(settings.smtp_user, settings.smtp_password)
+            server.sendmail(settings.digest_from_email, to_emails, msg.as_string())
+        return True, f"Sent to {', '.join(to_emails)}."
+    except Exception as e:
+        return False, str(e)
 
 
 if __name__ == "__main__":

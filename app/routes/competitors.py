@@ -110,6 +110,8 @@ def competitors_list(request: Request):
             })
         last_refreshed = get_last_refreshed(session)
     nav_competitors = [{"id": c["id"], "name": c["name"], "created_at": c.get("created_at")} for c in competitors_data]
+    run_blocked = request.query_params.get("run_blocked") == "1"
+    run_blocked_running = request.query_params.get("running") or ""
     return request.app.state.templates.TemplateResponse(
         "competitors.html",
         {
@@ -119,6 +121,8 @@ def competitors_list(request: Request):
             "last_refreshed": last_refreshed,
             "display_channels": DISPLAY_CHANNELS,
             "channel_letters": CHANNEL_LETTERS,
+            "run_blocked": run_blocked,
+            "run_blocked_running": run_blocked_running,
         },
     )
 
@@ -322,6 +326,39 @@ def _parse_channels(value: Optional[str]) -> Optional[list[str]]:
     return valid if valid else None
 
 
+def _running_for_competitor_channels(session, competitor_id: int, channels: Optional[list[str]]) -> list[tuple[str, str]]:
+    """Return list of (competitor_name, channel) that are already running for this competitor (and given channels or any)."""
+    running = (
+        session.query(RunLog.channel, Competitor.name)
+        .join(Competitor, RunLog.competitor_id == Competitor.id)
+        .filter(RunLog.competitor_id == competitor_id, RunLog.status == "running")
+        .all()
+    )
+    if channels is not None:
+        ch_set = set(channels)
+        running = [(name, ch) for ch, name in running if ch in ch_set]
+    else:
+        running = [(name, ch) for ch, name in running]
+    return running
+
+
+def _running_for_any_selected(session, competitor_ids: list[int], channels: list[str]) -> list[tuple[str, str]]:
+    """Return list of (competitor_name, channel) that are already running for any of the given (competitor_id, channel) pairs."""
+    if not competitor_ids or not channels:
+        return []
+    running = (
+        session.query(RunLog.competitor_id, RunLog.channel, Competitor.name)
+        .join(Competitor, RunLog.competitor_id == Competitor.id)
+        .filter(
+            RunLog.competitor_id.in_(competitor_ids),
+            RunLog.channel.in_(channels),
+            RunLog.status == "running",
+        )
+        .all()
+    )
+    return [(name, ch) for _cid, ch, name in running]
+
+
 @router.post("/competitors/{competitor_id}/run-now")
 async def competitor_run_now(request: Request, competitor_id: int):
     """Start data collection for this competitor in the background. Optional form/query: channels=talent,asset,press or channels[]."""
@@ -338,6 +375,19 @@ async def competitor_run_now(request: Request, competitor_id: int):
         channels = _parse_channels(request.query_params.get("channels"))
     if channels:
         channels = _sort_channels_by_run_order(channels)
+
+    with get_session() as session:
+        competitor = session.get(Competitor, competitor_id)
+        if competitor is None:
+            return RedirectResponse(url="/competitors", status_code=HTTP_303_SEE_OTHER)
+        name = competitor.name
+        # Block if a refresh is already running for this competitor (same channels we're about to start)
+        channels_to_run = list(channels) if channels else None  # None = all channels
+        already = _running_for_competitor_channels(session, competitor_id, channels_to_run)
+        if already:
+            # Redirect to dossier so user sees message; they can cancel from Run status or wait
+            redirect_url = f"/dossier/{competitor_id}?run_blocked=1&running=" + ",".join(f"{n}:{ch}" for n, ch in already[:5])
+            return RedirectResponse(url=redirect_url, status_code=HTTP_303_SEE_OTHER)
 
     run_start_ts = int(datetime.now(timezone.utc).timestamp())
     with get_session() as session:
@@ -384,6 +434,15 @@ async def competitors_run_selected_channels(request: Request):
     if not channels:
         return RedirectResponse(url="/competitors", status_code=HTTP_303_SEE_OTHER)
     channels = _sort_channels_by_run_order(channels)
+
+    with get_session() as session:
+        competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        competitors = [c for c in competitors if getattr(c, "is_active", True)]
+        competitor_ids = [c.id for c in competitors]
+        already = _running_for_any_selected(session, competitor_ids, channels)
+        if already:
+            redirect_url = "/competitors?run_blocked=1&running=" + ",".join(f"{n}:{ch}" for n, ch in already[:10])
+            return RedirectResponse(url=redirect_url, status_code=HTTP_303_SEE_OTHER)
 
     run_start_ts = int(datetime.now(timezone.utc).timestamp())
     competitor_names = []

@@ -135,7 +135,12 @@ SEED_COMPETITORS = [
         "name": "Landing",
         "primary_domain": "hellolanding.com",
         "sources": [
-            {"channel": "asset", "url": "https://www.hellolanding.com/locations", "confidence": "high"},
+            {
+                "channel": "asset",
+                "url": "https://www.hellolanding.com/locations",
+                "confidence": "high",
+                "extra_options": {"strategy": "landing_locations"},
+            },
             {"channel": "press", "url": "https://www.hellolanding.com/blog", "confidence": "medium"},
             {"channel": "talent", "url": "https://www.hellolanding.com/p/careers/", "confidence": "medium"},
         ],

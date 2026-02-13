@@ -2,6 +2,19 @@
 {% block content %}
   <h1>Weekly Digest</h1>
   <div class="card">
+    <strong>Send by email</strong>
+    {% if send_enabled %}
+      <p class="meta" style="margin-top: 4px;">Enter recipient address(es), then click Send. Separate multiple addresses with commas.</p>
+      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px;">
+        <input type="text" id="digest-to-email" placeholder="you@example.com or a@b.com, c@d.com" style="flex: 1; min-width: 200px; padding: 8px 10px; font-size: 14px; border: 1px solid var(--border); border-radius: 6px;" />
+        <button type="button" id="digest-send-btn">Send</button>
+        <span id="digest-send-status" class="meta" style="margin-left: 4px;"></span>
+      </div>
+    {% else %}
+      <p class="meta" style="margin-top: 4px;">Configure SMTP to enable sending: set <code>SMTP_HOST</code>, <code>SMTP_PORT</code>, <code>SMTP_USER</code>, <code>SMTP_PASSWORD</code>, and <code>DIGEST_FROM_EMAIL</code> in your environment.</p>
+    {% endif %}
+  </div>
+  <div class="card">
     <strong>Last Runs</strong>
     <div class="meta">
       {% if last_runs %}
@@ -40,4 +53,51 @@
       <div class="empty">No digest yet. Run collectors and generate digest.</div>
     {% endif %}
   </div>
+  {% if send_enabled %}
+  <script>
+    (function() {
+      var btn = document.getElementById('digest-send-btn');
+      var input = document.getElementById('digest-to-email');
+      var status = document.getElementById('digest-send-status');
+      if (!btn || !input || !status) return;
+      btn.addEventListener('click', function() {
+        var raw = (input.value || '').trim();
+        if (!raw) {
+          status.textContent = 'Enter at least one email address.';
+          status.style.color = 'var(--warning, #b8860b)';
+          return;
+        }
+        var emails = raw.split(/[\s,]+/).map(function(s) { return s.trim(); }).filter(Boolean);
+        if (!emails.length) {
+          status.textContent = 'Enter at least one email address.';
+          status.style.color = 'var(--warning, #b8860b)';
+          return;
+        }
+        btn.disabled = true;
+        status.textContent = 'Sending…';
+        status.style.color = '';
+        fetch('/digest/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: emails })
+        })
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (data.ok) {
+              status.textContent = data.message || 'Sent.';
+              status.style.color = 'var(--accent)';
+            } else {
+              status.textContent = data.error || 'Send failed.';
+              status.style.color = 'var(--warning, #b8860b)';
+            }
+          })
+          .catch(function() {
+            status.textContent = 'Request failed.';
+            status.style.color = 'var(--warning, #b8860b)';
+          })
+          .finally(function() { btn.disabled = false; });
+      });
+    })();
+  </script>
+  {% endif %}
 {% endblock %}

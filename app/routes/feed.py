@@ -1,11 +1,18 @@
-from typing import Optional
+from typing import Optional, List, Union
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
+from ..config import settings
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, Event, RunLog
-from ..digest import build_weekly_digest
+from ..digest import build_weekly_digest, send_weekly_digest
 from ..utils import to_eastern
+
+
+class SendDigestBody(BaseModel):
+    to: Union[str, List[str]] = Field(..., description="Recipient email(s): one string or list of strings")
 
 router = APIRouter()
 
@@ -87,5 +94,28 @@ def digest(request: Request):
         last_refreshed = get_last_refreshed(session)
     return request.app.state.templates.TemplateResponse(
         "digest.html",
-        {"request": request, "digest_text": digest_text, "last_runs": last_runs, "last_refreshed": last_refreshed, "nav_competitors": nav_competitors},
+        {
+            "request": request,
+            "digest_text": digest_text,
+            "last_runs": last_runs,
+            "last_refreshed": last_refreshed,
+            "nav_competitors": nav_competitors,
+            "send_enabled": settings.digest_send_enabled,
+        },
     )
+
+
+@router.post("/digest/send")
+def digest_send(body: SendDigestBody):
+    """Send the weekly digest to the given email address(es). Requires SMTP_* and DIGEST_FROM_EMAIL to be set."""
+    if not settings.digest_send_enabled:
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "error": "Email send is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASSWORD, and DIGEST_FROM_EMAIL."},
+        )
+    to_raw = body.to if isinstance(body.to, list) else [body.to]
+    to_emails = [e.strip() for e in to_raw if (e or "").strip()]
+    success, message = send_weekly_digest(to_emails)
+    if success:
+        return JSONResponse(content={"ok": True, "message": message})
+    return JSONResponse(status_code=400, content={"ok": False, "error": message})

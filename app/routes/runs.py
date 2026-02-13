@@ -112,6 +112,23 @@ def runs(
         if started and competitor_id and competitor_id in competitor_names:
             run_started_name = competitor_names[competitor_id]
 
+        # Detect running batches so the page can offer Cancel run (by run_start_ts)
+        running_logs = (
+            session.query(RunLog)
+            .filter(RunLog.status == "running")
+            .limit(500)
+            .all()
+        )
+        running_run_start_ts = None
+        running_batches = []
+        for log in running_logs:
+            if isinstance(log.extra_json, dict) and "started_at" in log.extra_json:
+                ts = log.extra_json["started_at"]
+                if ts not in {b["run_start_ts"] for b in running_batches}:
+                    running_batches.append({"run_start_ts": ts})
+        if running_batches:
+            running_run_start_ts = running_batches[0]["run_start_ts"]
+
     return request.app.state.templates.TemplateResponse(
         "runs.html",
         {
@@ -125,5 +142,7 @@ def runs(
             "selected_status": status,
             "last_refreshed": last_refreshed,
             "run_started_name": run_started_name,
+            "running_run_start_ts": running_run_start_ts,
+            "running_batches": running_batches,
         },
     )

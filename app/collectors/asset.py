@@ -173,6 +173,98 @@ def _link_in_empty_landing_section(link) -> bool:
     return False
 
 
+def _is_landing_image_collector(text: str) -> bool:
+    """True if text is the per-section nav card 'View all homes in City, ST' — not a property."""
+    t = (text or "").strip().lower()
+    return bool(t and "view all homes" in t)
+
+
+# Pattern for Landing location headers: "City, ST" or "Washington D.C." (section headers, not property names).
+_RE_LANDING_LOCATION = re.compile(
+    r"^([^,]*[^\s,])\s*,\s*([A-Z]{2}|D\.C\.)$|^Washington\s+D\.C\.?$",
+    re.IGNORECASE,
+)
+
+
+def _extract_landing_locations_html(html: str, source_url: str, base_url: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """
+    Parse Landing (hellolanding.com) locations page HTML.
+
+    Structure: h2 = location (e.g. Atlanta, GA), h3 = property name (e.g. Park South).
+    Each section has an image collector "View all homes in City, ST" — exclude from properties.
+    Returns (properties, location_counts). location_counts includes markets with 0 properties
+    (upcoming areas). Properties get market set from their section header.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    properties: list[dict[str, Any]] = []
+    location_counts: list[dict[str, Any]] = []
+    current_market: Optional[str] = None
+
+    # Walk all elements in document order; track location sections by h2 headers.
+    for tag in soup.find_all(["h2", "h3"]):
+        text = (tag.get_text() or "").strip()
+        if not text:
+            continue
+
+        if tag.name == "h2":
+            # Location header: "City, ST" or "Washington D.C."
+            if _RE_LANDING_LOCATION.match(text) and len(text) < 80:
+                # Finalize previous location count before switching
+                if current_market is not None:
+                    count = sum(1 for p in properties if (p.get("market") or "").strip() == current_market)
+                    location_counts.append({"market": current_market, "count": count})
+                current_market = text
+            continue
+
+        if tag.name == "h3":
+            # Property name — but skip image collector / nav card if it ever appears as h3.
+            if _is_landing_image_collector(text):
+                continue
+            if "no properties available" in text.lower():
+                continue
+            if len(text) < 2:
+                continue
+
+            # Resolve URL: property card may wrap an <a> or have sibling link.
+            href = None
+            a = tag.find("a", href=True) or tag.find_parent("a", href=True)
+            if a and a.get("href"):
+                href = (a.get("href") or "").strip()
+                if href and not href.startswith("#"):
+                    # Exclude "View all homes" links (city-level nav, not property).
+                    if _is_landing_image_collector((a.get_text() or "").strip()):
+                        href = None
+                    elif "/apartments/furnished" in href and href.count("/") <= 4:
+                        # City-level page like /s/atlanta-ga/apartments/furnished — not a property.
+                        href = None
+                    else:
+                        href = urljoin(base_url, href) if not href.startswith("http") else href
+
+            if current_market is None:
+                current_market = "Unspecified"
+            properties.append({
+                "url": href,
+                "name": text,
+                "market": current_market,
+                "status": None,
+            })
+
+    # Finalize last location
+    if current_market is not None:
+        count = sum(1 for p in properties if (p.get("market") or "").strip() == current_market)
+        location_counts.append({"market": current_market, "count": count})
+
+    # Ensure locations with 0 properties are included: walk h2s again and add any missing.
+    seen_markets = {lc["market"] for lc in location_counts}
+    for h2 in soup.find_all("h2"):
+        text = (h2.get_text() or "").strip()
+        if text and _RE_LANDING_LOCATION.match(text) and len(text) < 80 and text not in seen_markets:
+            location_counts.append({"market": text, "count": 0})
+            seen_markets.add(text)
+
+    return properties, location_counts
+
+
 def extract_properties_from_html(html: str, source_url: str = "") -> list[dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
     is_landing = "hellolanding.com" in (source_url or "").lower()
@@ -640,6 +732,9 @@ def _is_detail_line_or_junk_name(name: str) -> bool:
     }:
         return True
     if lower.startswith(("book ", "view ", "stay ", "reserve ")):
+        return True
+    # Landing: "View all homes in City, ST" image collector — never a property.
+    if "view all homes" in lower:
         return True
     return False
 
@@ -1253,6 +1348,28 @@ def collect_asset_snapshot(
 
     def run_one_strategy(strategy: str) -> dict[str, Any]:
         """Run a single strategy by name; returns snapshot dict. Used for both chain and single-strategy."""
+        if strategy == "landing_locations":
+            parsed = urlparse(source_url)
+            base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else source_url
+            # Landing locations page has full SSR content; plain HTTP fetch returns complete HTML.
+            # Playwright can return pre-hydration HTML with fewer elements.
+            fetched = fetch_url(source_url)
+            if fetched.status_code != 200:
+                raise RuntimeError(
+                    f"Asset fetch failed: {fetched.url} returned HTTP {fetched.status_code}. "
+                    "Refusing to parse or persist; check Runs for this error."
+                )
+            properties, location_counts = _extract_landing_locations_html(
+                fetched.text, source_url, base_url
+            )
+            return {
+                "source_url": fetched.url,
+                "raw_content": fetched.text,
+                "raw_hash": fetched.raw_hash,
+                "properties": normalize_properties(properties),
+                "location_counts": location_counts,
+                "note": "landing_locations",
+            }
         if strategy == "blueground_destinations":
             raw_html, raw_hash, properties = _fetch_blueground_destinations(source_url, opts)
             return {
@@ -1426,9 +1543,12 @@ def collect_asset_snapshot(
 
 
 def build_structured_json(snapshot: dict[str, Any]) -> dict[str, Any]:
-    return {
+    out: dict[str, Any] = {
         "source_url": snapshot.get("source_url"),
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "properties": snapshot.get("properties", []),
         "note": snapshot.get("note"),
     }
+    if snapshot.get("location_counts"):
+        out["location_counts"] = snapshot["location_counts"]
+    return out
