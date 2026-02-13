@@ -110,6 +110,9 @@ def is_property_like(url: str) -> bool:
         r"/[a-z0-9]+-[a-z]{2}(?:\?|$|/)",
         # AvantStay-style: /{numeric_id}/{destination}/{property-slug} (e.g. /429468/newport-beach/sand-castle)
         r"/[0-9]+/[a-z0-9-]+/[a-z0-9-]+(?:\?|$|/)",
+        # AKA-style (stayaka.com): single-segment property slug (e.g. /hotel-aka-backbay, /aka-central-park)
+        # Match path with one segment only (? or end or single trailing /) so we don't match /locations/foo.
+        r"/[a-z0-9][a-z0-9-]{9,}(?:\?|/$|$)",
     ]
     return any(re.search(pattern, u, re.IGNORECASE) for pattern in patterns)
 
@@ -265,6 +268,41 @@ def _extract_landing_locations_html(html: str, source_url: str, base_url: str) -
     return properties, location_counts
 
 
+def _location_attrs_from_element(el) -> dict[str, str]:
+    """Extract data-city, data-state, data-region, data-market, data-location from element if present."""
+    out: dict[str, str] = {}
+    for attr in _LOCATION_ATTRS:
+        if not attr.startswith("data-") and attr != "aria-label":
+            continue
+        val = el.get(attr) if hasattr(el, "get") else None
+        if val and isinstance(val, str) and (v := val.strip()) and len(v) < 200:
+            out[attr] = v
+    return out
+
+
+def _merge_location_from_link_and_parents(link) -> dict[str, Any]:
+    """Check link and its parents for data-state, data-city, data-region, data-market; return dict of set fields."""
+    merged: dict[str, Any] = {}
+    el = link
+    for _ in range(10):  # limit ancestor walk
+        if el is None:
+            break
+        attrs = _location_attrs_from_element(el) if hasattr(el, "get") else {}
+        if attrs.get("data-state") and "state" not in merged:
+            merged["state"] = attrs["data-state"].strip()
+        if attrs.get("data-city") and "city" not in merged:
+            merged["city"] = attrs["data-city"].strip()
+        if attrs.get("data-region") and "market" not in merged:
+            merged["market"] = attrs["data-region"].strip()
+        if attrs.get("data-market") and "market" not in merged:
+            merged["market"] = attrs["data-market"].strip()
+        if attrs.get("data-location") and "market" not in merged:
+            merged["market"] = attrs["data-location"].strip()
+        parent = getattr(el, "parent", None)
+        el = parent if parent is not None and parent != el else None
+    return merged
+
+
 def extract_properties_from_html(html: str, source_url: str = "") -> list[dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
     is_landing = "hellolanding.com" in (source_url or "").lower()
@@ -280,14 +318,21 @@ def extract_properties_from_html(html: str, source_url: str = "") -> list[dict[s
             continue
         if is_landing and _link_in_empty_landing_section(link):
             continue
-        properties.append(
-            {
-                "url": href,
-                "name": text,
-                "market": None,
-                "status": None,
-            }
-        )
+        prop: dict[str, Any] = {
+            "url": href,
+            "name": text,
+            "market": None,
+            "status": None,
+        }
+        # Capture data-state, data-city, data-market from link or parent (e.g. Vacasa cards)
+        loc = _merge_location_from_link_and_parents(link)
+        if loc.get("state"):
+            prop["state"] = loc["state"]
+        if loc.get("city"):
+            prop["city"] = loc["city"]
+        if loc.get("market"):
+            prop["market"] = loc["market"]
+        properties.append(prop)
     return properties
 
 
@@ -1026,11 +1071,15 @@ def _fetch_blueground_destinations(
     Blueground-specific: destinations page -> each North America USA destination page
     (/m/furnished-apartments/acton-ma-usa) has property links (/p/furnished-apartments/bos-XXX).
     Scrape the destination page directly for those links (no Search click needed).
-    extra_options.max_destinations: optional limit for testing (e.g. 2 or 30); omit for full run of all USA destinations.
+    extra_options.max_destinations: optional limit (e.g. 2 or 30). If key is absent, defaults to 30
+    so UI/scheduled refresh stays ~2–10 min; set explicitly to null for full run of all USA destinations.
     Returns (raw_html, raw_hash, properties).
     """
     opts = extra_options or {}
-    max_dest = opts.get("max_destinations")  # None or absent = full run; number = limit for testing
+    max_dest = opts.get("max_destinations")
+    # Default cap when key is missing so refresh doesn't run 50+ destinations (15–45+ min).
+    if max_dest is None and "max_destinations" not in opts:
+        max_dest = 30
     if max_dest is not None:
         max_dest = int(max_dest)
 
@@ -1092,7 +1141,7 @@ def _fetch_blueground_destinations(
 
     if max_dest is not None:
         usa_links = usa_links[:max_dest]
-        print(f"[asset] Blueground: using batch of {max_dest} destinations (set extra_options.max_destinations to null for full run)", flush=True)
+        print(f"[asset] Blueground: using {max_dest} destinations (set extra_options.max_destinations to null for full USA run)", flush=True)
     else:
         print(f"[asset] Blueground: full North America USA run (all destinations)", flush=True)
 

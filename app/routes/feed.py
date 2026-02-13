@@ -82,6 +82,48 @@ def feed(request: Request, competitor_id: Optional[int] = None, severity: Option
     )
 
 
+# Topic filters for feed view: category -> list of {value, label, types} (types = event type or prefix to match)
+FEED_TOPIC_OPTIONS = {
+    "asset": [
+        {"value": "new_market", "label": "New market", "types": ["asset.new_market"]},
+        {"value": "market_exit", "label": "Market exit", "types": ["asset.market_exit"]},
+        {"value": "pipeline", "label": "Pipeline / coming soon", "types": ["asset.pipeline_signal"]},
+        {"value": "other", "label": "Other", "types": []},  # catchall when type not in above
+    ],
+    "talent": [
+        {"value": "new_jobs", "label": "New jobs / hiring", "types": ["talent.hiring_surge", "talent.senior_hire_or_role_posted", "talent.new_capability"]},
+        {"value": "removed_jobs", "label": "Removed jobs", "types": ["talent.jobs_removed"]},
+        {"value": "other", "label": "Other", "types": []},
+    ],
+    "partner": [
+        {"value": "partnerships", "label": "Partnerships", "types": ["partner.major_partnership"]},
+        {"value": "partnership_surge", "label": "Partnership surge", "types": ["partner.partnership_surge"]},
+        {"value": "other", "label": "Other", "types": []},
+    ],
+    "capital": [
+        {"value": "fundraise", "label": "Fundraise / restructuring", "types": ["capital.fundraise_or_restructuring"]},
+        {"value": "other", "label": "Other", "types": []},
+    ],
+    "narrative": [
+        {"value": "priority_shift", "label": "Strategy / priority shift", "types": ["narrative.priority_shift"]},
+        {"value": "homepage_updated", "label": "Homepage updated", "types": ["narrative.homepage_updated"]},
+        {"value": "coming_soon", "label": "Coming soon", "types": ["narrative.coming_soon"]},
+        {"value": "social_signal", "label": "Social signal", "types": ["narrative.social_signal"]},
+        {"value": "other", "label": "Other", "types": []},
+    ],
+    "press": [
+        {"value": "partnerships", "label": "Partnerships", "types": ["partner.major_partnership", "partner.partnership_surge"]},
+        {"value": "market_launch", "label": "Market launch / expansion", "types": ["narrative.priority_shift"]},
+        {"value": "funding", "label": "Funding / capital", "types": ["capital.fundraise_or_restructuring"]},
+        {"value": "other", "label": "Interviews / press releases / other", "types": []},
+    ],
+    "public_record": [
+        {"value": "filing", "label": "Filing", "types": ["public_record.filing"]},
+        {"value": "other", "label": "Other", "types": []},
+    ],
+}
+
+
 def _events_for_dashboard(session):
     """Load recent events for dashboard feed view: one-liner + date added + category/type for filtering."""
     rows = (
@@ -102,12 +144,16 @@ def _events_for_dashboard(session):
         events.append({
             "category": e.category,
             "type": e.type,
+            "severity": e.severity,
             "title": e.title,
             "summary": e.summary,
             "detected_at_str": e.detected_at.strftime("%Y-%m-%d"),
             "detected_at_short": e.detected_at.strftime("%b %d"),
             "competitor_name": competitor_names.get(e.competitor_id, ""),
         })
+    # Add virtual "press" category when we have any press-derived events (partner, capital, narrative)
+    if categories & {"partner", "capital", "narrative"}:
+        categories.add("press")
     return events, sorted(categories)
 
 
@@ -133,6 +179,7 @@ def digest(request: Request):
             "send_enabled": settings.digest_send_enabled,
             "feed_events": feed_events,
             "feed_categories": feed_categories,
+            "feed_topic_options": FEED_TOPIC_OPTIONS,
         },
     )
 

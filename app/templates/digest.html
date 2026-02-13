@@ -44,18 +44,53 @@
 
   <div class="card" id="feed-view-card">
     <strong>Feed view</strong>
-    <p class="meta" style="margin-top: 4px;">Timeline of detected events. Toggle signal types to filter.</p>
-    <div class="feed-filter" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; margin-bottom: 8px;">
-      <span class="meta">Filter by type:</span>
-      <label style="display: inline-flex; align-items: center; gap: 4px; cursor: pointer;"><input type="checkbox" class="feed-cat-toggle" value="_all_" checked /> All</label>
-      {% for cat in feed_categories %}
-      <label style="display: inline-flex; align-items: center; gap: 4px; cursor: pointer;"><input type="checkbox" class="feed-cat-toggle" value="{{ cat }}" checked /> {{ cat }}</label>
-      {% endfor %}
+    <p class="meta" style="margin-top: 4px;">Timeline of detected events. Filter by category, then optionally by topic. Use severity to focus on high-signal events. For date range and competitor filters, see <a href="/feed">Event Feed</a>.</p>
+
+    <div class="feed-filter-box" style="margin-top: 12px; margin-bottom: 12px;">
+      <div class="feed-filter-row" style="margin-bottom: 10px;">
+        <span class="feed-filter-label meta" style="display: inline-block; min-width: 100px; font-weight: 600;">Category</span>
+        <div class="feed-cat-toggles" style="display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center;">
+          <label class="feed-toggle-pill"><input type="checkbox" class="feed-cat-toggle" value="_all_" checked /> All</label>
+          {% for cat in feed_categories %}
+          <label class="feed-toggle-pill"><input type="checkbox" class="feed-cat-toggle" value="{{ cat }}" checked /> {{ cat }}</label>
+          {% endfor %}
+          <span class="meta" style="margin-left: 12px;">Severity:</span>
+          <select id="feed-severity" class="feed-severity-select" style="width: auto; padding: 6px 10px; font-size: 13px;">
+            <option value="">All</option>
+            <option value="high">High</option>
+            <option value="med">Med</option>
+            <option value="low">Low</option>
+          </select>
+        </div>
+      </div>
+      <div class="feed-topic-row" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
+        <span class="feed-filter-label meta" style="display: inline-block; min-width: 100px; font-weight: 600;">Topics</span>
+        <div class="feed-topic-dropdowns" style="display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: flex-start;">
+          {% for cat, topics in (feed_topic_options or {}).items() %}
+          {% if topics %}
+          <div class="feed-topic-dropdown-wrap" data-category="{{ cat }}" style="position: relative;">
+            <button type="button" class="feed-topic-trigger secondary" style="padding: 6px 10px; font-size: 13px; white-space: nowrap;" aria-haspopup="listbox" aria-expanded="false">
+              <span class="feed-topic-label">{{ cat }}</span> <span class="feed-topic-summary meta">All</span> <span aria-hidden="true">▾</span>
+            </button>
+            <div class="feed-topic-panel" role="listbox" hidden style="position: absolute; left: 0; top: 100%; margin-top: 4px; min-width: 180px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); z-index: 20; padding: 8px 0;">
+              {% for opt in topics %}
+              <label style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px; white-space: nowrap;">
+                <input type="checkbox" class="feed-topic-check" data-category="{{ cat }}" data-value="{{ opt.value }}" data-types="{{ opt.types|join(',') }}" />
+                {{ opt.label }}
+              </label>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+          {% endfor %}
+        </div>
+      </div>
     </div>
+
     <div id="feed-timeline" class="rollup-box" style="max-height: 320px; overflow-y: auto; font-size: 14px; line-height: 1.5; margin-top: 8px;">
       <ul style="margin: 0; padding-left: 1.25em;">
         {% for e in feed_events %}
-        <li class="feed-event" data-category="{{ e.category }}" style="margin-bottom: 4px;">
+        <li class="feed-event" data-category="{{ e.category }}" data-type="{{ e.type or '' }}" data-severity="{{ e.severity or '' }}" style="margin-bottom: 4px;">
           <span class="meta">{{ e.detected_at_short }}</span>{% if e.competitor_name %}<strong> {{ e.competitor_name }}</strong>{% endif %}: {{ e.title }}{% if e.summary and e.summary != e.title %} — {{ e.summary }}{% endif %}
         </li>
         {% endfor %}
@@ -65,25 +100,94 @@
       {% endif %}
     </div>
   </div>
+  <style>
+    .feed-toggle-pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; background: #f0eeeb; border: 1px solid var(--border); cursor: pointer; font-size: 13px; }
+    .feed-toggle-pill:has(input:checked) { background: var(--accent); color: white; border-color: var(--accent); }
+    .feed-topic-trigger { display: inline-flex; align-items: center; gap: 6px; }
+    .feed-topic-panel label:hover { background: rgba(0,0,0,0.04); }
+  </style>
   <script>
     (function() {
       var toggles = document.querySelectorAll('.feed-cat-toggle');
       var allToggle = document.querySelector('.feed-cat-toggle[value="_all_"]');
       var items = document.querySelectorAll('.feed-event');
-      function applyFilter() {
-        var anyChecked = false;
-        var checked = {};
-        toggles.forEach(function(t) {
-          if (t.value === '_all_') return;
-          if (t.checked) { checked[t.value] = true; anyChecked = true; }
+      var topicChecks = document.querySelectorAll('.feed-topic-check');
+      var topicPanels = document.querySelectorAll('.feed-topic-panel');
+      var topicTriggers = document.querySelectorAll('.feed-topic-trigger');
+      var severitySelect = document.getElementById('feed-severity');
+
+      function topicSelections() {
+        var out = {};
+        topicChecks.forEach(function(c) {
+          var cat = c.getAttribute('data-category');
+          if (!c.checked) return;
+          if (!out[cat]) out[cat] = { types: [], allowOther: false };
+          var val = c.getAttribute('data-value');
+          if (val === 'other') { out[cat].allowOther = true; return; }
+          var typesStr = c.getAttribute('data-types') || '';
+          if (typesStr) typesStr.split(',').forEach(function(ty) { if (ty && out[cat].types.indexOf(ty) === -1) out[cat].types.push(ty); });
         });
+        topicChecks.forEach(function(c) {
+          var cat = c.getAttribute('data-category');
+          if (!out[cat]) return;
+          if (c.getAttribute('data-value') === 'other' && c.checked) out[cat].allowOther = true;
+        });
+        return out;
+      }
+
+      function eventMatchesCategory(li, checkedCats) {
+        var cat = li.getAttribute('data-category');
+        if (checkedCats._all_) return true;
+        if (checkedCats[cat]) return true;
+        if (checkedCats.press && (cat === 'partner' || cat === 'capital' || cat === 'narrative')) return true;
+        return false;
+      }
+
+      function topicSelMatchesType(sel, type) {
+        if (!sel || (!sel.types.length && !sel.allowOther)) return true;
+        var matchesExplicit = sel.types.some(function(t) { return type === t; });
+        var matchesOther = sel.allowOther && (type === '' || !sel.types.some(function(t) { return type === t; }));
+        return matchesExplicit || matchesOther;
+      }
+
+      function eventMatchesTopic(li, topicSel) {
+        var cat = li.getAttribute('data-category');
+        var type = li.getAttribute('data-type') || '';
+        var keys = [cat];
+        if (cat === 'partner' || cat === 'capital' || cat === 'narrative') keys.push('press');
+        for (var i = 0; i < keys.length; i++) {
+          var sel = topicSel[keys[i]];
+          if (!topicSelMatchesType(sel, type)) return false;
+        }
+        return true;
+      }
+
+      function applyFilter() {
         var showAll = allToggle && allToggle.checked;
+        var checkedCats = { _all_: showAll };
+        if (!showAll) toggles.forEach(function(t) { if (t.value !== '_all_' && t.checked) checkedCats[t.value] = true; });
+        var topicSel = topicSelections();
+
+        var severityVal = severitySelect ? (severitySelect.value || '').toLowerCase() : '';
         items.forEach(function(li) {
-          var cat = li.getAttribute('data-category');
-          var show = showAll || checked[cat];
-          li.style.display = show ? '' : 'none';
+          var showCat = eventMatchesCategory(li, checkedCats);
+          if (!showCat) { li.style.display = 'none'; return; }
+          var showTopic = eventMatchesTopic(li, topicSel);
+          if (!showTopic) { li.style.display = 'none'; return; }
+          if (severityVal && li.getAttribute('data-severity') !== severityVal) { li.style.display = 'none'; return; }
+          li.style.display = '';
+        });
+
+        topicTriggers.forEach(function(btn) {
+          var wrap = btn.closest('.feed-topic-dropdown-wrap');
+          var cat = wrap && wrap.getAttribute('data-category');
+          var checks = wrap && wrap.querySelectorAll('.feed-topic-check:checked');
+          var n = checks ? checks.length : 0;
+          var sum = wrap && wrap.querySelector('.feed-topic-summary');
+          if (sum) sum.textContent = n === 0 ? 'All' : (n + ' selected');
         });
       }
+
       toggles.forEach(function(t) {
         t.addEventListener('change', function() {
           if (t.value === '_all_') {
@@ -95,6 +199,30 @@
           }
           applyFilter();
         });
+      });
+
+      topicChecks.forEach(function(c) {
+        c.addEventListener('change', applyFilter);
+      });
+      if (severitySelect) severitySelect.addEventListener('change', applyFilter);
+
+      topicTriggers.forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          var panel = btn.nextElementSibling;
+          if (!panel || !panel.classList) return;
+          var isOpen = !panel.hasAttribute('hidden');
+          document.querySelectorAll('.feed-topic-panel').forEach(function(p) { p.setAttribute('hidden', ''); });
+          if (!isOpen) { panel.removeAttribute('hidden'); btn.setAttribute('aria-expanded', 'true'); }
+          else { btn.setAttribute('aria-expanded', 'false'); }
+        });
+      });
+      document.addEventListener('click', function() {
+        topicPanels.forEach(function(p) { p.setAttribute('hidden', ''); });
+        topicTriggers.forEach(function(b) { b.setAttribute('aria-expanded', 'false'); });
+      });
+      topicPanels.forEach(function(p) {
+        p.addEventListener('click', function(e) { e.stopPropagation(); });
       });
     })();
   </script>

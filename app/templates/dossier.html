@@ -158,6 +158,13 @@
             }
           }
 
+          function formatElapsed(sec) {
+            if (sec < 0) sec = 0;
+            var m = Math.floor(sec / 60);
+            var s = sec % 60;
+            return m + 'm ' + s + 's';
+          }
+
           function renderRunStatus(data) {
             var runningByChannel = {};
             (data.running || []).forEach(function(r) { runningByChannel[r.channel] = r.created_at; });
@@ -182,8 +189,10 @@
                 var startedAt = runningByChannel[ch];
                 var start = new Date(startedAt);
                 var sec = Math.floor((now - start) / 1000);
-                html += '<li style="margin-bottom: 6px;"><strong>' + label + '</strong>: <span style="color: #7d6a00;">running</span> <span class="meta">(' + sec + ' s)</span></li>';
-                updatePill(ch, 'running', sec + ' s');
+                if (sec < 1) sec = 1;
+                var elapsedStr = formatElapsed(sec);
+                html += '<li style="margin-bottom: 6px;"><strong>' + label + '</strong>: <span style="color: #7d6a00;">running</span> <span class="meta">(' + elapsedStr + ')</span></li>';
+                updatePill(ch, 'running', elapsedStr);
               } else {
                 allDone = false;
                 html += '<li style="margin-bottom: 6px;"><strong>' + label + '</strong>: <span class="meta">starting…</span></li>';

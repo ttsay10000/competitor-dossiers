@@ -12,7 +12,7 @@ End-to-end flow from collection to what appears on the dossier.
 | **1.2** | **Google News** — RSS for quoted company name, first word, and “company partnership”. 90-day window. Merge and dedupe by URL. Provider: `google_news`. | `collect_google_news_items(press_search_name, window_days=90)` in `global_press` |
 | **1.3** | **PR Newswire** — Search by company name, parse result links (or Playwright if JS-rendered). 90-day window. Provider: `prnewswire`. | `collect_prnewswire_items(press_search_name, window_days=90)` in `global_press` |
 | **1.4** | **Raw total** — All items from 1.1–1.3; counts by provider logged. | `runner.run_press` |
-| **1.5** | **90-day + cap** — Drop items older than 90 days; cap at `press_max_raw_items_per_competitor` (e.g. 120). | `runner.run_press` |
+| **1.5** | **90-day + cap** — Drop items older than 90 days (non-PR only; PR has no time filter). Cap at `press_max_raw_items_per_competitor`; PR Newswire items are placed first so they are never cut by the cap. | `runner.run_press` |
 
 **Incremental skip:** If there are no *new* URLs vs last snapshot, Steps 2–5 are skipped (no LLM); snapshot and events unchanged.
 
@@ -27,10 +27,9 @@ Input: `items` = filtered_items (90d + cap). Output: **press_groups** — list o
 | **2.0a** | **Company-domain filter** — Drop items whose URL is on the competitor’s own domain (so we don’t surface “Google News → company’s own link”). Drop ALL items on competitor domain (including `press_endpoint`); only third-party coverage kept. | `enrich_press_items_with_llm` (start) |
 | **2.1** | **Classify (headlines + body)** — LLM gets title, outlet, URL and (when fetched) body text (paragraphs only, up to ~2k chars). Assigns `is_about_company`, `topic` (e.g. new_partnership, fundraising, irrelevant), `is_promo`. Body used when available so classification is content-based. | `_classify_press_headlines_with_llm` (fetches body for up to 200 items, capped) |
 | **2.2** | **Heuristics** — Mark as promo: URLs that look like own marketing (e.g. /blog, /guides, /owners) or guide-style titles (e.g. “how to”, “best ”, “itinerary”). | `enrich_press_items_with_llm` (after classify) |
-| **2.3** | **Business-relevance filter** — PR Newswire: always keep. Google News: drop only if `topic == irrelevant`. press_endpoint / other: require `is_about_company`, drop `irrelevant` and promo. | `enrich_press_items_with_llm` |
-| **2.4** | **Split by provider** — PR Newswire items → separate list; all other relevant items → grouping input. | `enrich_press_items_with_llm` |
-| **2.5** | **Group (LLM)** — LLM sees title, date, outlet per item. Groups by similarity (same story, same topic). Returns groups with `group_title`, `one_line_summary`, `article_indices`. Every article in exactly one group; none dropped. | `_group_press_into_clusters_llm` |
-| **2.6** | **Press releases group** — Append one cluster: group_title "Press releases", one_line_summary "Company press releases.", articles = all PR Newswire items (after filter). | `enrich_press_items_with_llm` |
+| **2.3** | **Business-relevance filter** — PR Newswire and Google News: same rules (drop `irrelevant` and `promo_or_brand_marketing`). No time window for PR; all PR that pass filter are kept for display. press_endpoint / other: require `is_about_company`, drop `irrelevant` and promo. | `enrich_press_items_with_llm` |
+| **2.4** | **Group (LLM)** — Full third-party list (PR Newswire + Google News, etc.) sent to LLM. Groups by story (same event, same topic). Returns groups with `group_title`, `one_line_summary`, `article_indices`. Every article in exactly one group; none dropped. | `_group_press_into_clusters_llm` |
+| **2.5** | **Press releases** — Articles the LLM did not assign to a story group (its "Other coverage") are shown under group_title "Press releases", one_line_summary "Company press releases." | `enrich_press_items_with_llm` |
 
 ---
 
@@ -71,7 +70,7 @@ Collection (endpoints + Google News + PR Newswire)
   → [incremental: skip if no new URLs]
 Enrichment:
   company-domain filter → classify (headlines + body) → heuristics → business filter
-  → split PR vs rest → group LLM (no dropping) → append Press releases group
+  → group full third-party list (PR + Google News) via LLM → ungrouped → Press releases
 Persist: press_groups + canonical_items (flattened) + diff/events
 Display: press_groups by topic; flattened list for Top news
 ```

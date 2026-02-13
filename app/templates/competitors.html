@@ -29,6 +29,13 @@
     .competitors-existing-table .cell-date { white-space: nowrap; font-size: 12px; }
     .competitors-existing-table .cell-status { font-size: 11px; line-height: 1.2; }
     .competitors-existing-table th, .competitors-existing-table td { padding: 6px 8px; }
+    .competitors-existing-table .name-link { font-weight: 600; text-decoration: none; color: var(--accent, #0d6efd); }
+    .competitors-existing-table .name-link:hover { text-decoration: underline; }
+    .competitors-existing-table .actions-cell { white-space: nowrap; }
+    .competitors-existing-table .actions-cell .action-sep { color: var(--muted, #6c757d); margin: 0 4px; user-select: none; }
+    .competitors-existing-table .actions-cell .action-remove { color: #b84a2b; }
+    .competitors-existing-table .actions-cell .action-remove:hover { text-decoration: underline; }
+    .competitors-existing-table .status-legend { font-size: 10px; color: var(--muted, #6c757d); margin-bottom: 6px; }
   </style>
   <h1>Dossiers</h1>
 
@@ -64,6 +71,7 @@
   {% endif %}
   <div class="card">
     <h3>Existing</h3>
+    <p class="status-legend competitors-existing-table">Data / Status: T=Talent, A=Asset, P=Press, W=Website, S=Social, R=Reviews</p>
     <table class="competitors-existing-table">
       <thead>
         <tr>
@@ -73,13 +81,13 @@
           <th>Last refresh</th>
           <th>Baseline set</th>
           <th>Data / Status</th>
-          <th></th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
         {% for competitor in competitors %}
         <tr>
-          <td>{{ competitor.name }}</td>
+          <td><a href="/dossier/{{ competitor.id }}" class="name-link" title="Open dossier">{{ competitor.name }}</a></td>
           <td class="muted">{{ competitor.primary_domain or "" }}</td>
           <td class="muted cell-date">{% if competitor.created_at %}{{ competitor.created_at.strftime('%Y-%m-%d') }}{% else %}—{% endif %}</td>
           <td class="muted cell-date">{{ competitor.last_refresh or "—" }}</td>
@@ -96,10 +104,8 @@
             {% if not loop.last %} · {% endif %}
             {% endfor %}
           </td>
-          <td>
-            <a href="/competitors/{{ competitor.id }}">Edit</a> ·
-            <a href="/dossier/{{ competitor.id }}">Dossier</a> ·
-            <button type="button" class="remove-competitor-btn btn-link" data-id="{{ competitor.id }}" data-name="{{ competitor.name|e }}" data-required="{{ ('remove ' ~ competitor.name ~ ' from site')|e }}">Remove</button>
+          <td class="actions-cell">
+            <a href="/competitors/{{ competitor.id }}">Edit</a><span class="action-sep">·</span><button type="button" class="remove-competitor-btn btn-link action-remove" data-id="{{ competitor.id }}" data-name="{{ competitor.name|e }}" data-required="{{ ('remove ' ~ competitor.name ~ ' from site')|e }}">Remove</button>
           </td>
         </tr>
         {% endfor %}

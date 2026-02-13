@@ -251,6 +251,31 @@ _DESTINATION_SLUG_TO_STATE = {
 }
 
 
+def infer_state_from_name_and_market(name: Optional[str], market: Optional[str]) -> Optional[str]:
+    """
+    Rule-based state inference from property name and market (no LLM).
+    Matches known city/region slugs (e.g. destin, panama-city-beach, bend) in name/market text
+    so Vacasa-style 'Beach House in Destin' or 'Condo in Panama City Beach' get a state.
+    Returns full US state name or None. Prefers longest matching slug to avoid wrong matches.
+    """
+    combined = " ".join(
+        str(s).strip().lower() for s in (name, market) if s and isinstance(s, str) and str(s).strip()
+    )
+    if not combined:
+        return None
+    # Sort by slug length descending so "panama-city-beach" matches before "panama"
+    slugs_sorted = sorted(
+        _DESTINATION_SLUG_TO_STATE.keys(),
+        key=lambda s: len(s),
+        reverse=True,
+    )
+    for slug in slugs_sorted:
+        phrase = slug.replace("-", " ")
+        if phrase in combined:
+            return _DESTINATION_SLUG_TO_STATE[slug]
+    return None
+
+
 def _parse_avantstay_style_path(path: str) -> Optional[str]:
     """Extract destination slug from Avantstay-style path.
     Supports /{numeric_id}/{destination_slug}/{property_slug} (3+ parts) and

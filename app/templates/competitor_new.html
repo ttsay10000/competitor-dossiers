@@ -103,7 +103,7 @@
       <div style="margin-top: 20px;">
         <label style="font-weight: 600;">Press / news</label>
         <p class="meta" style="margin: 4px 0 8px 0;">
-          Press is collected from <strong>Google News</strong> and <strong>PR Newswire</strong>. Optional <strong>keywords</strong> (comma-separated) narrow results: all must appear in the article. Leave blank to use company name.
+          Press is collected from <strong>Google News</strong> and <strong>PR Newswire</strong>. Company name always appears in the search. Optional <strong>keywords</strong> (e.g. furnished rentals) improve relevance; comma-separated.
         </p>
         <div class="row" style="align-items: center;">
           <input name="press_keywords" placeholder="e.g. landing, furnished rentals" style="flex: 1; max-width: 400px;" value="{{ form_data.press_keywords if form_data and form_data.press_keywords else '' }}" />

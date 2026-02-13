@@ -40,7 +40,7 @@ This doc traces **where grouped press data goes** after the LLM groups it, and *
 **What happens (inside that function):**
 - **Company-domain filter:** Drops only *third-party* items whose URL is on the competitor’s domain. Items from the company’s own press/blog (`provider: "press_endpoint"`) are **kept** so new competitors with only a blog still get a “Company blog” group (otherwise groupings would be empty).
 - Calls `_classify_press_headlines_with_llm(competitor_name, items)` → each item gets `topic` (e.g. `irrelevant`, `promo_or_brand_marketing`, `new_hotel_opening`, `other_business`).
-- Applies business filter: for Google News (and similar), drops `irrelevant` and `promo_or_brand_marketing`; PR Newswire is always kept; press_endpoint requires `is_about_company` and drops promo.
+- Applies business filter: for Google News (and similar), drops `irrelevant` and `promo_or_brand_marketing`; PR Newswire and Google News use the same filter (drop irrelevant/promo); no time window for PR. press_endpoint requires `is_about_company` and drops promo.
 - Result is a **filtered list** of items that will be grouped (third-party + company blog).
 
 **Edit classification/filter:** `app/llm_structured.py` — `_classify_press_headlines_with_llm`, overrides/heuristics, and the filter block inside `enrich_press_items_with_llm` (e.g. “drop irrelevant/promo for google_news”).

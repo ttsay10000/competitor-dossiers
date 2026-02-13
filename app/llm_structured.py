@@ -20,6 +20,7 @@ from .diff.asset_diff import (
     _parse_avantstay_style_path,
     resolve_destination_slug_to_state,
     infer_location_for_property,
+    infer_state_from_name_and_market,
 )
 
 # Max characters of page text when enricher reads raw_content (fit context, control cost).
@@ -213,6 +214,22 @@ def _assign_state_from_url(prop: dict) -> dict:
     return out
 
 
+def _infer_state_from_name_if_missing(prop: dict) -> dict:
+    """
+    When state is still missing, infer from name/market using rule-based city/region lookup
+    (e.g. 'Beach House in Destin' -> Florida, 'Condo in Bend' -> Oregon). No LLM.
+    """
+    out = dict(prop)
+    if (out.get("state") or "").strip():
+        return out
+    state = infer_state_from_name_and_market(out.get("name"), out.get("market"))
+    if state:
+        out["state"] = state
+        if not (out.get("market") or "").strip():
+            out["market"] = state
+    return out
+
+
 def enrich_properties_with_llm(
     properties: List[dict],
     raw_content: Optional[str] = None,
@@ -228,6 +245,8 @@ def enrich_properties_with_llm(
 
     # Assign state (and market) from URL for Avantstay-style URLs so we tag locations without LLM when possible
     working = [_assign_state_from_url(p) for p in properties]
+    # Rule-based state from name/market (e.g. Vacasa "Beach House in Destin" -> Florida) when still missing
+    working = [_infer_state_from_name_if_missing(p) for p in working]
 
     client = _openai_client()
     if not client:
@@ -236,16 +255,22 @@ def enrich_properties_with_llm(
     # Process in batches to handle 1000s of properties; raw page text only for first batch when count is small.
     _ENRICH_BATCH_SIZE = 150
     _ENRICH_SKIP_RAW_CONTENT_ABOVE = 250
-    use_raw = bool(raw_content and raw_content.strip() and len(working) <= _ENRICH_SKIP_RAW_CONTENT_ABOVE)
+    # Cap LLM enrichment to avoid 20–60+ min runs on huge lists (e.g. Vacasa ~26k properties → 174 batches).
+    # Properties beyond this keep URL-derived state only (no LLM calls).
+    _ENRICH_MAX_PROPERTIES = 2000
+    to_enrich = working if len(working) <= _ENRICH_MAX_PROPERTIES else working[:_ENRICH_MAX_PROPERTIES]
+    if len(working) > _ENRICH_MAX_PROPERTIES:
+        print(f"[asset] enrich_properties_with_llm: capping LLM enrichment to first {_ENRICH_MAX_PROPERTIES} of {len(working)} properties (rest keep URL-derived state)", flush=True)
+    use_raw = bool(raw_content and raw_content.strip() and len(to_enrich) <= _ENRICH_SKIP_RAW_CONTENT_ABOVE)
 
     by_index: dict[int, dict] = {}
     batch_ranges = [
-        (start, min(start + _ENRICH_BATCH_SIZE, len(working)))
-        for start in range(0, len(working), _ENRICH_BATCH_SIZE)
+        (start, min(start + _ENRICH_BATCH_SIZE, len(to_enrich)))
+        for start in range(0, len(to_enrich), _ENRICH_BATCH_SIZE)
     ]
 
     for batch_start, batch_end in batch_ranges:
-        batch = working[batch_start:batch_end]
+        batch = to_enrich[batch_start:batch_end]
         lines = []
         for i, p in enumerate(batch):
             url = (p.get("url") or "").strip()
@@ -1659,8 +1684,9 @@ def enrich_press_items_with_llm(
       Keep items from the company's own press/blog (provider=press_endpoint) so new competitors
       with only a blog still get a "Company blog" group; otherwise groupings would be empty.
     - Classify all items (topic, irrelevant, promo) via LLM; apply heuristics; business-relevance filter.
-    - Split by provider: PR Newswire vs rest. Group only third-party (non-own-domain) rest via LLM.
-      Append "Press releases" for PR items, then "Company blog" for kept press_endpoint items on company domain.
+      PR Newswire and Google News use the same filter (drop irrelevant and promo); no time window for PR.
+    - Group the full filtered third-party list (PR Newswire + Google News, etc.) via LLM. Ungrouped
+      items (LLM "Other coverage") are shown under "Press releases". Then append "Company blog" if present.
     - Returns a list of groups: [{ "group_title", "one_line_summary", "articles": [...] }, ...].
     - previous_items / previous_canonical are accepted for API compatibility but not used.
     """
@@ -1804,20 +1830,15 @@ def enrich_press_items_with_llm(
             it["topic"] = "promo_or_brand_marketing"
             it["is_about_company"] = False
 
-    # Filter to business-relevant items. Priority rules:
-    # - PR Newswire: always include (press releases about the company; high priority).
-    # - Google News: always include (RSS is already scoped to quoted company name; LLM can be
-    #   conservative on is_about_company and would otherwise drop valid clips).
-    # - User-provided company news (press_endpoint): LLM review only—may be promo, so we
-    #   require is_about_company and drop promo/irrelevant.
+    # Filter to business-relevant items. Same rules for PR Newswire and Google News (drop
+    # irrelevant and promo); no time window for PR—all PR that pass this filter are kept for display.
+    # - PR Newswire and Google News: drop irrelevant and promo_or_brand_marketing.
+    # - User-provided company news (press_endpoint): require is_about_company and drop promo/irrelevant.
     # - All other sources: require is_about_company and drop promo/irrelevant.
     filtered: List[dict] = []
     for it in classified:
         provider = (it.get("provider") or "").strip().lower()
-        if provider == "prnewswire":
-            filtered.append(it)
-            continue
-        if provider == "google_news":
+        if provider in ("prnewswire", "google_news"):
             topic = (it.get("topic") or "").strip().lower()
             if topic in {"irrelevant", "promo_or_brand_marketing"}:
                 continue
@@ -1865,21 +1886,16 @@ def enrich_press_items_with_llm(
     ]
     rest = [it for it in filtered if it not in company_blog_items]
 
-    # Group third-party (rest): PR Newswire vs rest; group non-PR via LLM, then append Press releases.
-    pr_items = [it for it in rest if (it.get("provider") or "").strip().lower() == "prnewswire"]
-    rest_non_pr = [it for it in rest if (it.get("provider") or "").strip().lower() != "prnewswire"]
-
+    # Group full third-party list (PR Newswire + Google News, etc.) via LLM; ungrouped items go under Press releases.
     press_groups: List[dict] = []
-    if rest_non_pr:
-        press_groups = _group_press_into_clusters_llm(competitor_name, rest_non_pr)
-    if pr_items:
-        pr_articles = [_item_to_article(it) for it in pr_items]
-        pr_articles.sort(key=lambda a: (a.get("date") or "0000-00-00")[:10] if (a.get("date") or "").strip() and (a.get("date") or "").strip() != "no date" else "0000-00-00", reverse=True)
-        press_groups.append({
-            "group_title": "Press releases",
-            "one_line_summary": "Company press releases.",
-            "articles": pr_articles,
-        })
+    if rest:
+        press_groups = _group_press_into_clusters_llm(competitor_name, rest)
+        # Rename "Other coverage" (ungrouped items) to "Press releases" so ungrouped/standalone items appear there.
+        for g in press_groups:
+            if (g.get("group_title") or "").strip() == "Other coverage":
+                g["group_title"] = "Press releases"
+                g["one_line_summary"] = "Company press releases."
+                break
     if company_blog_items:
         blog_articles = [_item_to_article(it) for it in company_blog_items]
         blog_articles.sort(key=lambda a: (a.get("date") or "0000-00-00")[:10] if (a.get("date") or "").strip() and (a.get("date") or "").strip() != "no date" else "0000-00-00", reverse=True)

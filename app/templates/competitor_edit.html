@@ -10,7 +10,6 @@
       align-items: start;
     }
     @media (max-width: 640px) { .edit-page .details-grid { grid-template-columns: 1fr; } }
-    .edit-page .details-actions { margin-top: 16px; display: flex; justify-content: flex-end; }
     .edit-page .add-source-section {
       padding: 16px;
       background: #f8f9fa;
@@ -47,6 +46,15 @@
     }
     .edit-page details.source-edit summary::-webkit-details-marker { display: none; }
     .edit-page details.source-edit summary:hover { background: #f5f5f5; }
+    /* Details form */
+    .edit-page .details-form .field { margin-bottom: 0; }
+    .edit-page .details-form label { display: block; font-weight: 600; margin-bottom: 4px; font-size: 14px; }
+    .edit-page .details-form .help { font-size: 13px; color: var(--muted); margin: 4px 0 0 0; line-height: 1.4; }
+    .edit-page .details-form .help code { font-size: 12px; }
+    .edit-page .details-form .checkbox-row { grid-column: 1 / -1; padding-top: 8px; border-top: 1px solid var(--border); margin-top: 4px; }
+    .edit-page .details-form .checkbox-row label { display: inline-flex; align-items: center; gap: 8px; font-weight: 500; margin: 0; cursor: pointer; }
+    .edit-page .details-form .checkbox-row input[type="checkbox"] { width: auto; margin: 0; }
+    .edit-page .details-form .details-actions { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; }
   </style>
 
   <div class="edit-page">
@@ -80,20 +88,20 @@
 
   <div class="card">
     <h3>Details</h3>
-    <form method="post" action="/competitors/{{ competitor.id }}">
+    <form method="post" action="/competitors/{{ competitor.id }}" class="details-form">
       <div class="details-grid">
-        <div>
-          <label>Name</label>
-          <input name="name" value="{{ competitor.name }}" required />
+        <div class="field">
+          <label for="edit-name">Name</label>
+          <input id="edit-name" name="name" value="{{ competitor.name }}" required />
         </div>
-        <div>
-          <label>Primary Domain</label>
-          <input name="primary_domain" value="{{ competitor.primary_domain or '' }}" placeholder="example.com" />
-          <p class="meta" style="margin: 4px 0 0 0;">Use the raw domain (e.g. <code>example.com</code>). Full URLs are accepted and will be normalized.</p>
+        <div class="field">
+          <label for="edit-primary-domain">Primary Domain</label>
+          <input id="edit-primary-domain" name="primary_domain" value="{{ competitor.primary_domain or '' }}" placeholder="example.com" type="text" />
+          <p class="help">Use the raw domain (e.g. <code>example.com</code>). Full URLs are accepted and will be normalized.</p>
         </div>
-        <div style="grid-column: 1 / -1;">
-          <label style="display: inline-flex; align-items: center; gap: 8px;">
-            <input type="checkbox" name="is_active" value="1" {% if competitor.is_active %}checked{% endif %} />
+        <div class="checkbox-row">
+          <label for="edit-is-active">
+            <input type="checkbox" id="edit-is-active" name="is_active" value="1" {% if competitor.is_active %}checked{% endif %} />
             <span>Active (include in cron/global refresh)</span>
           </label>
         </div>
@@ -153,7 +161,7 @@
           </div>
           <div>
             <label>Keywords <span class="meta">(press only)</span></label>
-            <input name="google_news_search_phrases" placeholder="Default: {{ competitor.name }}" title="Leave blank to use competitor name; comma-separated phrases must all appear in article" />
+            <input name="google_news_search_phrases" placeholder="e.g. furnished rentals" title="Company name always required. Optional keywords improve relevance (e.g. furnished rentals); comma-separated." />
             <p class="meta" style="margin: 2px 0 0 0;">Leave blank to use “{{ competitor.name }}”. Edit to override.</p>
           </div>
           <div>
@@ -245,7 +253,7 @@
                       <div>
                         {% set phrases = (endpoint.extra_options or {}).get('google_news_search_phrases') %}
                         <label>Keywords</label>
-                        <input name="google_news_search_phrases" placeholder="Comma-separated" value="{{ phrases | join(', ') if phrases else '' }}" />
+                        <input name="google_news_search_phrases" placeholder="e.g. furnished rentals (optional)" value="{{ phrases | join(', ') if phrases else '' }}" title="Optional; improve relevance. Company name always required in search." />
                       </div>
                       {% endif %}
                       <div style="align-self: flex-end;">

@@ -510,40 +510,36 @@ def collect_google_news_items(
     search_phrases: Optional[List[str]] = None,
 ) -> List[dict]:
     """
-    Fetch Google News articles. By default uses company_name as quoted phrase; if
-    search_phrases is provided (e.g. ["landing furnished rentals"] or ["rove travel", "furnished rentals"]),
-    uses that for the main query (Google syntax: multiple quoted phrases joined with + for AND).
+    Fetch Google News articles. Company name always appears in the query (quoted, required).
+    Optional search_phrases are keywords added unquoted to improve relevance (e.g. furnished rentals);
+    they do not have to appear as exact phrases in the article.
+
+    Final query syntax: "CompanyName" keyword1 keyword2 when:90d
+    Example: "rove" furnished rentals when:90d
 
     Date on each item is publication date only (from RSS). Uses when:Nd in the query.
-    When search_phrases is not set, also fetches first word and "company partnership" and merges.
+    When no keywords are set, also fetches first word and "company partnership" and merges.
     Company blog links are filtered out by the pipeline (company_domains).
-    Multiple keywords use Google syntax "phrase1" + "phrase2" so all must appear in the article.
     """
-    search_phrases = [p for p in (search_phrases or []) if isinstance(p, str) and (p or "").strip()]
-    primary_query = ""
-    if search_phrases:
-        # One phrase: "phrase when:90d". Multiple: "phrase1" + "phrase2" when:90d (all required).
-        if len(search_phrases) == 1:
-            primary_query = (search_phrases[0] or "").strip()
-        else:
-            primary_query = " + ".join(f'"{p.strip()}"' for p in search_phrases if (p or "").strip())
-        if not primary_query:
-            search_phrases = []
+    keywords = [p for p in (search_phrases or []) if isinstance(p, str) and (p or "").strip()]
     company_name = (company_name or "").strip()
-    if not search_phrases and not company_name:
-        return []
-    primary = (primary_query if search_phrases else company_name).strip()
-    if not primary:
+    if not company_name:
         return []
 
+    primary = company_name
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
 
-    raw = (primary_query if search_phrases and len(search_phrases) > 1 else None)
-    results = _fetch_google_news_rss(primary, window_days, max_items, cutoff, raw_query=raw)
+    # Build query: "CompanyName" [keyword1 keyword2 ...] — company quoted, keywords unquoted.
+    if keywords:
+        keywords_part = " ".join(p.strip() for p in keywords)
+        raw_query = f'"{primary}" {keywords_part}'.strip()
+        results = _fetch_google_news_rss(primary, window_days, max_items, cutoff, raw_query=raw_query)
+    else:
+        results = _fetch_google_news_rss(primary, window_days, max_items, cutoff, raw_query=None)
     seen_urls = {item["url"] for item in results}
 
-    # When using company_name (no custom search_phrases): also fetch first word and partnership phrase.
-    if not search_phrases and company_name:
+    # When no custom keywords: also fetch first word and partnership phrase for more coverage.
+    if not keywords:
         if " " in company_name:
             first_word = company_name.split()[0].strip()
             if first_word and first_word.lower() != company_name.lower():
@@ -569,9 +565,10 @@ def collect_prnewswire_items(
     window_days: int = 90,
 ) -> List[dict]:
     """
-    Fetch PR Newswire press releases for the company by searching with company name.
-    Date on each item is the release publication date (from card text; never upload/fetch time).
-    Treated on par with Google News and user-provided company news links; enrichment/dedupe run after merge.
+    Fetch PR Newswire press releases: try company news page first (e.g. /news/aka/).
+    If that returns 200 and has release links, use only that page. Otherwise fall back to
+    keyword search. This avoids pulling unrelated search hits (e.g. "AKA" matching
+    "SLM Corporation AKA Sallie Mae" lawsuit notices).
     """
     company_name = (company_name or "").strip()
     if not company_name:
@@ -580,24 +577,6 @@ def collect_prnewswire_items(
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
     company_slug = re.sub(r"[^a-z0-9]", "", company_name.lower())
 
-    # Do not short-circuit on company page 404: the page may be JS-only (e.g. Blueground) or
-    # the slug may differ; keyword search and company page fetch with Playwright in 1b still find releases.
-    query = quote_plus(company_name)
-    # Request 100 results per page; pull all links that appear (up to max_items=100).
-    search_url = (
-        f"https://www.prnewswire.com/search/all/?keyword={query}&pagesize=100"
-    )
-
-    html_content: Optional[str] = None
-    try:
-        fetched = fetch_url(search_url, timeout=25, headers={"User-Agent": USER_AGENT_BROWSER})
-        if fetched.status_code == 200 and fetched.text:
-            html_content = fetched.text
-    except Exception:
-        pass
-
-    # PR Newswire search results are JS-rendered; initial HTML often has no article links (only nav links).
-    # If we have no release-style links (path contains /news-releases/ and ends with .html or has long path), try Playwright.
     def _count_release_links(html: str) -> int:
         if not html:
             return 0
@@ -611,17 +590,55 @@ def collect_prnewswire_items(
                 n += 1
         return n
 
-    release_links = _count_release_links(html_content or "")
-    if release_links < 2:
+    company_page_url = f"https://www.prnewswire.com/news/{company_slug}/"
+    company_html: Optional[str] = None
+    company_page_worked = False
+
+    # 1) Try company news page first (e.g. https://www.prnewswire.com/news/aka/).
+    if company_slug:
         try:
-            from ..config import settings
-            if getattr(settings, "playwright_enabled", False):
-                from .http import fetch_url_js
-                js_fetched = fetch_url_js(search_url)
-                if js_fetched.text and len(js_fetched.text) > 1000:
-                    html_content = js_fetched.text
+            company_fetched = fetch_url(company_page_url, timeout=25, headers={"User-Agent": USER_AGENT_BROWSER})
+            if company_fetched.status_code == 200 and company_fetched.text and len(company_fetched.text) > 1000:
+                company_html = company_fetched.text
         except Exception:
             pass
+        if not company_html or _count_release_links(company_html) < 1:
+            try:
+                from ..config import settings
+                if getattr(settings, "playwright_enabled", False):
+                    from .http import fetch_url_js
+                    js_fetched = fetch_url_js(company_page_url)
+                    if js_fetched.text and len(js_fetched.text) > 1000:
+                        company_html = js_fetched.text
+            except Exception:
+                pass
+        if company_html and _count_release_links(company_html) >= 1:
+            company_page_worked = True
+
+    html_content: Optional[str] = None
+    if company_page_worked and company_html:
+        html_content = company_html
+    else:
+        # 2) Fallback: keyword search (only when company page 404 or 0 results).
+        query = quote_plus(company_name)
+        search_url = f"https://www.prnewswire.com/search/all/?keyword={query}&pagesize=100"
+        try:
+            fetched = fetch_url(search_url, timeout=25, headers={"User-Agent": USER_AGENT_BROWSER})
+            if fetched.status_code == 200 and fetched.text:
+                html_content = fetched.text
+        except Exception:
+            pass
+        release_links = _count_release_links(html_content or "")
+        if release_links < 2:
+            try:
+                from ..config import settings
+                if getattr(settings, "playwright_enabled", False):
+                    from .http import fetch_url_js
+                    js_fetched = fetch_url_js(search_url)
+                    if js_fetched.text and len(js_fetched.text) > 1000:
+                        html_content = js_fetched.text
+            except Exception:
+                pass
 
     if not html_content:
         return []
@@ -825,79 +842,7 @@ def collect_prnewswire_items(
         if len(results) >= max_items:
             return results
 
-    # 1b) Also fetch the company's PR Newswire news page (e.g. https://www.prnewswire.com/news/blueground/).
-    #     This reliably surfaces releases when the search page is JS-heavy or returns few results.
-    company_html: Optional[str] = None
-    if company_slug and len(results) < max_items:
-        company_page_url = f"https://www.prnewswire.com/news/{company_slug}/"
-        try:
-            company_fetched = fetch_url(company_page_url, timeout=25, headers={"User-Agent": USER_AGENT_BROWSER})
-            if company_fetched.status_code == 200 and company_fetched.text and len(company_fetched.text) > 1000:
-                company_html = company_fetched.text
-        except Exception:
-            pass
-        if not company_html and company_slug:
-            try:
-                from ..config import settings
-                if getattr(settings, "playwright_enabled", False):
-                    from .http import fetch_url_js
-                    js_fetched = fetch_url_js(company_page_url)
-                    if js_fetched.text and len(js_fetched.text) > 1000:
-                        company_html = js_fetched.text
-            except Exception:
-                pass
-        if company_html:
-            soup2 = BeautifulSoup(company_html, "html.parser")
-            for a in soup2.find_all("a", href=True):
-                href = (a.get("href") or "").strip()
-                if "/news-releases/" not in href or "prnewswire.com" not in href:
-                    continue
-                if not href.startswith("http"):
-                    href = urljoin("https://www.prnewswire.com", href)
-                if href in seen_urls:
-                    continue
-                title = (a.get_text() or "").strip()
-                if not title or len(title) < 10:
-                    parent = a.parent
-                    if parent:
-                        title = (parent.get_text() or "").strip()[:200]
-                    if not title or len(title) < 10:
-                        continue
-                dt = _date_from_card(a)
-                if dt is None:
-                    date_match = re.search(
-                        r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s*\d{4}",
-                        title,
-                        re.IGNORECASE,
-                    )
-                    if date_match:
-                        try:
-                            dt = datetime.strptime(date_match.group(0), "%b %d, %Y")
-                            if dt.tzinfo is None:
-                                dt = dt.replace(tzinfo=timezone.utc)
-                        except Exception:
-                            pass
-                if dt is None and href:
-                    dt = _date_from_article_url(href)
-                if dt and dt < cutoff:
-                    continue
-                if re.search(r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s*\d{4}", title, re.IGNORECASE):
-                    title = re.sub(r"^[A-Za-z]{3}\s+\d{1,2},\s*\d{4}[^:]*:\s*", "", title).strip()
-                if not _title_mentions_company(title, href):
-                    if not _article_mentions_partnership_with_company(href, company_name):
-                        continue
-                seen_urls.add(href)
-                results.append(
-                    {
-                        "title": title[:300],
-                        "url": href,
-                        "date": dt.isoformat() if dt else None,
-                        "source": "PR Newswire",
-                        "provider": "prnewswire",
-                    }
-                )
-                if len(results) >= max_items:
-                    return results
+    # Company page is already used as primary source or tried and failed; no second fetch (1b) here.
 
     # 2) Fallback: PR Newswire injects result links via JS but often embeds URLs in the HTML (e.g. in script/data).
     #    Extract relative paths /news-releases/...html and build items so we get articles without Playwright.
@@ -931,9 +876,9 @@ def collect_prnewswire_items(
             return _parse_iso_date(match.group(0))
         return None
 
-    # Run fallback on search HTML and, if we have it, company page HTML.
+    # Run fallback on search HTML and, if different, company page HTML (avoid duplicate when company page was primary).
     html_sources = [html_content]
-    if company_slug and company_html:
+    if company_slug and company_html and company_html is not html_content:
         html_sources.append(company_html)
     for _html in html_sources:
         if len(results) >= max_items:

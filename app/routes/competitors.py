@@ -315,7 +315,6 @@ async def competitors_create(request: Request):
                         use_sitemap_first=False,
                         extra_options={
                             "google_news_search_phrases": press_keywords,
-                            "press_search_name": press_keywords[0],
                         },
                     )
                 )
@@ -785,7 +784,6 @@ def competitor_add_source(
             phrases = _parse_google_news_phrases(google_news_search_phrases)
             if phrases:
                 extra_options = {"google_news_search_phrases": phrases}
-                extra_options["press_search_name"] = phrases[0]
         endpoint = SourceEndpoint(
             competitor_id=competitor_id,
             channel=ch,
@@ -845,10 +843,8 @@ def competitor_update_source(
             phrases = _parse_google_news_phrases(google_news_search_phrases)
             if phrases:
                 extra["google_news_search_phrases"] = phrases
-                extra["press_search_name"] = phrases[0]
             else:
                 extra.pop("google_news_search_phrases", None)
-                extra.pop("press_search_name", None)
             endpoint.extra_options = extra if extra else None
     _sync_seed_file()
     return RedirectResponse(url=f"/competitors/{competitor_id}", status_code=HTTP_303_SEE_OTHER)

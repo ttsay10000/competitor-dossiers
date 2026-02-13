@@ -1258,11 +1258,18 @@ def force_refresh_and_reset_baseline(request: Request):
     to now. The first refresh establishes the baseline; subsequent refreshes compare against
     it so executive summaries surface what changed.
     """
-    from ..runner import run as run_all_channels, advance_baseline_after_full_refresh, clear_all_snapshots, clear_all_events
+    from ..runner import (
+        run as run_all_channels,
+        advance_baseline_after_full_refresh,
+        clear_baseline_before_force_refresh,
+        clear_all_snapshots,
+        clear_all_events,
+    )
     from ..db import get_session
     from ..seed import run_seed
 
     try:
+        clear_baseline_before_force_refresh()
         run_seed()
         logging.info("Force refresh: ran seed (seed_data.json → DB).")
         with get_session() as session:

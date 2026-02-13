@@ -1015,7 +1015,7 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                 )
                 continue
 
-            # Apply 90-day window to non–PR Newswire items; keep all PR Newswire (press releases) regardless of age.
+            # Apply 90-day window to non–PR Newswire items; keep all PR Newswire regardless of age (no time filter for PR).
             cutoff = datetime.now(timezone.utc) - timedelta(days=90)
             filtered_items: list[dict] = []
             for item in raw_items:
@@ -1040,10 +1040,15 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                 )
                 continue
 
+            # Cap by max_raw but keep all PR Newswire (put PR first so they are never cut).
             max_raw = settings.press_max_raw_items_per_competitor
-            if len(filtered_items) > max_raw:
-                filtered_items = filtered_items[:max_raw]
-            print(f"[press] Step 5 — After 90d window + cap (PR Newswire always kept) (max_raw={max_raw}): {len(filtered_items)} items")
+            pr_items = [it for it in filtered_items if (it.get("provider") or "").strip().lower() == "prnewswire"]
+            non_pr_items = [it for it in filtered_items if (it.get("provider") or "").strip().lower() != "prnewswire"]
+            combined = pr_items + non_pr_items
+            if len(combined) > max_raw:
+                combined = combined[:max_raw]
+            filtered_items = combined
+            print(f"[press] Step 5 — After 90d window + cap (PR first, all PR kept) (max_raw={max_raw}): {len(filtered_items)} items")
 
             # 4) Load previous snapshot for diff/events and for fallback when enrichment returns no groups.
             # We always run full cleaning + grouping on the full pull so late articles join the right groups and new topics appear.
@@ -1312,9 +1317,14 @@ def run_press_local(competitor_name: Optional[str] = None) -> None:
             if dt and dt < cutoff:
                 continue
             filtered_items.append(item)
-        if len(filtered_items) > max_raw:
-            filtered_items = filtered_items[:max_raw]
-        print(f"[press] After 90d + cap (PR Newswire always kept): {len(filtered_items)} items")
+        # Cap but keep all PR Newswire (put PR first so they are never cut).
+        pr_items = [it for it in filtered_items if (it.get("provider") or "").strip().lower() == "prnewswire"]
+        non_pr_items = [it for it in filtered_items if (it.get("provider") or "").strip().lower() != "prnewswire"]
+        combined = pr_items + non_pr_items
+        if len(combined) > max_raw:
+            combined = combined[:max_raw]
+        filtered_items = combined
+        print(f"[press] After 90d + cap (PR first, all PR kept): {len(filtered_items)} items")
 
         if not filtered_items:
             print(f"[press] No items → skipping enrichment.")
@@ -1821,6 +1831,17 @@ def run_reviews(competitor_name: Optional[str] = None, is_cancelled: Optional[Ca
 
 # Website/digital-footprint event types; we only keep these since last baseline (no running log).
 DIGITAL_FOOTPRINT_EVENT_TYPES = ("narrative.homepage_updated", "narrative.coming_soon")
+
+
+def clear_baseline_before_force_refresh() -> None:
+    """
+    Set every competitor's reporting_baseline_at to None.
+    Call at the start of a force refresh so the baseline_set column resets (shows "—")
+    until the run completes and advance_baseline_after_full_refresh() sets the new baseline.
+    """
+    with get_session() as session:
+        for c in session.query(Competitor).all():
+            c.reporting_baseline_at = None
 
 
 def advance_baseline_after_full_refresh() -> None:
