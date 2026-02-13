@@ -230,12 +230,13 @@ def _is_rove_property_url(candidate_url: str, source_url: str) -> bool:
     For Rove (rovetravel.com), only accept /listing/<slug> URLs as individual properties.
     Exclude /search, /search?market=..., /collections/..., /locations, /list-on-rove, etc.,
     which otherwise match generic is_property_like patterns and get trapped as extra properties.
+    Use _same_site_netloc so www.rovetravel.com matches rovetravel.com (sitemap uses www).
     """
     if not _is_rove_source(source_url):
         return True  # Not Rove: no extra filter
     parsed_c = urlparse(candidate_url)
     parsed_s = urlparse(source_url)
-    if (parsed_c.netloc or "").lower() != (parsed_s.netloc or "").lower():
+    if not _same_site_netloc(parsed_c.netloc or "", parsed_s.netloc or ""):
         return False
     path = (parsed_c.path or "").rstrip("/") or "/"
     path_lower = path.lower()
@@ -422,8 +423,8 @@ def _extract_landing_locations_html(html: str, source_url: str, base_url: str) -
             continue
 
         if tag.name == "h2":
-            # Location header: "City, ST" or "Washington D.C."
-            if _RE_LANDING_LOCATION.match(text) and len(text) < 80:
+            # Location header: "City, ST", "City, State", or "Washington D.C."
+            if _is_landing_location_header(text):
                 # Finalize previous location count before switching
                 if current_market is not None:
                     count = sum(1 for p in properties if (p.get("market") or "").strip() == current_market)
@@ -435,8 +436,8 @@ def _extract_landing_locations_html(html: str, source_url: str, base_url: str) -
             # Property name — but skip image collector / nav card if it ever appears as h3.
             if _is_landing_image_collector(text):
                 continue
-            # Skip location headers that appear as h3 (e.g. duplicate "City, ST" — not a property).
-            if _RE_LANDING_LOCATION.match(text) and len(text) < 80:
+            # Skip location headers that appear as h3 (e.g. duplicate "City, ST" or "City, State" — not a property).
+            if _is_landing_location_header(text):
                 continue
             if "no properties available" in text.lower():
                 continue
@@ -476,7 +477,7 @@ def _extract_landing_locations_html(html: str, source_url: str, base_url: str) -
     seen_markets = {lc["market"] for lc in location_counts}
     for h2 in soup.find_all("h2"):
         text = (h2.get_text() or "").strip()
-        if text and _RE_LANDING_LOCATION.match(text) and len(text) < 80 and text not in seen_markets:
+        if text and _is_landing_location_header(text) and text not in seen_markets:
             location_counts.append({"market": text, "count": 0})
             seen_markets.add(text)
 
@@ -689,6 +690,31 @@ _US_STATE_ABBREV = {
 
 # Pattern: "City, ST" or "City, State" at start of line (for location line in Lark blocks).
 _RE_CITY_ST = re.compile(r"^([^,]+),\s*([a-z]{2}|[A-Za-z\s]+)$", re.IGNORECASE)
+
+# Set of full US state names (lowercase) for Landing location-header detection.
+_US_STATE_NAMES_LOWER = {v.lower() for v in _US_STATE_ABBREV.values()}
+
+
+def _is_landing_location_header(text: str) -> bool:
+    """
+    True if text is a Landing location header (City, ST or City, State or Washington D.C.),
+    not an individual property name. Used to skip such entries in extraction and in normalize_properties.
+    """
+    if not text or len(text) >= 80:
+        return False
+    t = text.strip()
+    if _RE_LANDING_LOCATION.match(t):
+        return True
+    # "City, State" with full state name (e.g. Atlanta, Georgia) — not matched by _RE_LANDING_LOCATION.
+    m = _RE_CITY_ST.match(t)
+    if m:
+        state_part = (m.group(2) or "").strip().lower()
+        if state_part in _US_STATE_ABBREV or state_part in _US_STATE_NAMES_LOWER:
+            return True
+    if re.match(r"^Washington\s+D\.?C\.?$", t, re.IGNORECASE):
+        return True
+    return False
+
 
 # Lark: h2 that is a detail line (Keys, F&B, Brand) not a property name — skip so we don't count as separate property
 _RE_LARK_DETAIL_H2 = re.compile(
@@ -1176,6 +1202,9 @@ def normalize_properties(properties: list[dict[str, Any]]) -> list[dict[str, Any
         name = (prop.get("name") or "").strip()
         if _is_detail_line_or_junk_name(name):
             continue
+        # Landing (and any source): "City, ST" / "City, State" / "Washington D.C." are location headers, not properties.
+        if _is_landing_location_header(name):
+            continue
         # Kasa: "View details Apartment/Hotel Property Name" -> store as "Apartment/Hotel Property Name"
         if name.lower().startswith("view details ") and len(name) > 13:
             name = name[13:].strip()
@@ -1658,7 +1687,9 @@ def collect_asset_snapshot(
 
                     # Otherwise, if it's another sitemap (same origin or same-site, e.g. vacasa.com → vacasa.ca),
                     # enqueue it so we can pull property URLs from section-specific sitemaps.
-                    if url.endswith(".xml") or url.endswith(".xml.gz"):
+                    # Use path to handle paginated sitemaps like sitemap-units.xml?p=2 (Vacasa).
+                    path = (urlparse(url).path or "").lower()
+                    if path.endswith(".xml") or path.endswith(".xml.gz"):
                         parsed_child = urlparse(url)
                         parsed_root = urlparse(root_sitemap_url)
                         if (

@@ -134,11 +134,21 @@ SEED_COMPETITORS = [
             {"channel": "talent", "url": "https://www.hellolanding.com/p/careers/", "confidence": "medium"},
         ],
     },
+    # Rove: /search is SPA with infinite scroll; need Playwright + scroll to get full list (not just ~10 above fold).
     {
         "name": "Rove",
         "primary_domain": "rovetravel.com",
         "sources": [
-            {"channel": "asset", "url": "https://rovetravel.com/search", "confidence": "high"},
+            {
+                "channel": "asset",
+                "url": "https://rovetravel.com/search",
+                "confidence": "high",
+                "js_required": True,
+                "extra_options": {
+                    "strategy_chain": ["sitemap_first", "js_exhaust", "html"],
+                    "load_more": {"scroll_window": True, "scroll_wait_sec": 1.5, "max_scrolls": 150},
+                },
+            },
             {"channel": "talent", "url": "https://jobs.gem.com/rove", "confidence": "high"},
         ],
     },
