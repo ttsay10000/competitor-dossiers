@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Optional
 import requests
 from bs4 import BeautifulSoup
 
-from .http import fetch_url, fetch_url_js, fetch_url_js_exhaust
+from .http import fetch_url, fetch_url_js, fetch_url_js_exhaust, fetch_url_js_wait_for_spa
 
 # Max characters of page text to send to LLM for property extraction (fit context, control cost).
 # Increased to 50k so large property lists (e.g. AvantStay-style search pages) are not silently
@@ -52,6 +52,22 @@ def extract_links_from_sitemap(xml_text: str) -> list[str]:
     return urls
 
 
+def _same_site_netloc(netloc1: str, netloc2: str) -> bool:
+    """True if same host or same site (e.g. vacasa.com and vacasa.ca for sitemap following)."""
+    if not netloc1 or not netloc2:
+        return False
+    if netloc1.lower() == netloc2.lower():
+        return True
+    # Same "site" brand: www.vacasa.com and www.vacasa.ca -> both "vacasa"
+    def site_key(n: str) -> str:
+        n = (n or "").lower().strip()
+        if n.startswith("www."):
+            n = n[4:]
+        parts = n.split(".")
+        return parts[0] if parts else ""
+    return site_key(netloc1) == site_key(netloc2)
+
+
 def expand_sitemap(url: str) -> list[str]:
     fetched = fetch_url(url)
     if fetched.status_code != 200:
@@ -70,11 +86,31 @@ def expand_sitemap(url: str) -> list[str]:
 
 
 # AKA (stayaka.com): property URLs are single-segment slugs like /hotel-aka-backbay or /aka-central-park.
-# Sitemap often contains hundreds of other single-segment URLs (locations, cities, etc.); only count these.
+# Sitemap and HTML often list location/city pages (e.g. /aka-new-york-city) where "location has properties listed below";
+# only count actual property pages, not these location index pages.
 _RE_AKA_PROPERTY_PATH = re.compile(
-    r"^/(?:hotel-aka-|aka-)[a-z0-9-]+(?:\?|/$|$)",
+    r"^/(?:hotel-aka-|aka-)([a-z0-9-]+)(?:\?|/$|$)",
     re.IGNORECASE,
 )
+
+# AKA path slugs that are location/city index pages (one location with properties listed below), not individual properties.
+_AKA_LOCATION_SLUGS = frozenset({
+    "new-york", "new-york-city", "nyc", "brooklyn", "manhattan", "queens", "long-island",
+    "washington-dc", "washington", "dc", "chicago", "boston", "philadelphia", "philly",
+    "san-francisco", "sf", "bay-area", "los-angeles", "la", "orange-county", "san-diego",
+    "miami", "miami-beach", "atlanta", "dallas", "houston", "austin", "denver", "seattle",
+    "seattle-belltown", "seattle-downtown", "minneapolis", "detroit", "baltimore",
+    "united-kingdom", "london", "uk", "canada", "toronto", "vancouver", "montreal",
+})
+
+# AKA slug substrings that indicate content/offer/guide pages, not actual residence properties.
+_AKA_NON_PROPERTY_SUBSTRINGS = frozenset({
+    "-insurance", "-offer", "-grocery", "-insider-offer", "-face-masks", "-espanol",
+    "-indonesia", "-middle-east", "-student-housing", "-portuguese", "-wedding",
+    "-welcome-guide", "-wifi-welcome", "-museums", "-film-festival", "-business",
+    "insider-offer", "international-grocery", "off-campus", "welcome-guide",
+    "face-masks", "portuguese",  # standalone content pages (e.g. /aka-face-masks, /aka-portuguese)
+})
 
 
 def _is_aka_source(url: str) -> bool:
@@ -86,10 +122,30 @@ def _is_aka_source(url: str) -> bool:
     return "stayaka" in host or host.endswith("aka.com")
 
 
+def _is_vacasa_source(url: str) -> bool:
+    """True if URL's host is vacasa.com or vacasa.ca."""
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    return "vacasa.com" in host or "vacasa.ca" in host
+
+
+def _is_vacasa_property_url(candidate_url: str, source_url: str) -> bool:
+    """
+    For Vacasa, only accept /unit/<numeric> URLs (real listings).
+    Sitemap and HTML can include /about-us, /accessibility, etc.; we exclude those.
+    """
+    if not _is_vacasa_source(source_url):
+        return True  # Not Vacasa: no extra filter
+    parsed = urlparse(candidate_url)
+    path = (parsed.path or "").rstrip("/") or "/"
+    return bool(re.search(r"/unit/[0-9]+", path))
+
+
 def _is_aka_property_url(candidate_url: str, source_url: str) -> bool:
     """
     True if candidate_url is from the same host as source_url and looks like an AKA property page.
-    Used when source is AKA to avoid counting 200+ non-property sitemap URLs (e.g. /new-york-city).
+    Used when source is AKA to avoid counting location/city index pages (e.g. /aka-new-york-city)
+    where the page is "location with properties listed below" rather than an individual property.
     """
     if not _is_aka_source(source_url):
         return True  # Not AKA source: no extra filter
@@ -98,7 +154,60 @@ def _is_aka_property_url(candidate_url: str, source_url: str) -> bool:
     if (parsed_c.netloc or "").lower() != (parsed_s.netloc or "").lower():
         return False
     path = (parsed_c.path or "").rstrip("/") or "/"
-    return bool(_RE_AKA_PROPERTY_PATH.match(path))
+    match = _RE_AKA_PROPERTY_PATH.match(path)
+    if not match:
+        return False
+    slug = (match.group(1) or "").strip().lower()
+    # Exclude known location/city index slugs so we don't count "location with properties below" as properties.
+    if slug in _AKA_LOCATION_SLUGS:
+        return False
+    # Also exclude slugs that look like city names (e.g. *-city, *-dc, *-downtown) to reduce false positives.
+    if slug.endswith("-city") or slug.endswith("-dc") or slug.endswith("-downtown") or slug.endswith("-metro"):
+        return False
+    # Exclude content/offer/guide pages (insider offers, welcome guides, language pages, etc.).
+    for sub in _AKA_NON_PROPERTY_SUBSTRINGS:
+        if sub in slug:
+            return False
+    # Standalone "aka-insider" is a program page, not a property.
+    if slug == "insider":
+        return False
+    return True
+
+
+def _is_placemakr_source(url: str) -> bool:
+    """True if URL's host is placemakr.com (so we apply stricter link filtering)."""
+    if not url:
+        return False
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    return "placemakr.com" in host
+
+
+def _is_placemakr_property_url(candidate_url: str, source_url: str) -> bool:
+    """
+    For Placemakr, only accept URLs that are real location/property pages. The locations page
+    links to (1) city-state pages like /saltlakecity-ut, /washington-dc, and (2) individual
+    properties like /locations/washington-dc/dupont-circle. Exclude nav/marketing links
+    that match generic patterns (e.g. /residential, /partners, /investments) which would
+    otherwise end up as "Other" after state inference.
+    """
+    if not _is_placemakr_source(source_url):
+        return True  # Not Placemakr: no extra filter
+    parsed = urlparse(candidate_url)
+    path = (parsed.path or "").rstrip("/") or "/"
+    parts = [p for p in path.split("/") if p]
+    # (1) Single-segment city-state: /{slug}-{XX} where XX is valid US state abbrev
+    if len(parts) == 1:
+        seg = parts[0].lower()
+        if "-" in seg:
+            suffix = seg.split("-")[-1]
+            if len(suffix) == 2 and suffix in _US_STATE_ABBREV:
+                return True
+        return False
+    # (2) /locations/{city}/{property} — at least two segments after /locations/
+    if len(parts) >= 3 and parts[0].lower() == "locations":
+        return True
+    return False
 
 
 def is_property_like(url: str) -> bool:
@@ -117,6 +226,10 @@ def is_property_like(url: str) -> bool:
     path_lower = path.lower().rstrip("/") or "/"
     # Exclude portfolio index (e.g. /portfolio or /portfolio/) — only /portfolio/slug is a property.
     if path_lower in ("/portfolio", "/properties", "/locations", "/property"):
+        return False
+    # Exclude single-segment "property-*" nav/marketing pages (e.g. Vacasa /property-management).
+    # We want /property/slug (listing), not /property-management.
+    if path_lower.startswith("/property-"):
         return False
     # Exclude bare search/listing index (e.g. AvantStay https://avantstay.com/search) — not a property.
     if path_lower in ("/search", "/search/"):
@@ -448,10 +561,20 @@ def extract_properties_from_html(html: str, source_url: str = "") -> list[dict[s
             continue
         if _link_in_footer(link):
             continue
+        # Vacasa: only count /unit/<id> listings, not /about-us, /accessibility, etc.
+        if _is_vacasa_source(source_url):
+            abs_url = urljoin(base_url, href) if href and not href.startswith("http") else href
+            if not _is_vacasa_property_url(abs_url, source_url):
+                continue
         # AKA: only count real property slugs (/hotel-aka-*, /aka-*), not /locations/*, /exclusive-offers, /live-it, etc.
         if _is_aka_source(source_url):
             abs_url = urljoin(base_url, href) if href and not href.startswith("http") else href
             if not _is_aka_property_url(abs_url, source_url):
+                continue
+        # Placemakr: only count city-state pages (e.g. /saltlakecity-ut) and /locations/city/property — exclude nav links like /residential, /partners that would become "Other".
+        if _is_placemakr_source(source_url):
+            abs_url = urljoin(base_url, href) if href and not href.startswith("http") else href
+            if not _is_placemakr_property_url(abs_url, source_url):
                 continue
         prop: dict[str, Any] = {
             "url": href,
@@ -1279,25 +1402,23 @@ def _fetch_blueground_destinations(
         return out
 
     # Step 1: get USA destination links from /destinations.
-    # Try Playwright first when available; if we get 0 USA links, try the other fetch method.
+    # Blueground uses SSR; plain HTTP returns links. Try HTTP first (fast, reliable), fall back to
+    # Playwright only if 0 USA links (e.g. if they change to client-only render).
     print(f"[asset] Blueground: fetching destinations page...", flush=True)
-    fetched = None
-    if _playwright_available():
-        try:
-            fetched = fetch_url_js(source_url)
-        except Exception:
-            fetched = fetch_url(source_url)
-    else:
-        fetched = fetch_url(source_url)
+    fetched = fetch_url(source_url)
     if fetched.status_code != 200 or not fetched.text:
         raise RuntimeError(f"Blueground destinations fetch failed: {fetched.status_code}")
     raw_html_parts.append(fetched.text)
     usa_links = _parse_usa_links(fetched.text)
     if not usa_links and _playwright_available():
-        print(f"[asset] Blueground: Playwright HTML had no USA links; trying HTTP fetch for destinations", flush=True)
+        print(f"[asset] Blueground: HTTP had no USA links; trying Playwright for destinations", flush=True)
         try:
-            alt = fetch_url(source_url)
-            if alt.status_code == 200 and alt.text:
+            alt = fetch_url_js_wait_for_spa(
+                source_url,
+                wait_after_load_sec=5.0,
+                wait_until="domcontentloaded",
+            )
+            if alt.text:
                 usa_links = _parse_usa_links(alt.text)
                 raw_html_parts[0] = alt.text
         except Exception:
@@ -1360,7 +1481,11 @@ def _fetch_blueground_destinations(
             props = _extract_properties_from_dest_page(dest_fetched.text, dest_url, city, state)
             if not props and use_js_for_dest:
                 try:
-                    dest_fetched = fetch_url_js(dest_url)
+                    dest_fetched = fetch_url_js_wait_for_spa(
+                        dest_url,
+                        wait_after_load_sec=5.0,
+                        wait_until="domcontentloaded",
+                    )
                     if dest_fetched.status_code == 200 and dest_fetched.text:
                         raw_html_parts[-1] = dest_fetched.text
                         props = _extract_properties_from_dest_page(dest_fetched.text, dest_url, city, state)
@@ -1442,6 +1567,9 @@ def collect_asset_snapshot(
                     # If this looks like a property/location URL, keep it.
                     if not is_property_like(url):
                         pass
+                    elif not _is_vacasa_property_url(url, source_url):
+                        # Vacasa sitemaps list many pages; only count /unit/<id> listings.
+                        pass
                     elif not _is_aka_property_url(url, source_url):
                         # AKA sitemaps list 200+ single-segment URLs; only count real property slugs (/hotel-aka-*, /aka-*).
                         pass
@@ -1449,12 +1577,16 @@ def collect_asset_snapshot(
                         property_urls.add(url)
                         continue
 
-                    # Otherwise, if it's another sitemap (same origin), enqueue it so we
-                    # can pull property URLs from section-specific sitemaps as well.
+                    # Otherwise, if it's another sitemap (same origin or same-site, e.g. vacasa.com → vacasa.ca),
+                    # enqueue it so we can pull property URLs from section-specific sitemaps.
                     if url.endswith(".xml") or url.endswith(".xml.gz"):
                         parsed_child = urlparse(url)
                         parsed_root = urlparse(root_sitemap_url)
-                        if parsed_child.netloc and parsed_child.netloc == parsed_root.netloc and url not in visited:
+                        if (
+                            parsed_child.netloc
+                            and _same_site_netloc(parsed_child.netloc, parsed_root.netloc)
+                            and url not in visited
+                        ):
                             stack.append(url)
 
             # Only return sitemap result when we found property-like URLs so caller can fall back to HTML.
