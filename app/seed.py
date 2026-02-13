@@ -126,6 +126,7 @@ SEED_COMPETITORS = [
                 "confidence": "medium",
                 "extra_options": {"strategy": "blueground_destinations"},
             },
+            {"channel": "press", "url": "https://www.theblueground.com/blog", "confidence": "medium"},
         ],
     },
 ]

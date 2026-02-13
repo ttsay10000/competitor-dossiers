@@ -18,36 +18,46 @@
     <strong>Refresh or populate data</strong>
     {% set _channels = display_channels | default(['talent', 'asset', 'press', 'homepage', 'reviews', 'social']) %}
     {% set _has = has_snapshots | default({}) %}
-    <p class="meta card-desc">Signal status</p>
-    <div class="channel-pills mb-12">
-      {% for ch in _channels %}
-      {% set label = 'Website' if ch == 'homepage' else ch|capitalize %}
-      <span class="channel-pill {% if _has.get(ch) %}has{% endif %}" title="{{ label }}: {% if _has.get(ch) %}has data{% else %}no data{% endif %}">{{ label }}{% if _has.get(ch) %} ✓{% endif %}</span>
-      {% endfor %}
-    </div>
-    <div style="display: grid; gap: 16px;">
-      <div>
-        <p class="meta card-desc">Run channels — choose which collectors to run (see <a href="/runs">Runs</a> for status).</p>
-        <form method="post" action="/competitors/{{ competitor.id }}/run-now" class="run-channels-form" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;">
-          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="talent" {% if not _has.get('talent') %}checked{% endif %} /> Talent</label>
-          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="asset" {% if not _has.get('asset') %}checked{% endif %} /> Asset</label>
-          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="press" {% if not _has.get('press') %}checked{% endif %} /> Press</label>
-          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="homepage" {% if not _has.get('homepage') %}checked{% endif %} /> Website</label>
-          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="reviews" {% if not _has.get('reviews') %}checked{% endif %} /> Reviews</label>
-          <label style="display: inline-flex; align-items: center; gap: 4px;"><input type="checkbox" name="channels" value="social" {% if not _has.get('social') %}checked{% endif %} /> Social</label>
+    {% set _last_runs = last_runs | default({}) %}
+    {% set _running = running_channels if running_channels is defined else [] %}
+    <div class="refresh-card-sections">
+      <section class="refresh-section">
+        <p class="meta card-desc">Signal status — each channel shows last run time; yellow while running.</p>
+        <div class="channel-pills" id="channel-pills">
+          {% for ch in _channels %}
+          {% set label = 'Website' if ch == 'homepage' else ch|capitalize %}
+          {% set _running_ch = ch in _running %}
+          <span class="channel-pill {% if _running_ch %}running{% elif _has.get(ch) %}has{% endif %}" data-channel="{{ ch }}" title="{{ label }}{% if _last_runs.get(ch) %}: last {{ _last_runs[ch].created_at_str }}{% endif %}">
+            {{ label }}{% if _has.get(ch) and not _running_ch %} ✓{% endif %}
+            <span class="channel-pill-timer" data-timer="{{ ch }}">{% if _last_runs.get(ch) %}{{ _last_runs[ch].created_at_str }}{% else %}—{% endif %}</span>
+          </span>
+          {% endfor %}
+        </div>
+      </section>
+      <section class="refresh-section">
+        <p class="meta card-desc">Run channels — choose collectors to run (see <a href="/runs">Runs</a> for history).</p>
+        <form method="post" action="/competitors/{{ competitor.id }}/run-now" class="run-channels-form run-channels-inline">
+          <div class="run-channels-checkboxes">
+            <label><input type="checkbox" name="channels" value="talent" {% if not _has.get('talent') %}checked{% endif %} /> Talent</label>
+            <label><input type="checkbox" name="channels" value="asset" {% if not _has.get('asset') %}checked{% endif %} /> Asset</label>
+            <label><input type="checkbox" name="channels" value="press" {% if not _has.get('press') %}checked{% endif %} /> Press</label>
+            <label><input type="checkbox" name="channels" value="homepage" {% if not _has.get('homepage') %}checked{% endif %} /> Website</label>
+            <label><input type="checkbox" name="channels" value="reviews" {% if not _has.get('reviews') %}checked{% endif %} /> Reviews</label>
+            <label><input type="checkbox" name="channels" value="social" {% if not _has.get('social') %}checked{% endif %} /> Social</label>
+          </div>
           <button type="submit">Run selected channels</button>
         </form>
-      </div>
-      <div style="padding-top: 12px; border-top: 1px solid var(--border);">
-        <p class="meta card-desc">Reset — sets comparison baseline to now, then runs all collectors.</p>
-        <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;">
-          <form method="post" action="/dossier/{{ competitor.id }}/seed" class="refresh-form" style="display: inline-block;">
+      </section>
+      <section class="refresh-section refresh-section-reset">
+        <p class="meta card-desc">Reset — set comparison baseline to now, then run all collectors.</p>
+        <div class="reset-row">
+          <form method="post" action="/dossier/{{ competitor.id }}/seed" class="refresh-form">
             <button type="submit">Reset baseline &amp; refresh</button>
           </form>
-          <span id="refresh-status" class="meta" style="font-weight: 500;"></span>
-          <span class="meta">For full reset (incl. press cache), use <strong>Force refresh &amp; reset baseline</strong> on <a href="/competitors">Dossiers</a>.</span>
+          <span id="refresh-status" class="meta refresh-status-msg"></span>
         </div>
-      </div>
+        <p class="meta mt-4">For full reset (incl. press cache), use <strong>Force refresh &amp; reset baseline</strong> on <a href="/competitors">Dossiers</a>.</p>
+      </section>
     </div>
   </div>
 
@@ -95,6 +105,7 @@
           statusEl.style.color = 'var(--accent)';
           setTimeout(function() { statusEl.textContent = ''; statusEl.style.color = ''; }, 5000);
           if (window.history && window.history.replaceState) {
+            // Only remove refreshed=1; keep started/run_start_ts/channels so run log stays until user leaves
             var q = window.location.search.replace(/[?&]refreshed=1/, '').replace(/^\?&/, '?').replace(/&$/, '');
             window.history.replaceState({}, '', window.location.pathname + (q || ''));
           }
@@ -116,6 +127,27 @@
           var competitorId = {{ competitor.id | default(0) }};
           var pollIntervalMs = 2000;
           var pollTimerId = null;
+          var pillsEl = document.getElementById('channel-pills');
+
+          function updatePill(ch, state, timerText) {
+            if (!pillsEl) return;
+            var pill = pillsEl.querySelector('.channel-pill[data-channel="' + ch + '"]');
+            if (!pill) return;
+            var label = channelLabel(ch);
+            pill.classList.remove('running', 'has', 'error');
+            if (state === 'running') {
+              pill.classList.add('running');
+              pill.innerHTML = label + ' <span class="channel-pill-timer" data-timer="' + ch + '">' + (timerText || '…') + '</span>';
+            } else if (state === 'error') {
+              pill.classList.add('error');
+              pill.innerHTML = label + ' <span class="channel-pill-timer" data-timer="' + ch + '">' + (timerText || '') + '</span>';
+            } else if (state === 'completed') {
+              pill.classList.add('has');
+              pill.innerHTML = label + ' ✓ <span class="channel-pill-timer" data-timer="' + ch + '">' + (timerText || '') + '</span>';
+            } else {
+              pill.innerHTML = label + ' <span class="channel-pill-timer" data-timer="' + ch + '">' + (timerText || '…') + '</span>';
+            }
+          }
 
           function renderRunStatus(data) {
             var runningByChannel = {};
@@ -135,20 +167,24 @@
                 var msg = completed.message ? ' — ' + completed.message : '';
                 var color = completed.status === 'success' ? 'var(--accent)' : (completed.status === 'error' ? '#b84a2b' : '');
                 html += '<li style="margin-bottom: 6px;"><strong>' + label + '</strong>: <span style="color:' + color + '">' + (completed.status === 'success' ? 'Success' : (completed.status === 'error' ? 'Failure' : completed.status)) + '</span>' + (msg ? ' <span class="meta">' + msg + '</span>' : '') + '</li>';
+                updatePill(ch, completed.status === 'error' ? 'error' : 'completed', '');
               } else if (runningByChannel[ch]) {
                 allDone = false;
                 var startedAt = runningByChannel[ch];
                 var start = new Date(startedAt);
                 var sec = Math.floor((now - start) / 1000);
-                html += '<li style="margin-bottom: 6px;"><strong>' + label + '</strong>: running <span class="meta">(' + sec + ' s)</span></li>';
+                html += '<li style="margin-bottom: 6px;"><strong>' + label + '</strong>: <span style="color: #7d6a00;">running</span> <span class="meta">(' + sec + ' s)</span></li>';
+                updatePill(ch, 'running', sec + ' s');
               } else {
                 allDone = false;
                 html += '<li style="margin-bottom: 6px;"><strong>' + label + '</strong>: <span class="meta">starting…</span></li>';
+                updatePill(ch, 'running', '…');
               }
             });
             runStatusList.innerHTML = html || '<li class="meta">Loading…</li>';
             if (allDone && requestedChannels.length > 0) {
               if (pollTimerId) { clearInterval(pollTimerId); pollTimerId = null; }
+              // Leave run-status card and URL as-is so the log stays until user refreshes or navigates away
             }
           }
 

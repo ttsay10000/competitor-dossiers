@@ -11,6 +11,7 @@ from sqlalchemy import or_
 
 from ..db import get_session, get_last_refreshed
 from ..models import Competitor, CompetitorReviewProperty, Event, RunLog, Snapshot, Capability
+from ..utils import to_eastern
 from ..diff.asset_diff import diff_properties, delta_by_city, infer_location_for_property, is_location_treated_as_other, asset_location_display_label, parse_keys_from_details
 from ..diff.talent_diff import diff_jobs
 from ..executive_summary import (
@@ -912,6 +913,25 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         "social": bool(latest_social),
         "reviews": bool(latest_reviews),
     }
+    # Latest run per channel (for timer / "last run" on pills) and currently running channels
+    last_runs = {}
+    for log in (
+        session.query(RunLog)
+        .filter(RunLog.competitor_id == competitor_id, RunLog.channel.in_(DISPLAY_CHANNELS))
+        .order_by(RunLog.created_at.desc())
+    ):
+        if log.channel not in last_runs:
+            last_runs[log.channel] = {
+                "status": log.status,
+                "created_at_iso": log.created_at.isoformat() if log.created_at else None,
+                "created_at_str": to_eastern(log.created_at) if log.created_at else None,
+            }
+    running_channels = {
+        log.channel
+        for log in session.query(RunLog)
+        .filter(RunLog.competitor_id == competitor_id, RunLog.status == "running")
+        .all()
+    }
     digital_footprint_events = [
         _event_dict(e) for e in events
         if (getattr(e, "type") or "") in ("narrative.homepage_updated", "narrative.coming_soon")
@@ -921,6 +941,8 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
         "competitor": {"id": competitor.id, "name": competitor.name},
         "has_any_snapshot": has_any_snapshot,
         "has_snapshots": has_snapshots,
+        "last_runs": last_runs,
+        "running_channels": running_channels,
         "display_channels": DISPLAY_CHANNELS,
         "channel_letters": CHANNEL_LETTERS,
         "markets": markets,

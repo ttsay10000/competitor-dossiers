@@ -1,5 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
+  <style>
+    .competitors-existing-table { font-size: 13px; }
+    .competitors-existing-table .cell-date { white-space: nowrap; font-size: 12px; }
+    .competitors-existing-table .cell-status { font-size: 11px; line-height: 1.2; }
+    .competitors-existing-table th, .competitors-existing-table td { padding: 6px 8px; }
+  </style>
   <h1>Dossiers</h1>
 
   <div class="card" style="display: flex; justify-content: space-between; align-items: center;">
@@ -106,7 +112,7 @@
 
   <div class="card">
     <h3>Existing</h3>
-    <table>
+    <table class="competitors-existing-table">
       <thead>
         <tr>
           <th>Name</th>
@@ -123,10 +129,10 @@
         <tr>
           <td>{{ competitor.name }}</td>
           <td class="muted">{{ competitor.primary_domain or "" }}</td>
-          <td class="muted" style="font-size: 13px;">{% if competitor.created_at %}{{ competitor.created_at.strftime('%Y-%m-%d') }}{% else %}—{% endif %}</td>
-          <td class="muted" style="font-size: 13px;">{{ competitor.last_refresh or "—" }}</td>
-          <td class="muted" style="font-size: 13px;">{{ competitor.baseline_set or "—" }}</td>
-          <td class="muted" style="font-size: 12px;">
+          <td class="muted cell-date">{% if competitor.created_at %}{{ competitor.created_at.strftime('%Y-%m-%d') }}{% else %}—{% endif %}</td>
+          <td class="muted cell-date">{{ competitor.last_refresh or "—" }}</td>
+          <td class="muted cell-date">{{ competitor.baseline_set or "—" }}</td>
+          <td class="muted cell-status">
             {% set has = competitor.has_snapshots or {} %}
             {% set runs = competitor.last_runs or {} %}
             {% for ch in display_channels %}
@@ -152,4 +158,100 @@
       </tbody>
     </table>
   </div>
+
+  <div class="card mt-16">
+    <h3>Refresh selected channels (all competitors)</h3>
+    <p class="meta" style="margin-top: 4px;">Run chosen collectors for every competitor. Run log appears below until you refresh or leave the page.</p>
+    <form method="post" action="/competitors/run-selected-channels" class="run-channels-form run-channels-inline" style="margin-top: 12px;" id="global-run-channels-form">
+      <div class="run-channels-checkboxes">
+        <label><input type="checkbox" name="channels" value="talent" /> Talent</label>
+        <label><input type="checkbox" name="channels" value="asset" /> Asset</label>
+        <label><input type="checkbox" name="channels" value="press" /> Press</label>
+        <label><input type="checkbox" name="channels" value="homepage" /> Website</label>
+        <label><input type="checkbox" name="channels" value="reviews" /> Reviews</label>
+        <label><input type="checkbox" name="channels" value="social" /> Social</label>
+      </div>
+      <button type="submit">Run selected channels</button>
+    </form>
+  </div>
+
+  <div id="global-run-status-card" class="card mt-16" style="display: none; border-left: 4px solid var(--accent, #0d6efd);">
+    <h3>Run status</h3>
+    <p class="meta card-desc">Channels running for all competitors. Timers update every few seconds. Log stays until you refresh or navigate away.</p>
+    <ul id="global-run-status-list" style="margin: 0; padding-left: 20px; list-style: none;"></ul>
+  </div>
+
+  <script>
+    (function() {
+      var runStatusCard = document.getElementById('global-run-status-card');
+      var runStatusList = document.getElementById('global-run-status-list');
+      var params = new URLSearchParams(window.location.search);
+      var started = params.get('started') === '1';
+      var runStartTs = parseInt(params.get('run_start_ts') || '0', 10);
+      var channelsParam = params.get('channels');
+      var requestedChannels = channelsParam ? channelsParam.split(',').map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean) : [];
+
+      var CHANNEL_LABELS = { talent: 'Talent', asset: 'Asset', press: 'Press', homepage: 'Website', social: 'Social', reviews: 'Reviews' };
+      function channelLabel(ch) { return CHANNEL_LABELS[ch] || ch.charAt(0).toUpperCase() + ch.slice(1); }
+
+      if (runStatusCard && runStatusList && started && runStartTs && requestedChannels.length) {
+        runStatusCard.style.display = 'block';
+        var pollIntervalMs = 2000;
+        var pollTimerId = null;
+
+        function renderRunStatus(data) {
+          var runningByKey = {};
+          (data.running || []).forEach(function(r) {
+            runningByKey[r.competitor_id + ':' + r.channel] = r;
+          });
+          var completedByKey = {};
+          (data.completed || []).forEach(function(c) {
+            completedByKey[c.competitor_id + ':' + c.channel] = c;
+          });
+          var now = new Date();
+          var runStartDate = new Date(runStartTs * 1000);
+          var html = '';
+          var allDone = true;
+          (data.running || []).forEach(function(r) {
+            allDone = false;
+            var startedAt = r.created_at ? new Date(r.created_at) : now;
+            var sec = Math.floor((now - startedAt) / 1000);
+            html += '<li style="margin-bottom: 6px;"><strong>' + (r.competitor_name || '') + '</strong> · ' + channelLabel(r.channel) + ': <span style="color: #7d6a00;">running</span> <span class="meta">(' + sec + ' s)</span></li>';
+          });
+          (data.completed || []).forEach(function(c) {
+            var created = c.created_at ? new Date(c.created_at) : null;
+            var afterStart = created && created >= runStartDate;
+            if (!afterStart) return;
+            var color = c.status === 'success' ? 'var(--accent)' : (c.status === 'error' ? '#b84a2b' : '');
+            var statusText = c.status === 'success' ? 'Success' : (c.status === 'error' ? 'Failure' : c.status);
+            var msg = c.message ? ' — ' + c.message : '';
+            html += '<li style="margin-bottom: 6px;"><strong>' + (c.competitor_name || '') + '</strong> · ' + channelLabel(c.channel) + ': <span style="color:' + color + '">' + statusText + '</span>' + (msg ? ' <span class="meta">' + msg + '</span>' : '') + '</li>';
+          });
+          if ((data.running || []).length > 0) allDone = false;
+          runStatusList.innerHTML = html || '<li class="meta">Loading…</li>';
+          if (allDone) {
+            if (pollTimerId) { clearInterval(pollTimerId); pollTimerId = null; }
+          }
+        }
+
+        function poll() {
+          fetch('/competitors/run-status?run_start_ts=' + runStartTs + '&channels=' + encodeURIComponent(requestedChannels.join(',')))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+              if (data.error) return;
+              renderRunStatus(data);
+            })
+            .catch(function() {});
+        }
+
+        poll();
+        pollTimerId = setInterval(poll, pollIntervalMs);
+      }
+
+      document.getElementById('global-run-channels-form')?.addEventListener('submit', function() {
+        var btn = this?.querySelector('button[type=submit]');
+        if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+      });
+    })();
+  </script>
 {% endblock %}

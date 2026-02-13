@@ -242,18 +242,29 @@
       .dossier-nav ul { display: flex; flex-wrap: wrap; gap: 4px 12px; }
     }
     /* Channel status pills */
-    .channel-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+    .channel-pills { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
     .channel-pill {
       display: inline-flex;
       align-items: center;
       gap: 4px;
-      padding: 2px 8px;
+      padding: 4px 10px;
       font-size: 12px;
       border-radius: 6px;
       background: #f0f0f0;
       color: var(--muted);
     }
     .channel-pill.has { background: #e2f0e8; color: #20523e; }
+    .channel-pill.running { background: #fef9e6; color: #7d6a00; }
+    .channel-pill.error { background: #f8d7da; color: #721c24; }
+    .channel-pill-timer { font-size: 11px; opacity: 0.9; margin-left: 2px; }
+    .refresh-card-sections { display: flex; flex-direction: column; gap: 20px; margin-top: 12px; }
+    .refresh-section { }
+    .refresh-section-reset { padding-top: 16px; border-top: 1px solid var(--border); }
+    .run-channels-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+    .run-channels-checkboxes { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+    .run-channels-checkboxes label { display: inline-flex; align-items: center; gap: 4px; }
+    .reset-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+    .refresh-status-msg { font-weight: 500; }
     @media (max-width: 700px) {
       header { flex-direction: column; align-items: center; gap: 8px; }
       main { padding: 0 12px; }
@@ -270,7 +281,6 @@
     </div>
     <nav style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
       <a href="/competitors">Home</a>
-      <a href="/competitors">Dossiers</a>
       <a href="/runs">Runs</a>
     </nav>
   </header>

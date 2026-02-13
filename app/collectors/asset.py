@@ -942,8 +942,16 @@ def _fetch_blueground_destinations(
     properties: List[dict[str, Any]] = []
     raw_html_parts: List[str] = []
 
-    # Step 1: get USA destination links from /destinations (HTTP works)
-    fetched = fetch_url(source_url)
+    # Step 1: get USA destination links from /destinations.
+    # Use Playwright when available so we get full HTML (site may serve minimal/bot content to plain requests).
+    print(f"[asset] Blueground: fetching destinations page...", flush=True)
+    if _playwright_available():
+        try:
+            fetched = fetch_url_js(source_url)
+        except Exception:
+            fetched = fetch_url(source_url)
+    else:
+        fetched = fetch_url(source_url)
     if fetched.status_code != 200 or not fetched.text:
         raise RuntimeError(f"Blueground destinations fetch failed: {fetched.status_code}")
     raw_html_parts.append(fetched.text)
@@ -971,9 +979,14 @@ def _fetch_blueground_destinations(
 
     if max_dest is not None:
         usa_links = usa_links[:max_dest]
-        print(f"[asset] Blueground: using batch of {max_dest} destinations (set max_destinations=None for full run)", flush=True)
+        print(f"[asset] Blueground: using batch of {max_dest} destinations (testing limit; omit extra_options.max_destinations for full run)", flush=True)
+    else:
+        print(f"[asset] Blueground: full North America USA run (all destinations)", flush=True)
 
-    print(f"[asset] Blueground: found {len(usa_links)} North America USA destinations to scrape", flush=True)
+    n_dest = len(usa_links)
+    print(f"[asset] Blueground: found {n_dest} North America USA destinations to scrape", flush=True)
+    if n_dest > 50:
+        print(f"[asset] Blueground: this may take 15–45+ min ({n_dest} pages); progress below every destination.", flush=True)
     seen_units: set[tuple[str, str]] = set()
 
     def _extract_properties_from_dest_page(html: str, dest_url: str, city: str, state: str) -> List[dict[str, Any]]:

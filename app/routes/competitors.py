@@ -360,6 +360,118 @@ async def competitor_run_now(request: Request, competitor_id: int):
     return RedirectResponse(url=redirect_url, status_code=HTTP_303_SEE_OTHER)
 
 
+@router.post("/competitors/run-selected-channels")
+async def competitors_run_selected_channels(request: Request):
+    """Start selected channels for all competitors in the background; redirect to /competitors with run log params."""
+    form = await request.form()
+    ch_list = form.getlist("channels") if form else []
+    channels = _parse_channels(",".join(ch_list)) if ch_list else _parse_channels(form.get("channels") if form else None)
+    if not channels:
+        return RedirectResponse(url="/competitors", status_code=HTTP_303_SEE_OTHER)
+
+    run_start_ts = int(datetime.now(timezone.utc).timestamp())
+    competitor_names = []
+    with get_session() as session:
+        competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        competitors = [c for c in competitors if getattr(c, "is_active", True)]
+        competitor_names = [c.name for c in competitors]
+        for competitor in competitors:
+            for ch in channels:
+                session.add(
+                    RunLog(
+                        competitor_id=competitor.id,
+                        channel=ch,
+                        status="running",
+                        message=None,
+                        extra_json={"started_at": run_start_ts},
+                    )
+                )
+
+    channels_list = list(channels)
+    def _run_all():
+        from ..runner import run
+        for name in competitor_names:
+            for ch in channels_list:
+                run(channel=ch, competitor_name=name)
+
+    thread = threading.Thread(target=_run_all, daemon=True)
+    thread.start()
+
+    redirect_url = f"/competitors?started=1&run_start_ts={run_start_ts}&channels=" + ",".join(channels)
+    return RedirectResponse(url=redirect_url, status_code=HTTP_303_SEE_OTHER)
+
+
+@router.get("/competitors/run-status")
+def competitors_run_status(request: Request):
+    """Return running and completed run logs for all competitors (global refresh run log)."""
+    run_start_ts = request.query_params.get("run_start_ts")
+    channels_param = request.query_params.get("channels")
+    if not run_start_ts or not channels_param:
+        return JSONResponse(content={"error": "run_start_ts and channels required"}, status_code=400)
+    run_start_ts = int(run_start_ts)
+    requested_channels = [c.strip().lower() for c in channels_param.split(",") if c.strip()]
+
+    with get_session() as session:
+        running = (
+            session.query(RunLog, Competitor.name)
+            .join(Competitor, RunLog.competitor_id == Competitor.id)
+            .filter(
+                RunLog.status == "running",
+                RunLog.channel.in_(requested_channels),
+            )
+            .order_by(Competitor.name.asc(), RunLog.channel.asc())
+            .all()
+        )
+        completed_logs = (
+            session.query(RunLog)
+            .filter(
+                RunLog.status.in_(["success", "error", "skipped"]),
+                RunLog.channel.in_(requested_channels),
+            )
+            .order_by(RunLog.created_at.desc())
+            .all()
+        )
+        # Only completions from this run (created_at >= run_start_ts)
+        run_start_dt = datetime.fromtimestamp(run_start_ts, tz=timezone.utc)
+        completed_logs = [log for log in completed_logs if log.created_at and log.created_at >= run_start_dt]
+        # Latest per (competitor_id, channel)
+        completed_by_key = {}
+        for log in completed_logs:
+            key = (log.competitor_id, log.channel)
+            if key not in completed_by_key:
+                completed_by_key[key] = log
+        competitor_ids = set(log.competitor_id for log in completed_by_key.values()) | set(r.competitor_id for r, _ in running)
+        competitors_by_id = {}
+        if competitor_ids:
+            for c in session.query(Competitor).filter(Competitor.id.in_(competitor_ids)).all():
+                competitors_by_id[c.id] = c.name
+
+        return JSONResponse(
+            content={
+                "running": [
+                    {
+                        "competitor_id": r.competitor_id,
+                        "competitor_name": name,
+                        "channel": r.channel,
+                        "created_at": r.created_at.isoformat() if r.created_at else None,
+                    }
+                    for r, name in running
+                ],
+                "completed": [
+                    {
+                        "competitor_id": log.competitor_id,
+                        "competitor_name": competitors_by_id.get(log.competitor_id, ""),
+                        "channel": log.channel,
+                        "status": log.status,
+                        "message": log.message or "",
+                        "created_at": log.created_at.isoformat() if log.created_at else None,
+                    }
+                    for log in completed_by_key.values()
+                ],
+            }
+        )
+
+
 @router.get("/competitors/{competitor_id}/added")
 def competitor_added(request: Request, competitor_id: int):
     """Landing page after adding a new competitor: summary of uploaded data and next-step instructions."""

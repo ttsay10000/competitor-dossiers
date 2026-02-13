@@ -465,14 +465,24 @@ def run_talent(competitor_name: Optional[str] = None) -> None:
             is_first_snapshot = latest is None
             if seed_mode and is_first_snapshot:
                 print(f"[talent] Step 3 — Seed baseline. Total jobs: {len(current_jobs)}")
-                log_run(
-                    session,
-                    competitor.id,
-                    "talent",
-                    "success",
-                    message="talent_seed_baseline",
-                    extra={"jobs": len(current_jobs)},
-                )
+                if not current_jobs:
+                    log_run(
+                        session,
+                        competitor.id,
+                        "talent",
+                        "error",
+                        message="No data populated - please check",
+                        extra={"jobs": 0, "url": endpoint_used.url},
+                    )
+                else:
+                    log_run(
+                        session,
+                        competitor.id,
+                        "talent",
+                        "success",
+                        message="talent_seed_baseline",
+                        extra={"jobs": len(current_jobs)},
+                    )
                 continue
 
             diff = diff_jobs(previous_jobs, current_jobs)
@@ -533,14 +543,24 @@ def run_talent(competitor_name: Optional[str] = None) -> None:
                         create_event(session, competitor.id, event)
 
             print(f"[talent] Step 4 — Done. Total jobs: {len(current_jobs)}")
-            log_run(
-                session,
-                competitor.id,
-                "talent",
-                "success",
-                message=f"Collected {len(current_jobs)} jobs",
-                extra={"added_jobs": len(added_jobs), "jobs": len(current_jobs), "url": endpoint_used.url},
-            )
+            if not current_jobs:
+                log_run(
+                    session,
+                    competitor.id,
+                    "talent",
+                    "error",
+                    message="No data populated - please check",
+                    extra={"jobs": 0, "url": endpoint_used.url},
+                )
+            else:
+                log_run(
+                    session,
+                    competitor.id,
+                    "talent",
+                    "success",
+                    message=f"Collected {len(current_jobs)} jobs",
+                    extra={"added_jobs": len(added_jobs), "jobs": len(current_jobs), "url": endpoint_used.url},
+                )
 
 
 def run_asset(competitor_name: Optional[str] = None) -> None:
@@ -661,14 +681,24 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
             is_first_snapshot = latest is None
             if seed_mode and is_first_snapshot:
                 print(f"[asset] Step 3 — Seed baseline. Total properties: {len(current_props)}")
-                log_run(
-                    session,
-                    competitor.id,
-                    "asset",
-                    "success",
-                    message="asset_seed_baseline",
-                    extra={"properties": len(current_props)},
-                )
+                if not current_props:
+                    log_run(
+                        session,
+                        competitor.id,
+                        "asset",
+                        "error",
+                        message="No data populated - please check",
+                        extra={"properties": 0, "url": endpoint_used.url},
+                    )
+                else:
+                    log_run(
+                        session,
+                        competitor.id,
+                        "asset",
+                        "success",
+                        message="asset_seed_baseline",
+                        extra={"properties": len(current_props)},
+                    )
                 continue
 
             diff = diff_properties(previous_props, current_props)
@@ -730,14 +760,24 @@ def run_asset(competitor_name: Optional[str] = None) -> None:
                                 create_event(session, competitor.id, event)
 
             print(f"[asset] Step 4 — Done. Total properties: {len(current_props)}")
-            log_run(
-                session,
-                competitor.id,
-                "asset",
-                "success",
-                message=f"Collected {len(current_props)} properties",
-                extra={"added_properties": len(added_props), "properties": len(current_props), "url": endpoint_used.url},
-            )
+            if not current_props:
+                log_run(
+                    session,
+                    competitor.id,
+                    "asset",
+                    "error",
+                    message="No data populated - please check",
+                    extra={"properties": 0, "url": endpoint_used.url},
+                )
+            else:
+                log_run(
+                    session,
+                    competitor.id,
+                    "asset",
+                    "success",
+                    message=f"Collected {len(current_props)} properties",
+                    extra={"added_properties": len(added_props), "properties": len(current_props), "url": endpoint_used.url},
+                )
 
 
 def run_press(competitor_name: Optional[str] = None) -> None:
@@ -780,8 +820,9 @@ def run_press(competitor_name: Optional[str] = None) -> None:
                 if key in _press_search_fallback:
                     press_search_name = _press_search_fallback[key]
 
-            # 1) Primary: user-provided company news links (saved in DB on Add company / Add Source).
-            #    These run first and are highest priority for dedup (e.g. Lark company news page).
+            # 1) User-provided company news links (if any). Highest priority for dedup.
+            # 2) and 3) Google News + PR Newswire always run for every competitor (using competitor name),
+            #    even when there are zero press endpoints—so press can populate without a blog/news URL.
             raw_items: list[dict] = []
             source_meta: list[dict] = []
 
