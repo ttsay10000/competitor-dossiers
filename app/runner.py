@@ -1671,11 +1671,14 @@ def run(
         if channel is None and competitor_name is None:
             # Competitor-first: run all channels per competitor so each competitor completes
             # before moving to the next. Makes progress visible during long force refreshes.
+            # Extract names inside session to avoid DetachedInstanceError when iterating outside.
             with get_session() as session:
                 competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
-                competitors = [c for c in competitors if getattr(c, "is_active", True)]
-            for c in competitors:
-                name = c.name
+                competitor_names = [
+                    c.name for c in competitors
+                    if getattr(c, "is_active", True)
+                ]
+            for name in competitor_names:
                 print(
                     f"\n[{datetime.now(timezone.utc).isoformat()}] === {name} (all channels) ===",
                     flush=True,
