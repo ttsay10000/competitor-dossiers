@@ -140,26 +140,37 @@ def _competitor_topline_summary(session, c: Competitor) -> dict:
         .order_by(Snapshot.captured_at.desc())
         .first()
     )
+    # Latest news: only show items from the last 90 days so we don't surface years-old PR Newswire.
+    LATEST_NEWS_CARD_DAYS = 90
+    latest_news_cutoff = (datetime.now(timezone.utc) - timedelta(days=LATEST_NEWS_CARD_DAYS)).date()
     if latest_press:
         struct = latest_press.structured_json or {}
-        # Recent news = top-news bullets from dossier (no hyperlinks). Use stored top_news when available.
+        # Prefer top_news when available; otherwise flatten press_groups or canonical_items.
         stored_top_news = struct.get("top_news")
         if isinstance(stored_top_news, list) and stored_top_news:
-            for b in stored_top_news[:5]:
-                if isinstance(b, dict):
-                    bullet = (b.get("bullet") or b.get("title") or "").strip() or None
-                    if bullet:
-                        date_str = (b.get("date") or "").strip()
-                        if date_str and len(date_str) >= 10:
-                            date_str = date_str[:10]
-                        else:
-                            date_str = None
-                        latest_news_items.append({"title": bullet, "url": None, "date": date_str})
+            def _news_date_key(x):
+                d = (x.get("date") or "").strip()
+                return (d[:10] if len(d) >= 10 else d) or "0000-00-00"
+            sorted_top_news = sorted(stored_top_news, key=_news_date_key, reverse=True)
+            for b in sorted_top_news[:5]:
+                if not isinstance(b, dict):
+                    continue
+                date_str = (b.get("date") or "").strip()
+                if date_str and len(date_str) >= 10:
+                    try:
+                        if datetime.strptime(date_str[:10], "%Y-%m-%d").date() < latest_news_cutoff:
+                            continue
+                    except ValueError:
+                        pass
+                bullet = (b.get("bullet") or b.get("title") or "").strip() or None
+                if bullet:
+                    date_str = date_str[:10] if date_str and len(date_str) >= 10 else None
+                    latest_news_items.append({"title": bullet, "url": b.get("url"), "date": date_str})
             latest_news_count = len(latest_news_items)
             if latest_news_items:
                 latest_news_headline = latest_news_items[0].get("title")
         else:
-            # Fallback: flatten articles (old snapshots without top_news).
+            # Fallback: flatten articles; keep only last 90 days and sort newest first.
             press_groups = struct.get("press_groups") or []
             if press_groups:
                 items = []
@@ -170,8 +181,23 @@ def _competitor_topline_summary(session, c: Competitor) -> dict:
             else:
                 items = struct.get("canonical_items") or struct.get("items", [])
             items = [i for i in items if isinstance(i, dict)]
-            latest_news_count = len(items)
-            for item in items[:5]:
+            # Drop articles older than 90 days.
+            recent_items = []
+            for item in items:
+                d = (item.get("date") or "").strip()[:10]
+                if d and len(d) >= 10:
+                    try:
+                        if datetime.strptime(d, "%Y-%m-%d").date() < latest_news_cutoff:
+                            continue
+                    except ValueError:
+                        pass
+                recent_items.append(item)
+            def _item_date_key(x):
+                d = (x.get("date") or "").strip()
+                return (d[:10] if len(d) >= 10 else d) or "0000-00-00"
+            recent_items = sorted(recent_items, key=_item_date_key, reverse=True)
+            latest_news_count = len(recent_items)
+            for item in recent_items[:5]:
                 title = (item.get("title") or item.get("display_title") or "").strip() or None
                 if not title:
                     continue
@@ -182,9 +208,8 @@ def _competitor_topline_summary(session, c: Competitor) -> dict:
                 else:
                     date_str = None
                 latest_news_items.append({"title": title, "url": url, "date": date_str})
-            if items:
-                first = items[0]
-                latest_news_headline = (first.get("title") or first.get("display_title") or "").strip() or None
+            if latest_news_items:
+                latest_news_headline = latest_news_items[0].get("title")
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=90)
     q = session.query(Event).filter(
@@ -215,7 +240,7 @@ def _competitor_topline_summary(session, c: Competitor) -> dict:
 @router.get("/competitors")
 def competitors_list(request: Request):
     with get_session() as session:
-        competitors = session.query(Competitor).order_by(Competitor.created_at.desc()).all()
+        competitors = session.query(Competitor).order_by(Competitor.created_at.asc()).all()
         competitors_data = []
         for c in competitors:
             status = _competitor_status(session, c.id)

@@ -777,8 +777,8 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     for p in press_90d:
         p.pop("_sort_dt", None)
 
-    # Top news: only last 14 days. Use stored bullets when available; else LLM summarize from groupings.
-    TOP_NEWS_DAYS = 14
+    # Top news: last 45 days so recent press groupings (e.g. partnerships) appear even if not in the last 2 weeks.
+    TOP_NEWS_DAYS = 45
     top_news_cutoff = (datetime.now(timezone.utc) - timedelta(days=TOP_NEWS_DAYS)).date()
     stored_top_news = (latest_press.structured_json or {}).get("top_news") if latest_press else None
     if isinstance(stored_top_news, list) and stored_top_news:

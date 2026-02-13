@@ -9,7 +9,11 @@ from .config import settings
 
 DATABASE_URL = settings.database_url
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_recycle=300,  # Recycle connections every 5 min to avoid stale SSL (e.g. "unexpected eof while reading")
+)
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 

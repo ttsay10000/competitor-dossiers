@@ -958,9 +958,9 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                     raw_items.extend(gn_items)
                     if gn_items:
                         source_meta.append({"type": "google_news"})
-                    if not gn_items and press_search_name:
+                    elif press_search_name:
                         print(
-                            f"[press]   (0 items — unfiltered; RSS may omit when quoted phrase not in headline)"
+                            f"[press]   Google News ran but returned 0 items (RSS may have no matches for quoted phrase \"{press_search_name}\")."
                         )
                 except Exception as e:
                     print(f"[press] Step 1 — Google News failed: {e}")
