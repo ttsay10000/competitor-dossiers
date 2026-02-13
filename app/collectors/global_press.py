@@ -531,7 +531,16 @@ def collect_google_news_items(
     Keywords (e.g. furnished rentals) should be set in the UI (Edit competitor → press source → Keywords).
     Company blog links are filtered out by the pipeline (company_domains).
     """
-    keywords = [p for p in (search_phrases or []) if isinstance(p, str) and (p or "").strip()]
+    # Normalize: DB/seed may store as string (single phrase); always produce list of non-empty strings
+    if search_phrases is None:
+        _phrases: List[str] = []
+    elif isinstance(search_phrases, str):
+        _phrases = [search_phrases.strip()] if (search_phrases or "").strip() else []
+    elif isinstance(search_phrases, (list, tuple)):
+        _phrases = [p.strip() for p in search_phrases if isinstance(p, str) and (p or "").strip()]
+    else:
+        _phrases = []
+    keywords = _phrases
     company_name = (company_name or "").strip()
     if not company_name:
         import sys

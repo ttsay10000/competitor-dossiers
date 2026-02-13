@@ -1379,11 +1379,11 @@ def _fallback_single_group(items: List[dict]) -> List[dict]:
     return [{"group_title": "Press coverage", "one_line_summary": "", "articles": articles}]
 
 
-def summarize_top_news_llm(competitor_name: str, press_groups: List[dict], *, days: int = 30) -> Optional[List[dict]]:
+def summarize_top_news_llm(competitor_name: str, press_groups: List[dict], *, days: int = 14) -> Optional[List[dict]]:
     """
     After groupings are final: have the LLM read each group (topic + summaries + recent press)
     and output 3-5 key bullets of the most interesting news from a business perspective,
-    with relevant dates, from the past `days` (default 30).
+    with relevant dates, from the past `days` (default 14).
 
     press_groups: list of { group_title, one_line_summary, group_latest_date, articles: [{ title, date, outlet }] }.
     Returns list of { "bullet": str, "date": "YYYY-MM-DD" } or None on no client/parse failure.
@@ -1407,15 +1407,18 @@ def summarize_top_news_llm(competitor_name: str, press_groups: List[dict], *, da
         except ValueError:
             return None
 
-    # Prefer groups with at least one article in the past `days` (e.g. 21 = 2-3 weeks for exec summary)
+    # Only include groups with at least one article in the past `days` (e.g. 14 for "last 2 weeks").
     recent_groups = []
     for g in press_groups:
         gdate = _parse_group_date(g)
         if gdate is not None and gdate >= cutoff_date:
             recent_groups.append(g)
-    # If no groups in window, use most recent groups by date so we still show topic-level news (not raw articles)
+    # If no groups in window, allow fallback only for groups within 2x the window (e.g. 28 days when days=14).
+    # Do not pull in very old articles as "top news".
     if not recent_groups:
+        max_fallback_date = (now - timedelta(days=min(days * 2, 60))).date()
         with_date = [(g, _parse_group_date(g)) for g in press_groups if _parse_group_date(g) is not None]
+        with_date = [(g, gd) for g, gd in with_date if gd >= max_fallback_date]
         with_date.sort(key=lambda x: -(x[1].toordinal() if x[1] else 0))
         recent_groups = [g for g, _ in with_date[:15]]
 

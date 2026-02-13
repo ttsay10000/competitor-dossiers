@@ -343,7 +343,7 @@ def _build_context_text(context: Dict[str, Any]) -> str:
             group = n.get("group_title")
             lines.append(f"({date_str}) {title}" + (f" [{group}]" if group else ""))
         parts.append(
-            "Top news (last 7 days when available; synthesize into 1–2 bullets max—do NOT list or recite each item): "
+            "Top news (ONLY use these—no other press; last 7 days; synthesize into 1–2 bullets max): "
             + " | ".join(lines)
         )
     else:
@@ -413,7 +413,7 @@ def generate_executive_summary(context: Dict[str, Any]) -> Optional[str]:
 
 The data you receive contains ONLY: (1) Top news from the past week (at most 5 items); (2) Asset/property changes vs baseline (or baseline footprint if no refresh); (3) Job count changes vs baseline (or baseline count if no refresh); (4) Website/digital footprint changes since last refresh; (5) Social media and review updates (new or significant). When the input says "only baseline" or "no refresh yet", summarize current state; when it says "changes since baseline", summarize only those changes. When the input says "No changes since last refresh", include a brief bullet noting this (e.g. "No changes to properties, jobs, or signals since last refresh")—this is common and worth stating explicitly.
 
-NEWS: Do NOT list or recite each news article. Synthesize news into at most 1–2 bullets total (the single most important development). If multiple items are the same story, one bullet only.
+NEWS: Use ONLY the items listed in the "Top news" section of the Data block. Do not reference, infer, or summarize any article, story, or development that is not explicitly listed there. If the Data says "Top news: none", do not add any news bullet. Do NOT list or recite each news article; synthesize into at most 1–2 bullets total (the single most important development from the listed items only). If multiple listed items are the same story, one bullet only.
 
 PRIORITY: Order bullets by importance to competitive dynamics, not by section order. Put the single most important change first (e.g. major news, market entry/exit, key hire). Then the next most important. Include only changes that materially alter competitive dynamics (market entry/exit, meaningful inventory, pricing/fees, key hiring, major product/positioning, partnerships, regulatory). Drop cosmetic or one-off items. Include social/review sentiment only when it reflects major change.
 

@@ -74,6 +74,14 @@ def clear_dossier_caches_for_competitor(competitor_id: int) -> None:
     _LOCATION_CLEAN_CACHE.clear()  # keys are (competitor_name, ...); clear all to avoid stale location data
 
 
+def clear_all_dossier_caches() -> None:
+    """Clear all in-memory dossier/rollup caches so UI shows fresh data after a global force refresh."""
+    global _EXEC_SUMMARY_CACHE, _LOCATION_CLEAN_CACHE, _ROLLUP_CACHE
+    _EXEC_SUMMARY_CACHE.clear()
+    _LOCATION_CLEAN_CACHE.clear()
+    _ROLLUP_CACHE.clear()
+
+
 # Roll-up summary for competitors page: keyed by (id, hash(summary)) per competitor so cache invalidates when any summary changes.
 _ROLLUP_CACHE: dict[tuple, str] = {}
 _ROLLUP_CACHE_MAX = 20
@@ -769,21 +777,39 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
     for p in press_90d:
         p.pop("_sort_dt", None)
 
-    # Top news: use stored bullets from press snapshot when available (30 days); else LLM summarize from groupings.
+    # Top news: only last 14 days. Use stored bullets when available; else LLM summarize from groupings.
+    TOP_NEWS_DAYS = 14
+    top_news_cutoff = (datetime.now(timezone.utc) - timedelta(days=TOP_NEWS_DAYS)).date()
     stored_top_news = (latest_press.structured_json or {}).get("top_news") if latest_press else None
     if isinstance(stored_top_news, list) and stored_top_news:
-        top_news = list(stored_top_news)
+        top_news = []
+        for item in stored_top_news:
+            d = (item.get("date") or "").strip()[:10]
+            if d and len(d) >= 10:
+                try:
+                    item_date = datetime.strptime(d, "%Y-%m-%d").date()
+                    if item_date >= top_news_cutoff:
+                        top_news.append(item)
+                except ValueError:
+                    pass
     else:
-        top_news_raw = summarize_top_news_llm(competitor.name, press_groups, days=30)
+        top_news_raw = summarize_top_news_llm(competitor.name, press_groups, days=TOP_NEWS_DAYS)
         top_news = (top_news_raw or [])
     # Sort by date descending (most recent first); missing dates appear last
     def _top_news_date_key(item):
         d = (item.get("date") or "").strip()
         return (d[:10] if len(d) >= 10 else d) or "0000-00-00"
     top_news = sorted(top_news, key=_top_news_date_key, reverse=True)
-    # If top news is empty, prefer topic-level fallback from press_groups (major stories), not individual articles
+    # If top news is empty, prefer topic-level fallback from press_groups (major stories), only if within window
     if not top_news and press_groups:
         for g in press_groups[:5]:
+            gdate_str = (g.get("group_latest_date") or "").strip()[:10]
+            if gdate_str and len(gdate_str) >= 10:
+                try:
+                    if datetime.strptime(gdate_str, "%Y-%m-%d").date() < top_news_cutoff:
+                        continue
+                except ValueError:
+                    pass
             bullet = (g.get("group_title") or "").strip()
             summary = (g.get("one_line_summary") or "").strip()
             if summary:
@@ -799,15 +825,24 @@ def build_dossier_context(session, competitor_id: int, *, skip_property_llm: boo
             })
         top_news = sorted(top_news, key=_top_news_date_key, reverse=True)
     elif not top_news and press_90d:
-        # Last resort: 2 most recent article titles only when we have no groups
-        for art in press_90d[:2]:
+        # Last resort: 2 most recent article titles within window only
+        for art in press_90d:
+            ad = (art.get("date") or "").strip()[:10]
+            if ad and len(ad) >= 10:
+                try:
+                    if datetime.strptime(ad, "%Y-%m-%d").date() < top_news_cutoff:
+                        continue
+                except ValueError:
+                    pass
             url = (art.get("url") or art.get("link") or "").strip()
             top_news.append({
                 "bullet": art.get("display_title") or art.get("title") or "—",
                 "date": (art.get("date") or "").strip()[:10] or None,
                 "url": url if (url and url.startswith("http")) else None,
             })
-        top_news = sorted(top_news, key=_top_news_date_key, reverse=True)
+            if len(top_news) >= 2:
+                break
+        top_news = sorted(top_news, key=_top_news_date_key, reverse=True) if top_news else []
 
     # Properties by location (state/city) for high-level week-over-week tracking.
     # Aggregate count and total keys per location (keys parsed from property details).
@@ -1354,6 +1389,7 @@ def force_refresh_and_reset_baseline(request: Request):
                 list(executor.map(_run_one, jobs))
 
             advance_baseline_after_full_refresh()
+            clear_all_dossier_caches()
         except Exception as e:
             logging.exception("Force refresh failed in background: %s", e)
             with get_session() as session:

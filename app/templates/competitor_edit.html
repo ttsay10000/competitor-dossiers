@@ -262,7 +262,7 @@
                       <div>
                         {% set phrases = (endpoint.extra_options or {}).get('google_news_search_phrases') %}
                         <label>Keywords</label>
-                        <input name="google_news_search_phrases" placeholder="e.g. furnished rentals (optional)" value="{{ phrases | join(', ') if phrases else '' }}" title="Competitor name is always in quotes; these are optional broad keywords." />
+                        <input name="google_news_search_phrases" placeholder="e.g. furnished rentals (optional)" value="{{ (phrases | join(', ')) if (phrases is iterable and phrases is not string) else (phrases if phrases is string else '') }}" title="Competitor name is always in quotes; these are optional broad keywords." />
                       </div>
                       {% endif %}
                       <div style="align-self: flex-end;">

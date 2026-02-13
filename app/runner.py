@@ -697,22 +697,24 @@ def run_asset(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                         extra={"url": endpoint.url},
                     )
                     continue
-                if should_skip_due_to_hash(session, competitor.id, "asset", snapshot.get("raw_hash")):
-                    log_event(
-                        "snapshot_unchanged",
-                        competitor=competitor.name,
-                        channel="asset",
-                        url=endpoint.url,
-                    )
-                    log_run(
-                        session,
-                        competitor.id,
-                        "asset",
-                        "skipped",
-                        message="snapshot_unchanged",
-                        extra={"url": endpoint.url},
-                    )
-                    continue
+                # Use a fresh session for DB after long-running collection (avoids stale connection / SSL EOF)
+                with get_session() as db_session:
+                    if should_skip_due_to_hash(db_session, competitor.id, "asset", snapshot.get("raw_hash")):
+                        log_event(
+                            "snapshot_unchanged",
+                            competitor=competitor.name,
+                            channel="asset",
+                            url=endpoint.url,
+                        )
+                        log_run(
+                            db_session,
+                            competitor.id,
+                            "asset",
+                            "skipped",
+                            message="snapshot_unchanged",
+                            extra={"url": endpoint.url},
+                        )
+                        continue
                 raw_count = len(snapshot.get("properties") or [])
                 note = snapshot.get("note") or "unknown"
                 print(f"[asset] Step 1 — Collect: {raw_count} properties (strategy: {note})")
@@ -750,26 +752,107 @@ def run_asset(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
             if endpoint_used is None:
                 continue
 
-            latest = load_latest_snapshot(session, competitor.id, "asset")
-            previous_props = (latest.structured_json or {}).get("properties", []) if latest else []
-            current_props = structured.get("properties") or []
+            # Use a fresh session for all DB work after long-running collection (avoids stale connection / SSL EOF)
+            with get_session() as db_session:
+                latest = load_latest_snapshot(db_session, competitor.id, "asset")
+                previous_props = (latest.structured_json or {}).get("properties", []) if latest else []
+                current_props = structured.get("properties") or []
 
-            persist_snapshot(
-                session,
-                competitor.id,
-                "asset",
-                snapshot.get("raw_content") or "",
-                snapshot.get("raw_hash") or "",
-                structured,
-            )
+                persist_snapshot(
+                    db_session,
+                    competitor.id,
+                    "asset",
+                    snapshot.get("raw_content") or "",
+                    snapshot.get("raw_hash") or "",
+                    structured,
+                )
 
-            seed_mode = getattr(settings, "seed_mode", False)
-            is_first_snapshot = latest is None
-            if seed_mode and is_first_snapshot:
-                print(f"[asset] Step 3 — Seed baseline. Total properties: {len(current_props)}")
+                seed_mode = getattr(settings, "seed_mode", False)
+                is_first_snapshot = latest is None
+                if seed_mode and is_first_snapshot:
+                    print(f"[asset] Step 3 — Seed baseline. Total properties: {len(current_props)}")
+                    if not current_props:
+                        log_run(
+                            db_session,
+                            competitor.id,
+                            "asset",
+                            "error",
+                            message="No data populated - please check",
+                            extra={"properties": 0, "url": endpoint_used.url},
+                        )
+                    else:
+                        log_run(
+                            db_session,
+                            competitor.id,
+                            "asset",
+                            "success",
+                            message="asset_seed_baseline",
+                            extra={"properties": len(current_props)},
+                        )
+                    continue
+
+                diff = diff_properties(previous_props, current_props)
+                added_props = diff["added"]
+                removed_props = diff["removed"]
+                print(
+                    f"[asset] Step 3 — Persist. Diff: +{len(added_props)} added, -{len(removed_props)} removed. "
+                    f"Total properties: {len(current_props)}"
+                )
+                previous_markets = extract_markets(previous_props)
+                current_markets = extract_markets(current_props)
+
+                for market in current_markets:
+                    if market not in previous_markets:
+                        event = build_new_market_event(market)
+                        if not settings.seed_mode and not event_recently_created(
+                            db_session,
+                            competitor.id,
+                            event["type"],
+                            event["title"],
+                            window_days=dedupe_window_for(event["type"]),
+                        ):
+                            create_event(db_session, competitor.id, event)
+                for prop in added_props:
+                    status = (prop.get("status") or "").lower()
+                    name = (prop.get("name") or "").lower()
+                    if "coming soon" in status or "coming soon" in name:
+                        event = build_pipeline_event(prop)
+                        if not settings.seed_mode and not event_recently_created(
+                            db_session,
+                            competitor.id,
+                            event["type"],
+                            event["title"],
+                            window_days=dedupe_window_for(event["type"]),
+                        ):
+                            create_event(db_session, competitor.id, event)
+                if latest:
+                    removed_markets = previous_markets - current_markets
+                    if removed_markets:
+                        older = (
+                            db_session.query(Snapshot)
+                            .filter(Snapshot.competitor_id == competitor.id, Snapshot.channel == "asset")
+                            .order_by(Snapshot.captured_at.desc())
+                            .offset(1)
+                            .first()
+                        )
+                        if older:
+                            older_markets = extract_markets((older.structured_json or {}).get("properties", []))
+                            confirmed_exits = [m for m in removed_markets if m not in older_markets]
+                            for market in confirmed_exits:
+                                event = build_market_exit_event(market)
+                                if not settings.seed_mode and not event_recently_created(
+                                    db_session,
+                                    competitor.id,
+                                    event["type"],
+                                    event["title"],
+                                    window_days=dedupe_window_for(event["type"]),
+                                ):
+                                    create_event(db_session, competitor.id, event)
+
+                print(f"[asset] Step 4 — Done. Total properties: {len(current_props)}")
                 if not current_props:
                     log_run(
-                        session,
+                        db_session,
                         competitor.id,
                         "asset",
                         "error",
@@ -778,92 +861,13 @@ def run_asset(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                     )
                 else:
                     log_run(
-                        session,
+                        db_session,
                         competitor.id,
                         "asset",
                         "success",
-                        message="asset_seed_baseline",
-                        extra={"properties": len(current_props)},
+                        message=f"Collected {len(current_props)} properties",
+                        extra={"added_properties": len(added_props), "properties": len(current_props), "url": endpoint_used.url},
                     )
-                continue
-
-            diff = diff_properties(previous_props, current_props)
-            added_props = diff["added"]
-            removed_props = diff["removed"]
-            print(
-                f"[asset] Step 3 — Persist. Diff: +{len(added_props)} added, -{len(removed_props)} removed. "
-                f"Total properties: {len(current_props)}"
-            )
-            previous_markets = extract_markets(previous_props)
-            current_markets = extract_markets(current_props)
-
-            for market in current_markets:
-                if market not in previous_markets:
-                    event = build_new_market_event(market)
-                    if not settings.seed_mode and not event_recently_created(
-                        session,
-                        competitor.id,
-                        event["type"],
-                        event["title"],
-                        window_days=dedupe_window_for(event["type"]),
-                    ):
-                        create_event(session, competitor.id, event)
-            for prop in added_props:
-                status = (prop.get("status") or "").lower()
-                name = (prop.get("name") or "").lower()
-                if "coming soon" in status or "coming soon" in name:
-                    event = build_pipeline_event(prop)
-                    if not settings.seed_mode and not event_recently_created(
-                        session,
-                        competitor.id,
-                        event["type"],
-                        event["title"],
-                        window_days=dedupe_window_for(event["type"]),
-                    ):
-                        create_event(session, competitor.id, event)
-            if latest:
-                removed_markets = previous_markets - current_markets
-                if removed_markets:
-                    older = (
-                        session.query(Snapshot)
-                        .filter(Snapshot.competitor_id == competitor.id, Snapshot.channel == "asset")
-                        .order_by(Snapshot.captured_at.desc())
-                        .offset(1)
-                        .first()
-                    )
-                    if older:
-                        older_markets = extract_markets((older.structured_json or {}).get("properties", []))
-                        confirmed_exits = [m for m in removed_markets if m not in older_markets]
-                        for market in confirmed_exits:
-                            event = build_market_exit_event(market)
-                            if not settings.seed_mode and not event_recently_created(
-                                session,
-                                competitor.id,
-                                event["type"],
-                                event["title"],
-                                window_days=dedupe_window_for(event["type"]),
-                            ):
-                                create_event(session, competitor.id, event)
-
-            print(f"[asset] Step 4 — Done. Total properties: {len(current_props)}")
-            if not current_props:
-                log_run(
-                    session,
-                    competitor.id,
-                    "asset",
-                    "error",
-                    message="No data populated - please check",
-                    extra={"properties": 0, "url": endpoint_used.url},
-                )
-            else:
-                log_run(
-                    session,
-                    competitor.id,
-                    "asset",
-                    "success",
-                    message=f"Collected {len(current_props)} properties",
-                    extra={"added_properties": len(added_props), "properties": len(current_props), "url": endpoint_used.url},
-                )
 
 
 def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Callable[[], bool]] = None) -> None:
@@ -914,7 +918,9 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                     all_phrases.extend(p for p in raw if isinstance(p, str) and (p or "").strip())
                 elif isinstance(raw, str) and (raw or "").strip():
                     all_phrases.append((raw or "").strip())
-            google_news_search_phrases = list(dict.fromkeys(all_phrases)) if all_phrases else None
+            # Ensure list of strings only (DB/seed may have None or mixed types)
+            _safe = [p for p in all_phrases if isinstance(p, str) and (p or "").strip()]
+            google_news_search_phrases = list(dict.fromkeys(_safe)) if _safe else None
             if not from_endpoint and press_search_name:
                 _press_search_fallback = {"lark": "Lark Hotels"}
                 key = press_search_name.strip().lower()
@@ -990,62 +996,63 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                 by_provider[p] = by_provider.get(p, 0) + 1
             print(f"[press] Step 3 — Raw total: {len(raw_items)} by source: {by_provider} (unfiltered; no LLM applied yet)")
 
-            if not raw_items:
-                print(
-                    f"[press] Step 3 — Raw total: 0 (sources returned no items) → skipping enrichment"
-                )
-                log_run(
-                    session,
-                    competitor.id,
-                    "press",
-                    "error",
-                    message="no_press_items",
-                    extra={"search_name": press_search_name},
-                )
-                continue
+            # Use a fresh session for DB after long-running collection (avoids stale connection / SSL EOF)
+            with get_session() as db_session:
+                if not raw_items:
+                    print(
+                        f"[press] Step 3 — Raw total: 0 (sources returned no items) → skipping enrichment"
+                    )
+                    log_run(
+                        db_session,
+                        competitor.id,
+                        "press",
+                        "error",
+                        message="no_press_items",
+                        extra={"search_name": press_search_name},
+                    )
+                    continue
 
-            # Apply 90-day window to non–PR Newswire items; keep all PR Newswire regardless of age (no time filter for PR).
-            cutoff = datetime.now(timezone.utc) - timedelta(days=90)
-            filtered_items: list[dict] = []
-            for item in raw_items:
-                provider = (item.get("provider") or "").strip().lower()
-                if provider == "prnewswire":
+                # Apply 90-day window to non–PR Newswire items; keep all PR Newswire regardless of age (no time filter for PR).
+                cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+                filtered_items: list[dict] = []
+                for item in raw_items:
+                    provider = (item.get("provider") or "").strip().lower()
+                    if provider == "prnewswire":
+                        filtered_items.append(item)
+                        continue
+                    dt = _parse_press_date(item.get("date"))
+                    if dt and dt < cutoff:
+                        continue
                     filtered_items.append(item)
+
+                if not filtered_items:
+                    print(f"[press] Step 4 — After 90d window: 0 items → skipping (all outside window)")
+                    log_run(
+                        db_session,
+                        competitor.id,
+                        "press",
+                        "skipped",
+                        message="all_items_outside_window",
+                        extra={"endpoints": [ep.url for ep in endpoints]},
+                    )
                     continue
-                dt = _parse_press_date(item.get("date"))
-                if dt and dt < cutoff:
-                    continue
-                filtered_items.append(item)
 
-            if not filtered_items:
-                print(f"[press] Step 4 — After 90d window: 0 items → skipping (all outside window)")
-                log_run(
-                    session,
-                    competitor.id,
-                    "press",
-                    "skipped",
-                    message="all_items_outside_window",
-                    extra={"endpoints": [ep.url for ep in endpoints]},
-                )
-                continue
+                # Cap by max_raw but keep all PR Newswire (put PR first so they are never cut).
+                max_raw = settings.press_max_raw_items_per_competitor
+                pr_items = [it for it in filtered_items if (it.get("provider") or "").strip().lower() == "prnewswire"]
+                non_pr_items = [it for it in filtered_items if (it.get("provider") or "").strip().lower() != "prnewswire"]
+                combined = pr_items + non_pr_items
+                if len(combined) > max_raw:
+                    combined = combined[:max_raw]
+                filtered_items = combined
+                print(f"[press] Step 4 — After 90d window + cap (PR first, all PR kept) (max_raw={max_raw}): {len(filtered_items)} items")
 
-            # Cap by max_raw but keep all PR Newswire (put PR first so they are never cut).
-            max_raw = settings.press_max_raw_items_per_competitor
-            pr_items = [it for it in filtered_items if (it.get("provider") or "").strip().lower() == "prnewswire"]
-            non_pr_items = [it for it in filtered_items if (it.get("provider") or "").strip().lower() != "prnewswire"]
-            combined = pr_items + non_pr_items
-            if len(combined) > max_raw:
-                combined = combined[:max_raw]
-            filtered_items = combined
-            print(f"[press] Step 4 — After 90d window + cap (PR first, all PR kept) (max_raw={max_raw}): {len(filtered_items)} items")
-
-            # 4) Load previous snapshot for diff/events and for fallback when enrichment returns no groups.
-            # We always run full cleaning + grouping on the full pull so late articles join the right groups and new topics appear.
-            latest = load_latest_snapshot(session, competitor.id, "press")
-            previous_structured = (latest.structured_json or {}) if latest else {}
-            previous_items = previous_structured.get("items") or []
-            previous_canonical = previous_structured.get("canonical_items") or []
-            existing_groups = previous_structured.get("press_groups") or []
+                # Load previous snapshot for diff/events and for fallback when enrichment returns no groups.
+                latest = load_latest_snapshot(db_session, competitor.id, "press")
+                previous_structured = (latest.structured_json or {}) if latest else {}
+                previous_items = previous_structured.get("items") or []
+                previous_canonical = previous_structured.get("canonical_items") or []
+                existing_groups = previous_structured.get("press_groups") or []
 
             # Always run enrichment on the full pull: classify + group all qualifying articles. No skip by "no new items."
             print(f"[press] Step 6 — Enriching full pull ({len(filtered_items)} items): classify + group (late articles join groups; new topics become new groups).")
@@ -1123,7 +1130,7 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
             if display_count > 10:
                 print(f"[press]   ... and {display_count - 10} more")
 
-            # Build top_news (30-day bullets) for dossier and list view; store in snapshot.
+            # Build top_news (14-day bullets) for dossier and list view; store in snapshot.
             groups_with_dates = []
             for g in press_groups:
                 group_latest_dt = None
@@ -1143,7 +1150,7 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                     "articles": g.get("articles") or [],
                     "group_latest_date": group_latest_date,
                 })
-            top_news = summarize_top_news_llm(competitor.name, groups_with_dates, days=30)
+            top_news = summarize_top_news_llm(competitor.name, groups_with_dates, days=14)
             if top_news:
                 structured["top_news"] = top_news
 
@@ -1152,58 +1159,60 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
             raw_hash = _build_press_raw_hash(filtered_items)
             current_items = structured.get("items", [])
 
-            persist_snapshot(
-                session,
-                competitor.id,
-                "press",
-                "",  # raw HTML is not retained for aggregated press; items + canonical_items are sufficient.
-                raw_hash,
-                structured,
-            )
-            # If seed_mode is enabled and this is the first snapshot for this competitor/channel,
-            # persist a baseline but skip diff + events so future runs compare against this state.
-            seed_mode = getattr(settings, "seed_mode", False)
-            is_first_snapshot = latest is None
-            if seed_mode and is_first_snapshot:
+            # Use a fresh session for DB after long-running enrichment (avoids stale connection / SSL EOF)
+            with get_session() as db_session:
+                persist_snapshot(
+                    db_session,
+                    competitor.id,
+                    "press",
+                    "",  # raw HTML is not retained for aggregated press; items + canonical_items are sufficient.
+                    raw_hash,
+                    structured,
+                )
+                # If seed_mode is enabled and this is the first snapshot for this competitor/channel,
+                # persist a baseline but skip diff + events so future runs compare against this state.
+                seed_mode = getattr(settings, "seed_mode", False)
+                is_first_snapshot = latest is None
+                if seed_mode and is_first_snapshot:
+                    log_run(
+                        db_session,
+                        competitor.id,
+                        "press",
+                        "success",
+                        message="press_seed_baseline",
+                        extra={"raw_items": len(raw_items), "filtered_items": len(filtered_items)},
+                    )
+                    continue
+
+                # Diff for new items and create press events (same rules as before).
+                diff = diff_items(previous_items, current_items)
+                added_items = diff["added"]
+
+                for item in added_items:
+                    category = classify_press(item)
+                    if not category:
+                        continue
+                    if not is_executive_relevant(item):
+                        continue
+                    event = build_press_event(category, item)
+                    if not settings.seed_mode and not event_recently_created(
+                        db_session,
+                        competitor.id,
+                        event["type"],
+                        event["title"],
+                        window_days=dedupe_window_for(event["type"]),
+                    ):
+                        create_event(db_session, competitor.id, event)
+
+                print(f"[press] Step 9 — Done. Added events: {len(added_items)}")
                 log_run(
-                    session,
+                    db_session,
                     competitor.id,
                     "press",
                     "success",
-                    message="press_seed_baseline",
-                    extra={"raw_items": len(raw_items), "filtered_items": len(filtered_items)},
+                    message=f"Collected {len(filtered_items)} articles",
+                    extra={"added_items": len(added_items), "raw_items": len(raw_items), "filtered_items": len(filtered_items)},
                 )
-                continue
-
-            # 6) Diff for new items and create press events (same rules as before).
-            diff = diff_items(previous_items, current_items)
-            added_items = diff["added"]
-
-            for item in added_items:
-                category = classify_press(item)
-                if not category:
-                    continue
-                if not is_executive_relevant(item):
-                    continue
-                event = build_press_event(category, item)
-                if not settings.seed_mode and not event_recently_created(
-                    session,
-                    competitor.id,
-                    event["type"],
-                    event["title"],
-                    window_days=dedupe_window_for(event["type"]),
-                ):
-                    create_event(session, competitor.id, event)
-
-            print(f"[press] Step 9 — Done. Added events: {len(added_items)}")
-            log_run(
-                session,
-                competitor.id,
-                "press",
-                "success",
-                message=f"Collected {len(filtered_items)} articles",
-                extra={"added_items": len(added_items), "raw_items": len(raw_items), "filtered_items": len(filtered_items)},
-            )
 
 
 # Fallback when DB is unavailable (e.g. --local with no DB). Also used by inspect scripts.
@@ -1253,7 +1262,8 @@ def get_press_competitors_list(competitor_name: Optional[str] = None) -> Optiona
                                 all_phrases.extend(p for p in raw if isinstance(p, str) and (p or "").strip())
                             elif isinstance(raw, str) and (raw or "").strip():
                                 all_phrases.append((raw or "").strip())
-                google_news_search_phrases = list(dict.fromkeys(all_phrases)) if all_phrases else None
+                _safe = [p for p in all_phrases if isinstance(p, str) and (p or "").strip()]
+                google_news_search_phrases = list(dict.fromkeys(_safe)) if _safe else None
                 if not from_endpoint and press_search_name:
                     _press_search_fallback = {"lark": "Lark Hotels"}
                     key = press_search_name.strip().lower()

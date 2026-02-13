@@ -9,7 +9,13 @@ from typing import Any, Callable, Dict, List, Optional
 import requests
 from bs4 import BeautifulSoup
 
-from .http import fetch_url, fetch_url_js, fetch_url_js_exhaust, fetch_url_js_wait_for_spa
+from .http import (
+    USER_AGENT_BROWSER,
+    fetch_url,
+    fetch_url_js,
+    fetch_url_js_exhaust,
+    fetch_url_js_wait_for_spa,
+)
 
 # Max characters of page text to send to LLM for property extraction (fit context, control cost).
 # Increased to 50k so large property lists (e.g. AvantStay-style search pages) are not silently
@@ -1705,7 +1711,9 @@ def collect_asset_snapshot(
         sitemap_snapshot = fetch_from_sitemap()
         if sitemap_snapshot and sitemap_snapshot.get("properties"):
             return {**sitemap_snapshot, "note": "sitemap_first"}
-        fetched = fetch_url(source_url)
+        # Kasa (and similar) often return minimal/JS shell for bot User-Agent; use browser UA so we get full HTML.
+        fetch_headers = {"User-Agent": USER_AGENT_BROWSER} if _is_kasa_locations_url(source_url) else None
+        fetched = fetch_url(source_url, headers=fetch_headers)
         if fetched.status_code != 200:
             raise RuntimeError(
                 f"Asset fetch failed: {fetched.url} returned HTTP {fetched.status_code}. "
@@ -1713,6 +1721,18 @@ def collect_asset_snapshot(
             )
         parsed = urlparse(source_url)
         base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else source_url
+
+        # Kasa locations: same parser works on plain HTML when page is server-rendered (no Playwright needed).
+        if _is_kasa_locations_url(source_url):
+            kasa_props = _extract_kasa_locations_html(fetched.text, source_url, base_url)
+            if kasa_props:
+                return {
+                    "source_url": fetched.url,
+                    "raw_content": fetched.text,
+                    "raw_hash": fetched.raw_hash,
+                    "properties": normalize_properties(kasa_props),
+                    "note": "html_kasa_locations",
+                }
 
         # Try Lark-style h2/ul blocks first (works on initial HTML without Load more; gives ~6 properties).
         lark_blocks = _extract_lark_style_blocks(fetched.text, base_url)
