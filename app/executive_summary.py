@@ -492,24 +492,37 @@ def generate_rollup_summary(
     news_instruction = ""
     news_block = ""
     if all_news:
-        MAX_NEWS = 25
-        news_items = all_news[:MAX_NEWS]
-        news_lines = []
-        for n in news_items:
-            title = (n.get("title") or "Untitled").replace("\n", " ")
-            summary = (n.get("one_line_summary") or "").replace("\n", " ").strip()
+        # Group by competitor; for each competitor, first article URL is the "Read more" link.
+        by_competitor: Dict[str, List[dict]] = {}
+        for n in all_news:
+            comp = (n.get("competitor_name") or "").strip()
+            if not comp:
+                continue
             url = (n.get("url") or "").strip()
-            comp = n.get("competitor_name") or ""
-            date_str = (n.get("date") or "")[:10]
-            if url:
-                news_lines.append(f"- [{comp}] {title} | {summary} | {date_str} | URL: {url}")
+            if not url or not url.startswith("http"):
+                continue
+            if comp not in by_competitor:
+                by_competitor[comp] = []
+            by_competitor[comp].append(n)
+        news_lines = []
+        for comp, items in by_competitor.items():
+            first = items[0]
+            first_url = (first.get("url") or "").strip()
+            titles_summaries = []
+            for n in items[:8]:
+                title = (n.get("title") or "Untitled").replace("\n", " ")[:120]
+                summary = (n.get("one_line_summary") or "").replace("\n", " ").strip()[:200]
+                date_str = (n.get("date") or "")[:10]
+                titles_summaries.append(f"  {title} | {summary} | {date_str}")
+            block = f"COMPETITOR: {comp}\nFIRST_ARTICLE_URL: {first_url}\n" + "\n".join(titles_summaries)
+            news_lines.append(block)
         if news_lines:
-            news_block = "\n".join(news_lines)
+            news_block = "\n\n".join(news_lines)
             news_instruction = """
 
-3. **Running news list** — Select the most important/relevant news from the list below. Output each as a single line:
-   - **Headline** — One-line summary. [Read](URL)
-   Use the exact URL from the input. Pick up to 15 items, most recent and business-relevant first. Include competitor name in parentheses when helpful, e.g. "(Vacasa)". Do not include articles that are purely promotional or low-signal."""
+3. **Running news list** — One line per competitor that has news below. Format each line as:
+   - **Competitor Name** — One-line summary of their top news. [Read more](exact_URL)
+   Use the exact FIRST_ARTICLE_URL given for that competitor as the link. Put the entire [Read more](url) on the same line as the summary—no line break before the URL. Output in the same order as the competitor blocks below. Skip competitors with only promotional or low-signal items."""
 
     system = f"""You are an AI Chief of Staff for Kasa's exec team. You are given executive summaries for several competitors (each block below is one competitor, with a header "--- Name (id=...) ---"). Pull out concrete facts to write the roll-up.
 
@@ -523,11 +536,11 @@ Output exactly two parts{(" (plus a third)" if news_block else "")}:
 
 Style: bullets only; no fluff; concrete language; name real markets and moves. If a competitor's summary is thin, say so briefly.
 
-FORMATTING: Put each part on its own line with clear section headers. Use " - **Name:**" for each bullet. For the news list, use markdown links: [Read](exact_url)."""
+FORMATTING: Put each part on its own line with clear section headers. Use " - **Name:**" for each bullet. For the news list, one line per competitor with [Read more](exact_first_article_url) on the same line."""
 
     user_parts = [f"Competitor executive summaries:\n\n{combined}"]
     if news_block:
-        user_parts.append(f"\n\nNews items to curate (title | summary | date | URL):\n\n{news_block}")
+        user_parts.append(f"\n\nTop news groupings (one block per competitor; use FIRST_ARTICLE_URL for [Read more](url)):\n\n{news_block}")
 
     user = "\n".join(user_parts)
 
@@ -577,7 +590,7 @@ def polish_rollup_summary(text: str) -> Optional[str]:
         return None
     has_news = "Running news" in text or "**Running news" in text
     news_instruction = (
-        "\n3. **Running news list:** — If the input contains a Running news list section (with [Read](url) markdown links), copy it EXACTLY without modification. Do not alter any URLs or headlines."
+        "\n3. **Running news list:** — If the input contains a Running news list section (with [Read more](url) or [Read](url) markdown links), copy it EXACTLY without modification. Keep each [Read more](url) on the same line as its summary—no line break before the URL."
         if has_news
         else ""
     )
@@ -623,16 +636,17 @@ def clean_rollup_formatting(text: str) -> Optional[str]:
     client = get_openai_client()
     if not client:
         return None
-    system = """You are a formatting assistant. You will receive a competitive intelligence recap that has two parts: (1) **Recent updates:** — a paragraph, and (2) **Per-competitor bullets:** — a list of bullets like " - **CompetitorName:** ..."
+    system = """You are a formatting assistant. You will receive a competitive intelligence recap with two or three parts: (1) **Recent updates:** — a paragraph, (2) **Per-competitor bullets:** — a list of bullets like " - **CompetitorName:** ...", and optionally (3) **Running news list:** — bullets with [Read more](url) links.
 
 Your task: output the EXACT same text with only formatting changes. Do not change a single word or add/remove content.
 
 Formatting rules:
 - Put "**Recent updates:**" (and its paragraph) first. End the paragraph with a single newline (no blank line after it).
-- Then "**Per-competitor bullets:**" on its own line (or "2. **Per-competitor bullets:**" if it was numbered).
+- Then "**Per-competitor bullets:**" on its own line (or "2. **Per-competitor bullets:**" if numbered).
 - Then each bullet on its own line: every " - **Name:** ..." must be on a separate line. Do not join multiple bullets onto one line.
+- If present, keep "**Running news list:**" and each of its bullets on one line each, with [Read more](url) on the same line as the summary—no line break before the URL.
 
-Keep all **bold** markers. Output only the reformatted recap, nothing else."""
+Keep all **bold** markers and all URLs. Output only the reformatted recap, nothing else."""
 
     try:
         resp = client.chat.completions.create(
@@ -698,22 +712,59 @@ def _normalize_rollup_line_breaks(text: str) -> str:
     return result
 
 
+def _rollup_merge_read_more_and_collapse_blanks(text: str) -> str:
+    """
+    If a line ends with [Read] or [Read more] and the next line is a URL, merge so the link
+    is on one line for proper hyperlinking. Then collapse consecutive blank lines to one.
+    """
+    if not text or not text.strip():
+        return text
+    lines = text.splitlines()
+    merged = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.rstrip()
+        # Check if this line ends with [Read] or [Read more] (no URL yet)
+        if re.search(r"\[Read(?: more)?\]\s*$", stripped) and i + 1 < len(lines):
+            next_stripped = lines[i + 1].strip()
+            if next_stripped.startswith("http://") or next_stripped.startswith("https://"):
+                merged.append(stripped + "(" + next_stripped + ")")
+                i += 2
+                continue
+        merged.append(line)
+        i += 1
+    # Collapse consecutive blank lines to one
+    collapsed = []
+    prev_blank = False
+    for line in merged:
+        is_blank = line.strip() == ""
+        if is_blank:
+            if prev_blank:
+                continue
+            prev_blank = True
+        else:
+            prev_blank = False
+        collapsed.append(line)
+    return "\n".join(collapsed)
+
+
 def format_rollup_summary_for_display(text: Optional[str]) -> Optional[str]:
     """
     Escape roll-up summary for HTML, convert **markdown** to <strong>, convert [text](url)
     to hyperlinks <a href="url">text</a>, and preserve line breaks with <br>.
+    Merges [Read more] with URL on next line and collapses excess blank lines.
     """
     if not text or not isinstance(text, str):
         return text
+    text = _rollup_merge_read_more_and_collapse_blanks(text)
     text = _normalize_rollup_line_breaks(text)
     import html
-    import re
     out = []
     for line in text.splitlines():
         s = line.rstrip()
         escaped = html.escape(s)
-        # Replace markdown links [text](url) with <a href="url">text</a> (before escaping URLs).
-        # Match [text](url) where url is non-empty; escape was applied so & is &amp; etc.
+        # Replace markdown links [text](url) with <a href="url">text</a>.
         escaped = re.sub(
             r"\[([^\]]*)\]\((https?://[^\)]+)\)",
             r'<a href="\2" target="_blank" rel="noopener">\1</a>',
