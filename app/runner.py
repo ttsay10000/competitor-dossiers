@@ -928,7 +928,15 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
 
             # 1) Google News (primary). Quoted company name + optional broad keywords (from UI: Edit → press source → Keywords).
             gn_items = []
-            if getattr(settings, "press_enable_google_news", True) and (google_news_search_phrases or press_search_name):
+            press_enabled = getattr(settings, "press_enable_google_news", True)
+            has_phrases = bool(google_news_search_phrases)
+            has_name = bool((press_search_name or "").strip())
+            will_run_gn = press_enabled and (has_phrases or has_name)
+            print(
+                f"[press] Google News check: enabled={press_enabled}, has_phrases={has_phrases},"
+                f" press_search_name={press_search_name!r}, will_run={will_run_gn}"
+            )
+            if will_run_gn:
                 try:
                     if google_news_search_phrases:
                         print(f"[press] Keywords from source: {', '.join(google_news_search_phrases)}")
@@ -940,21 +948,27 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                         window_days=window_days,
                         search_phrases=google_news_search_phrases,
                     )
+                    print(f"[press] Step 1 — Google News returned {len(gn_items)} items (raw, before any filter)")
                     raw_items.extend(gn_items)
                     if gn_items:
                         source_meta.append({"type": "google_news"})
-                    print(f"[press] Step 1 — Google News (90d): {len(gn_items)} items")
                     if not gn_items and press_search_name:
                         print(
                             f"[press]   (0 items — unfiltered; RSS may omit when quoted phrase not in headline)"
                         )
                 except Exception as e:
                     print(f"[press] Step 1 — Google News failed: {e}")
+            else:
+                print(
+                    f"[press] Step 1 — Google News NOT run (enabled={press_enabled}, has_phrases={has_phrases},"
+                    f" press_search_name truthy={has_name})"
+                )
 
-            # 2) PR Newswire: skip for AKA, Landing, Rove (ambiguous names / wrong companies); run for all others.
+            # 2) PR Newswire (full press run for all competitors including AKA, Landing, Rove).
             prn_items = []
-            _prnewswire_skip = {"aka", "landing", "rove"}
-            if press_search_name and (competitor.name or "").strip().lower() not in _prnewswire_skip:
+            _prnewswire_skip: set[str] = set()  # No name-based exclusions; run PR Newswire for all.
+            comp_key = (competitor.name or "").strip().lower()
+            if press_search_name and comp_key not in _prnewswire_skip:
                 try:
                     prn_items = collect_prnewswire_items(
                         press_search_name,
@@ -967,8 +981,8 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                     print(f"[press] Step 2 — PR Newswire (90d): {len(prn_items)} items")
                 except Exception as e:
                     print(f"[press] Step 2 — PR Newswire failed: {e}")
-            elif press_search_name and (competitor.name or "").strip().lower() in _prnewswire_skip:
-                print(f"[press] Step 2 — PR Newswire skipped (ambiguous name: {competitor.name!r})")
+            elif press_search_name and comp_key in _prnewswire_skip:
+                print(f"[press] Step 2 — PR Newswire skipped (ambiguous name). Using Google News only.")
 
             by_provider = {}
             for it in raw_items:
@@ -1300,8 +1314,8 @@ def run_press_local(competitor_name: Optional[str] = None) -> None:
             except Exception as e:
                 print(f"[press] Google News failed: {e}")
 
-        # PR Newswire skipped for ambiguous names; Google News still uses press_search_name (with fallbacks above).
-        _prnewswire_skip = {"aka", "landing", "rove"}
+        # PR Newswire runs for all competitors (no name-based skip).
+        _prnewswire_skip: set[str] = set()
         if (display_name or "").strip().lower() not in _prnewswire_skip:
             try:
                 prn_items = collect_prnewswire_items(

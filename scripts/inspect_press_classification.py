@@ -132,7 +132,7 @@ def main():
                 print("Google News: {} items".format(len(gn)))
             except Exception as e:
                 print("Google News failed: {}".format(e))
-        _prnewswire_skip = {"aka", "landing", "rove"}
+        _prnewswire_skip: set[str] = set()  # No exclusions; full press for all including AKA, Landing, Rove.
         if (display_name or "").strip().lower() not in _prnewswire_skip:
             try:
                 prn = collect_prnewswire_items(press_search_name, max_items=100, window_days=window_days)
