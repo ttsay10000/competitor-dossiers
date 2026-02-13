@@ -1,6 +1,8 @@
 import logging
 import re
+import threading
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Optional
@@ -1271,43 +1273,98 @@ def export_seed_from_ui(request: Request, next_url: Optional[str] = Form(None, a
         return RedirectResponse(url=f"{base}{sep}export_seed=failed", status_code=303)
 
 
+# All channels for force refresh; run order comes from competitors._sort_channels_by_run_order(RUNNER_CHANNELS).
+FORCE_REFRESH_CHANNELS = ("talent", "asset", "press", "homepage", "public_records", "social", "reviews")
+
+
 @router.post("/dossier/force-refresh-and-reset-baseline", status_code=303)
 def force_refresh_and_reset_baseline(request: Request):
     """
-    Run seed first (seed_data.json → DB), then clear all snapshots (every channel, every
-    competitor), clear all events (so Event Feed and Dashboard feed view are empty), run
-    all channels for all active competitors, then set each competitor's reporting_baseline_at
-    to now. The first refresh establishes the baseline; subsequent refreshes compare against
-    it so executive summaries surface what changed.
+    Run seed first (seed_data.json → DB), then clear all snapshots and events, run all
+    channels for all active competitors in the background (with RunLog so run status shows
+    progress), then set each competitor's reporting_baseline_at to now. Redirects immediately
+    to /competitors with started=1 so the run status table and timers work like "Run selected channels".
     """
     from ..runner import (
-        run as run_all_channels,
+        run,
         advance_baseline_after_full_refresh,
         clear_baseline_before_force_refresh,
         clear_all_snapshots,
         clear_all_events,
+        RUNNER_CHANNELS,
     )
-    from ..db import get_session
+    from ..routes.competitors import CANCELLED_RUN_STARTS, _sort_channels_by_run_order
     from ..seed import run_seed
 
-    try:
-        clear_baseline_before_force_refresh()
-        run_seed()
-        logging.info("Force refresh: ran seed (seed_data.json → DB).")
-        with get_session() as session:
-            deleted = clear_all_snapshots(session, channel=None)
-            events_deleted = clear_all_events(session)
-        logging.info("Force refresh: cleared %d snapshot(s) and %d event(s) (all channels, all competitors).", deleted, events_deleted)
-        run_all_channels()
-        baseline_at = advance_baseline_after_full_refresh()  # Set baseline AFTER run so new snapshots become the baseline
-        baseline_str = to_eastern(baseline_at) if baseline_at else ""
-        q = "refreshed=1&forced=1"
-        if baseline_str:
-            q += "&baseline_date=" + urllib.parse.quote(baseline_str)
-        return RedirectResponse(url="/competitors?" + q, status_code=303)
-    except Exception as e:
-        logging.exception("Force refresh failed: %s", e)
-        return RedirectResponse(url="/competitors?force_refresh=failed", status_code=303)
+    run_start_ts = int(datetime.now(timezone.utc).timestamp())
+    # Same channel list and order as "Run selected channels" so run-status and run log behave identically.
+    channels_list = _sort_channels_by_run_order(list(RUNNER_CHANNELS))
+    channels_param = ",".join(channels_list)
+
+    with get_session() as session:
+        competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+        competitors = [c for c in competitors if getattr(c, "is_active", True)]
+        for c in competitors:
+            for ch in RUNNER_CHANNELS:
+                session.add(
+                    RunLog(
+                        competitor_id=c.id,
+                        channel=ch,
+                        status="running",
+                        message=None,
+                        extra_json={"started_at": run_start_ts},
+                    )
+                )
+
+    def _force_refresh_thread() -> None:
+        try:
+            clear_baseline_before_force_refresh()
+            run_seed()
+            logging.info("Force refresh: ran seed (seed_data.json → DB).")
+            with get_session() as session:
+                deleted = clear_all_snapshots(session, channel=None)
+                events_deleted = clear_all_events(session)
+            logging.info(
+                "Force refresh: cleared %d snapshot(s) and %d event(s) (all channels, all competitors).",
+                deleted,
+                events_deleted,
+            )
+            # Run all channels via same job/worker path as "Run selected channels" so run log updates
+            # per (competitor, channel) and behaviour matches normal refresh; only difference is we set
+            # baseline at the end for this run instead of comparing to the previous baseline.
+            with get_session() as session:
+                competitor_names = [
+                    c.name
+                    for c in session.query(Competitor).order_by(Competitor.name.asc()).all()
+                    if getattr(c, "is_active", True)
+                ]
+            jobs = [(run_start_ts, name, ch) for ch in channels_list for name in competitor_names]
+
+            def _run_one(args):
+                run_ts, name, ch = args
+                if run_ts in CANCELLED_RUN_STARTS:
+                    return
+                run(channel=ch, competitor_name=name, is_cancelled=lambda: run_ts in CANCELLED_RUN_STARTS)
+
+            max_workers = min(3, len(jobs)) or 1
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                list(executor.map(_run_one, jobs))
+
+            advance_baseline_after_full_refresh()
+        except Exception as e:
+            logging.exception("Force refresh failed in background: %s", e)
+            with get_session() as session:
+                for log in session.query(RunLog).filter(RunLog.status == "running").all():
+                    if isinstance(log.extra_json, dict) and log.extra_json.get("started_at") == run_start_ts:
+                        log.status = "error"
+                        log.message = str(e)[:500] if e else None
+
+    thread = threading.Thread(target=_force_refresh_thread, daemon=True)
+    thread.start()
+    return RedirectResponse(
+        url=f"/competitors?started=1&run_start_ts={run_start_ts}&channels={channels_param}",
+        status_code=303,
+    )
 
 
 def _dossier_frame_context(session, competitor_id: int, error: Optional[str] = None) -> dict:

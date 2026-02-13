@@ -701,6 +701,14 @@ def competitors_run_status(request: Request):
             key = (log.competitor_id, log.channel)
             if key not in completed_by_key:
                 completed_by_key[key] = log
+        # Only running rows from this run (started_at in extra_json) and not yet completed
+        running = [
+            (r, name)
+            for r, name in running
+            if isinstance(getattr(r, "extra_json", None), dict)
+            and r.extra_json.get("started_at") == run_start_ts
+            and (r.competitor_id, r.channel) not in completed_by_key
+        ]
         competitor_ids = set(log.competitor_id for log in completed_by_key.values()) | set(r.competitor_id for r, _ in running)
         competitors_by_id = {}
         if competitor_ids:

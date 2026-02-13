@@ -898,9 +898,9 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                 f"(Google News + PR Newswire) ==="
             )
 
-            # Search name for Google News and PR Newswire (company name; override via press_search_name on any endpoint).
+            # Search name and keywords from any press endpoint (UI: Edit competitor → press source → Keywords).
             press_search_name = competitor.name
-            google_news_search_phrases = None  # optional list for targeted Google News query (e.g. ["landing furnished rentals"])
+            all_phrases: list[str] = []
             from_endpoint = False
             for ep in endpoints:
                 opts = getattr(ep, "extra_options", None) if ep else None
@@ -909,14 +909,12 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                 if opts.get("press_search_name"):
                     press_search_name = (opts.get("press_search_name") or "").strip() or press_search_name
                     from_endpoint = True
-                if opts.get("google_news_search_phrases"):
-                    raw_phrases = opts["google_news_search_phrases"]
-                    if isinstance(raw_phrases, list):
-                        google_news_search_phrases = [p for p in raw_phrases if isinstance(p, str) and (p or "").strip()]
-                    elif isinstance(raw_phrases, str) and (raw_phrases or "").strip():
-                        google_news_search_phrases = [(raw_phrases or "").strip()]
-                if from_endpoint or google_news_search_phrases:
-                    break
+                raw = opts.get("google_news_search_phrases")
+                if isinstance(raw, list):
+                    all_phrases.extend(p for p in raw if isinstance(p, str) and (p or "").strip())
+                elif isinstance(raw, str) and (raw or "").strip():
+                    all_phrases.append((raw or "").strip())
+            google_news_search_phrases = list(dict.fromkeys(all_phrases)) if all_phrases else None
             if not from_endpoint and press_search_name:
                 _press_search_fallback = {"lark": "Lark Hotels"}
                 key = press_search_name.strip().lower()
@@ -928,10 +926,14 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
             window_days = 90
             max_per_source = settings.press_max_items_per_source
 
-            # 1) Google News (primary). Uses google_news_search_phrases when set, else press_search_name.
+            # 1) Google News (primary). Quoted company name + optional broad keywords (from UI: Edit → press source → Keywords).
             gn_items = []
             if getattr(settings, "press_enable_google_news", True) and (google_news_search_phrases or press_search_name):
                 try:
+                    if google_news_search_phrases:
+                        print(f"[press] Keywords from source: {', '.join(google_news_search_phrases)}")
+                    phrases_str = (" " + " ".join(google_news_search_phrases)) if google_news_search_phrases else ""
+                    print(f"[press] Step 1 — Google News: \"{press_search_name}\"{phrases_str} (90d)")
                     gn_items = collect_google_news_items(
                         press_search_name,
                         max_items=min(50, max_per_source * 2),
@@ -944,7 +946,7 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
                     print(f"[press] Step 1 — Google News (90d): {len(gn_items)} items")
                     if not gn_items and press_search_name:
                         print(
-                            f"[press]   (0 items for {press_search_name!r}; RSS may omit if exact phrase not in headline)"
+                            f"[press]   (0 items — unfiltered; RSS may omit when quoted phrase not in headline)"
                         )
                 except Exception as e:
                     print(f"[press] Step 1 — Google News failed: {e}")
@@ -972,10 +974,12 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
             for it in raw_items:
                 p = (it.get("provider") or "").strip() or "unknown"
                 by_provider[p] = by_provider.get(p, 0) + 1
-            print(f"[press] Step 3 — Raw total: {len(raw_items)} by source: {by_provider}")
+            print(f"[press] Step 3 — Raw total: {len(raw_items)} by source: {by_provider} (unfiltered; no LLM applied yet)")
 
             if not raw_items:
-                print(f"[press] Step 3 — Raw total: 0 → skipping (no items from Google News or PR Newswire)")
+                print(
+                    f"[press] Step 3 — Raw total: 0 (sources returned no items) → skipping enrichment"
+                )
                 log_run(
                     session,
                     competitor.id,
@@ -1190,6 +1194,7 @@ def run_press(competitor_name: Optional[str] = None, is_cancelled: Optional[Call
 
 # Fallback when DB is unavailable (e.g. --local with no DB). Also used by inspect scripts.
 LOCAL_PRESS_COMPETITORS = [
+    ("AKA", "AKA"),
     ("Lark", "Lark Hotels"),
     ("AvantStay", "AvantStay"),
     ("Placemakr", "Placemakr"),
@@ -1208,14 +1213,19 @@ def get_press_competitors_list(competitor_name: Optional[str] = None) -> Optiona
     """
     try:
         with get_session() as session:
-            competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
+            competitors = (
+                session.query(Competitor)
+                .options(selectinload(Competitor.source_endpoints))
+                .order_by(Competitor.name.asc())
+                .all()
+            )
             competitors = [c for c in competitors if getattr(c, "is_active", True)]
             if competitor_name:
                 competitors = _filter_competitors_by_name(competitors, competitor_name)
             out: list[tuple[str, str, Optional[list[str]]]] = []
             for c in competitors:
                 press_search_name = c.name
-                google_news_search_phrases: Optional[list[str]] = None
+                all_phrases: list[str] = []
                 from_endpoint = False
                 for ep in (c.source_endpoints or []):
                     if (getattr(ep, "channel", None) or "").strip().lower() == "press":
@@ -1224,14 +1234,12 @@ def get_press_competitors_list(competitor_name: Optional[str] = None) -> Optiona
                             if opts.get("press_search_name"):
                                 press_search_name = (opts.get("press_search_name") or "").strip() or press_search_name
                                 from_endpoint = True
-                            if opts.get("google_news_search_phrases"):
-                                raw = opts["google_news_search_phrases"]
-                                if isinstance(raw, list):
-                                    google_news_search_phrases = [p for p in raw if isinstance(p, str) and (p or "").strip()]
-                                elif isinstance(raw, str) and (raw or "").strip():
-                                    google_news_search_phrases = [(raw or "").strip()]
-                        if from_endpoint or google_news_search_phrases:
-                            break
+                            raw = opts.get("google_news_search_phrases")
+                            if isinstance(raw, list):
+                                all_phrases.extend(p for p in raw if isinstance(p, str) and (p or "").strip())
+                            elif isinstance(raw, str) and (raw or "").strip():
+                                all_phrases.append((raw or "").strip())
+                google_news_search_phrases = list(dict.fromkeys(all_phrases)) if all_phrases else None
                 if not from_endpoint and press_search_name:
                     _press_search_fallback = {"lark": "Lark Hotels"}
                     key = press_search_name.strip().lower()
@@ -1277,6 +1285,10 @@ def run_press_local(competitor_name: Optional[str] = None) -> None:
 
         if getattr(settings, "press_enable_google_news", True) and (google_news_search_phrases or press_search_name):
             try:
+                if google_news_search_phrases:
+                    print(f"[press] Keywords from source: {', '.join(google_news_search_phrases)}")
+                phrases_str = (" " + " ".join(google_news_search_phrases)) if google_news_search_phrases else ""
+                print(f"[press] Google News query: \"{press_search_name}\"{phrases_str} (90d)")
                 gn_items = collect_google_news_items(
                     press_search_name,
                     max_items=min(50, max_per_source * 2),
@@ -1288,6 +1300,7 @@ def run_press_local(competitor_name: Optional[str] = None) -> None:
             except Exception as e:
                 print(f"[press] Google News failed: {e}")
 
+        # PR Newswire skipped for ambiguous names; Google News still uses press_search_name (with fallbacks above).
         _prnewswire_skip = {"aka", "landing", "rove"}
         if (display_name or "").strip().lower() not in _prnewswire_skip:
             try:
@@ -1319,10 +1332,10 @@ def run_press_local(competitor_name: Optional[str] = None) -> None:
         if len(combined) > max_raw:
             combined = combined[:max_raw]
         filtered_items = combined
-        print(f"[press] After 90d + cap (PR first, all PR kept): {len(filtered_items)} items")
+        print(f"[press] After 90d + cap (PR first, all PR kept): {len(filtered_items)} items (unfiltered; LLM filter applied in enrichment)")
 
         if not filtered_items:
-            print(f"[press] No items → skipping enrichment.")
+            print(f"[press] No items from sources → skipping enrichment.")
             continue
 
         press_groups = enrich_press_items_with_llm(
