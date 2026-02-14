@@ -27,6 +27,11 @@
   ```
   The script uses `DATABASE_URL_EXTERNAL` when set so you can keep `DATABASE_URL` for run-seed (e.g. local or internal). Commit the updated `seed_data.json` and `app/seed.py` (Export syncs the SEED_COMPETITORS fallback).
 
+## Why sync fails on Render (and you don't always see it)
+
+- **Cause**: On Render (and many PaaS), the app runs from a **read-only** copy of the repo. `export_seed_to_file()` writes to `seed_data.json` and `app/seed.py` in the project root. Those paths are inside the deployed filesystem, so `path.write_text(...)` raises (e.g. `PermissionError` or read-only filesystem). The exception is caught in `_sync_seed_file()` and only logged; the HTTP request still returns success, so the UI does not show an error unless we explicitly redirect with `seed_sync=failed`.
+- **When you see it**: After **adding** a new competitor, the app redirects to the "added" page with `?seed_sync=failed` when sync fails, and that page shows the "run export locally" note. After **editing** (details, source URLs, press keywords/terms), the redirect now also includes `?seed_sync=failed` when sync fails, and the edit page shows the same "run export locally" banner. So if you change terms or source URLs on Render and see that banner, run `scripts/export_seed_with_env.py` locally and commit the updated seed files.
+
 ## How to check that Export is working and file/DB are in sync
 
 1. **Compare file vs DB**

@@ -825,6 +825,7 @@ def competitor_added(request: Request, competitor_id: int):
 def competitors_edit(request: Request, competitor_id: int):
     review_error = request.query_params.get("review_error")
     source_error = request.query_params.get("source_error")
+    seed_sync_failed = request.query_params.get("seed_sync") == "failed"
     with get_session() as session:
         competitor = session.get(Competitor, competitor_id)
         if competitor is None:
@@ -902,6 +903,7 @@ def competitors_edit(request: Request, competitor_id: int):
             "reviews_snapshot": reviews_snapshot,
             "review_error": review_error,
             "source_error": source_error,
+            "seed_sync_failed": seed_sync_failed,
             "last_runs": last_runs,
             "last_refreshed": last_refreshed,
             "nav_competitors": nav_competitors,
@@ -924,8 +926,10 @@ def competitors_update(
         raw_domain = (primary_domain or "").strip() or None
         competitor.primary_domain = normalize_domain(raw_domain) if raw_domain else None
         competitor.short_description = (short_description or "").strip() or None
-    _sync_seed_file()
-    return RedirectResponse(url=f"/competitors/{competitor_id}", status_code=HTTP_303_SEE_OTHER)
+    url = f"/competitors/{competitor_id}"
+    if not _sync_seed_file():
+        url += "?seed_sync=failed"
+    return RedirectResponse(url=url, status_code=HTTP_303_SEE_OTHER)
 
 
 def _parse_google_news_phrases(raw: Optional[str]) -> Optional[list[str]]:
@@ -981,8 +985,10 @@ def competitor_add_source(
             extra_options=extra_options,
         )
         session.add(endpoint)
-    _sync_seed_file()
-    return RedirectResponse(url=f"/competitors/{competitor_id}", status_code=HTTP_303_SEE_OTHER)
+    url = f"/competitors/{competitor_id}"
+    if not _sync_seed_file():
+        url += "?seed_sync=failed"
+    return RedirectResponse(url=url, status_code=HTTP_303_SEE_OTHER)
 
 
 @router.post("/competitors/{competitor_id}/sources/{source_id}/delete")
@@ -991,8 +997,10 @@ def competitor_delete_source(competitor_id: int, source_id: int):
         endpoint = session.get(SourceEndpoint, source_id)
         if endpoint is not None:
             session.delete(endpoint)
-    _sync_seed_file()
-    return RedirectResponse(url=f"/competitors/{competitor_id}", status_code=HTTP_303_SEE_OTHER)
+    url = f"/competitors/{competitor_id}"
+    if not _sync_seed_file():
+        url += "?seed_sync=failed"
+    return RedirectResponse(url=url, status_code=HTTP_303_SEE_OTHER)
 
 
 @router.post("/competitors/{competitor_id}/sources/{source_id}")
@@ -1033,8 +1041,10 @@ def competitor_update_source(
             else:
                 extra.pop("google_news_search_phrases", None)
             endpoint.extra_options = extra if extra else None
-    _sync_seed_file()
-    return RedirectResponse(url=f"/competitors/{competitor_id}", status_code=HTTP_303_SEE_OTHER)
+    url = f"/competitors/{competitor_id}"
+    if not _sync_seed_file():
+        url += "?seed_sync=failed"
+    return RedirectResponse(url=url, status_code=HTTP_303_SEE_OTHER)
 
 
 def _safe_redirect_after_review_action(competitor_id: int, next_url: Optional[str], review_error: Optional[str] = None) -> str:
