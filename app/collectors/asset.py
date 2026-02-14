@@ -454,8 +454,10 @@ def _extract_landing_locations_html(html: str, source_url: str, base_url: str) -
             # Property name — but skip image collector / nav card if it ever appears as h3.
             if _is_landing_image_collector(text):
                 continue
-            # Skip location headers that appear as h3 (e.g. duplicate "City, ST" or "City, State" — not a property).
-            if _is_landing_location_header(text):
+            # Skip location headers that appear as h3 (e.g. "City, ST" or "City, ST - 5 properties" — not a property).
+            if _is_landing_location_header_or_prefix(text):
+                continue
+            if _is_landing_state_or_coming_soon(text):
                 continue
             if "no properties available" in text.lower():
                 continue
@@ -730,6 +732,43 @@ def _is_landing_location_header(text: str) -> bool:
         if state_part in _US_STATE_ABBREV or state_part in _US_STATE_NAMES_LOWER:
             return True
     if re.match(r"^Washington\s+D\.?C\.?$", t, re.IGNORECASE):
+        return True
+    return False
+
+
+def _is_landing_location_header_or_prefix(text: str) -> bool:
+    """
+    True if text is or starts with a Landing location header (e.g. "Austin, TX" or "Dallas, TX - View all").
+    Used so we filter out location-style h3s that have trailing suffix (property count, "View all", etc.).
+    """
+    if not text or len(text) >= 120:
+        return False
+    t = (text or "").strip()
+    # Take leading segment before common suffixes so "City, ST - 5 properties" still matches.
+    for sep in (" - ", " — ", " | ", " ("):
+        if sep in t:
+            t = t.split(sep)[0].strip()
+            break
+    return _is_landing_location_header(t)
+
+
+def _is_landing_state_or_coming_soon(text: str) -> bool:
+    """
+    True if text is a state-only header, "Coming Soon", or similar section label (Landing) — not a property.
+    Keeps property count at 198 by excluding these from extraction and normalize_properties.
+    """
+    if not text:
+        return False
+    t = (text or "").strip().lower()
+    if len(t) <= 3 and t in _US_STATE_ABBREV:
+        return True
+    if t in _US_STATE_NAMES_LOWER:
+        return True
+    if re.match(r"^coming\s+soon", t) or re.match(r"^opening\s+soon", t):
+        return True
+    if re.match(r"^coming\s+\d{4}", t) or re.match(r"^opening\s+\d{4}", t):
+        return True
+    if t in ("coming soon", "opening soon", "coming 2025", "opening 2025"):
         return True
     return False
 
@@ -1220,8 +1259,10 @@ def normalize_properties(properties: list[dict[str, Any]]) -> list[dict[str, Any
         name = (prop.get("name") or "").strip()
         if _is_detail_line_or_junk_name(name):
             continue
-        # Landing (and any source): "City, ST" / "City, State" / "Washington D.C." are location headers, not properties.
-        if _is_landing_location_header(name):
+        # Landing (and any source): "City, ST" / "City, State" / "Washington D.C." (or with suffix like " - View all") are location headers, not properties.
+        if _is_landing_location_header_or_prefix(name):
+            continue
+        if _is_landing_state_or_coming_soon(name):
             continue
         # Kasa: "View details Apartment/Hotel Property Name" -> store as "Apartment/Hotel Property Name"
         if name.lower().startswith("view details ") and len(name) > 13:

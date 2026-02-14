@@ -17,7 +17,7 @@ Quick reference to find docs and to decide what to keep or remove. **Planning-on
 | File | Purpose | Keep / Remove |
 |------|---------|----------------|
 | `ARCH.md` | System architecture, data flow, design principles, press deduping. | **Keep** — reference for how the system works. |
-| `DEBUG_AND_TEST_SCRIPTS.md` | Index of all debug/test scripts and how to run or remove them. | **Keep** — use to find or delete internal tests. |
+| `DEBUG_AND_TEST_SCRIPTS.md` | Index of all scripts in `scripts/` and `tests/`, with purpose and how to run. | **Keep** — use to find test/debug/inspect scripts. |
 | `DEPLOY_RENDER.md` | Push-to-Render checklist; env vars; internal/external Postgres. | **Keep** — operational. (Contains credentials; consider `.gitignore` if repo is public.) |
 | `PROJECT_TRACKING_DOSSIER_IMPROVEMENTS.md` | Project tracking — dossier improvements; prioritization and tracking for dossier/executive-summary work. | **Keep** — planning and backlog for dossier. |
 | `FILES_AND_DOCS.md` | This index. | **Keep** — find/remove docs. |

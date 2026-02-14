@@ -1,0 +1,22 @@
+{
+  "AKA": {
+    "strategy": "sitemap_first",
+    "count": 15,
+    "note": ""
+  },
+  "AvantStay": {
+    "strategy": "sitemap_first",
+    "count": 3686,
+    "note": ""
+  },
+  "Placemakr": {
+    "strategy": "html",
+    "count": 16,
+    "note": "html"
+  },
+  "Landing": {
+    "strategy": "landing_locations",
+    "count": 221,
+    "note": "landing_locations"
+  }
+}
