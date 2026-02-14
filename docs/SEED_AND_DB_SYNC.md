@@ -17,6 +17,10 @@
 - If you never Export after UI changes: DB can have competitors/sources that are not in the file (e.g. AKA added in UI). The file in git then lags the DB.
 - If you never Run seed after changing the file: DB can have old data (e.g. old Rove strategy). The DB then lags the file.
 
+## Press (Google News): two variables
+
+For press sources, Google News RSS uses two separate values: **Search name (quoted, strict)** and **Keywords (unquoted, broad)**. In the seed file and DB these are `press_search_name` (company name only, e.g. `"Rove"`) and `google_news_search_phrases` (e.g. `["furnished rentals"]`). Only the search name is sent in quotes to Google; keywords are sent unquoted so they match loosely. Set **Search name** to the company name only (e.g. Rove, AKA, Landing); put broader terms in **Keywords**. After changing these in `seed_data.json`, run **Run seed** so the DB gets the update; otherwise the runner keeps using old values and Google News may return 0 results. To fix existing DB rows that still have a long phrase in `press_search_name`, run once: `python scripts/fix_press_search_name_in_db.py` (with `DATABASE_URL` set).
+
 ## Where Export runs
 
 - **UI**: Competitors page → “Export seed” button. Also after add/edit/delete competitor, the app calls `_sync_seed_file()` (same as Export) so the file is updated automatically — **unless** the server has a read-only filesystem (e.g. Render). On Render, that auto-sync can fail; the change is still in the DB but not written to the file.

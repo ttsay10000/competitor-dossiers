@@ -955,6 +955,7 @@ def competitor_add_source(
     confidence: str = Form("high"),
     js_required: Optional[str] = Form(None),
     use_sitemap_first: Optional[str] = Form(None),
+    press_search_name: Optional[str] = Form(None),
     google_news_search_phrases: Optional[str] = Form(None),
 ):
     with get_session() as session:
@@ -972,9 +973,15 @@ def competitor_add_source(
             )
         extra_options = None
         if ch == "press":
+            extra_options = {}
+            name_val = (press_search_name or "").strip()
+            if name_val:
+                extra_options["press_search_name"] = name_val
             phrases = _parse_google_news_phrases(google_news_search_phrases)
             if phrases:
-                extra_options = {"google_news_search_phrases": phrases}
+                extra_options["google_news_search_phrases"] = phrases
+            if not extra_options:
+                extra_options = None
         endpoint = SourceEndpoint(
             competitor_id=competitor_id,
             channel=ch,
@@ -1012,6 +1019,7 @@ def competitor_update_source(
     confidence: str = Form("high"),
     js_required: Optional[str] = Form(None),
     use_sitemap_first: Optional[str] = Form(None),
+    press_search_name: Optional[str] = Form(None),
     google_news_search_phrases: Optional[str] = Form(None),
 ):
     with get_session() as session:
@@ -1035,6 +1043,11 @@ def competitor_update_source(
         endpoint.use_sitemap_first = bool(use_sitemap_first)
         if ch == "press":
             extra = dict(endpoint.extra_options or {})
+            name_val = (press_search_name or "").strip()
+            if name_val:
+                extra["press_search_name"] = name_val
+            else:
+                extra.pop("press_search_name", None)
             phrases = _parse_google_news_phrases(google_news_search_phrases)
             if phrases:
                 extra["google_news_search_phrases"] = phrases

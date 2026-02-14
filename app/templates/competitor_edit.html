@@ -173,9 +173,13 @@
             </select>
           </div>
           <div>
+            <label>Search name (quoted, strict) <span class="meta">(press only)</span></label>
+            <input name="press_search_name" placeholder="e.g. {{ competitor.name }} (default: competitor name)" title="Company name only; sent in quotes to Google News. Leave blank to use competitor name." />
+          </div>
+          <div>
             <label>Keywords <span class="meta">(press only)</span></label>
-            <input name="google_news_search_phrases" placeholder="e.g. furnished rentals" title="Only the competitor name is in quotes; keywords here are unquoted (loose match), comma-separated." />
-            <p class="meta" style="margin: 2px 0 0 0;">Query: <code>"{{ competitor.name }}"</code> (exact) + your keywords <em>unquoted</em> (loose). E.g. furnished rentals = articles with those words anywhere, not as a strict phrase.</p>
+            <input name="google_news_search_phrases" placeholder="e.g. furnished rentals" title="Unquoted keywords (loose match), comma-separated." />
+            <p class="meta" style="margin: 2px 0 0 0;">Google News: search name in quotes (exact) + keywords unquoted (loose). E.g. furnished rentals = those words anywhere.</p>
           </div>
           <div>
             <button type="submit">Add Source</button>
@@ -264,9 +268,14 @@
                       </div>
                       {% if endpoint.channel == "press" %}
                       <div>
+                        {% set _press_name = (endpoint.extra_options or {}).get('press_search_name') %}
+                        <label>Search name (quoted, strict)</label>
+                        <input name="press_search_name" placeholder="e.g. {{ competitor.name }}" value="{{ _press_name or '' }}" title="Company name only; sent in quotes to Google News. Empty = use competitor name." />
+                      </div>
+                      <div>
                         {% set phrases = (endpoint.extra_options or {}).get('google_news_search_phrases') %}
-                        <label>Keywords</label>
-                        <input name="google_news_search_phrases" placeholder="e.g. furnished rentals (optional)" value="{{ (phrases | join(', ')) if (phrases is iterable and phrases is not string) else (phrases if phrases is string else '') }}" title="Only competitor name is quoted; these keywords are unquoted (loose match)." />
+                        <label>Keywords (unquoted, broad)</label>
+                        <input name="google_news_search_phrases" placeholder="e.g. furnished rentals (optional)" value="{{ (phrases | join(', ')) if (phrases is iterable and phrases is not string) else (phrases if phrases is string else '') }}" title="Keywords sent unquoted (loose match)." />
                       </div>
                       {% endif %}
                       <div style="align-self: flex-end;">

@@ -3,6 +3,23 @@ import os
 import sys
 import time
 
+# Load .env and prefer DATABASE_URL_EXTERNAL so --local press can reach DB and get phrases
+_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_env = os.path.join(_root, ".env")
+if os.path.isfile(_env):
+    with open(_env) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k, v = k.strip(), v.strip().strip("'\"").replace("\\n", "\n")
+            if k:
+                os.environ.setdefault(k, v)
+_ext = os.environ.get("DATABASE_URL_EXTERNAL")
+if _ext:
+    os.environ["DATABASE_URL"] = _ext
+
 from .db import check_db_connection, get_session
 from .models import Competitor
 from .runner import run, advance_baseline_after_full_refresh, clear_latest_snapshots

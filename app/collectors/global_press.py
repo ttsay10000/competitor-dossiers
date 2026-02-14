@@ -527,11 +527,11 @@ def collect_google_news_items(
     - Unquoted: individual words can appear anywhere (e.g. furnished rentals = articles containing
       "furnished" and "rentals" somewhere, not necessarily as a phrase). This is less limiting.
 
-    Final query: "CompanyName" keyword1 keyword2 when:90d
-    Example: "Rove" furnished rentals when:90d  (strict on "Rove", loose on furnished/rentals).
+    Final query: "CompanyName" (keyword1 OR keyword2 OR ...) when:90d
+    Example: "Rove" (furnished OR rentals) when:90d  (strict on "Rove", any of the keywords).
 
     Set press_search_name to the exact phrase to require (usually just company name). Set
-    google_news_search_phrases to optional broad keywords; they are never quoted.
+    google_news_search_phrases to optional keywords; they are combined with OR in parentheses.
     """
     # Normalize: DB/seed may store as string (single phrase); always produce list of non-empty strings
     if search_phrases is None:
@@ -552,10 +552,10 @@ def collect_google_news_items(
     primary = company_name
     cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
 
-    # Build query: only company_name is quoted (strict); keywords are appended unquoted (loose match).
+    # Build query: "CompanyName" (keyword1 OR keyword2 OR ...) when:Nd; if no keywords, just "CompanyName" when:Nd
     if keywords:
-        keywords_part = " ".join(p.strip() for p in keywords)
-        raw_query = f'"{primary}" {keywords_part}'.strip()
+        keywords_part = " (" + " OR ".join(p.strip() for p in keywords) + ")"
+        raw_query = f'"{primary}"{keywords_part}'.strip()
         results = _fetch_google_news_rss(primary, window_days, max_items, cutoff, raw_query=raw_query)
     else:
         results = _fetch_google_news_rss(primary, window_days, max_items, cutoff, raw_query=None)
