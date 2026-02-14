@@ -241,7 +241,7 @@
     <p class="meta" style="margin-top: 4px;">The <strong>seed file</strong> (<code>seed_data.json</code>) is the canonical list of competitors and sources in your repo. It’s used on deploy and when you want to sync between the database and the file.</p>
     <ul class="meta" style="margin: 8px 0 0 0; padding-left: 20px;">
       <li><strong>Run seed</strong> — <em>File → DB.</em> Use when the seed file was updated (e.g. you pulled from git or edited <code>seed_data.json</code> by hand) and you want to load that into the database. Loads <code>seed_data.json</code> into the DB.</li>
-      <li><strong>Export seed</strong> — <em>DB → file.</em> Use when you’ve added or edited competitors in the UI and want to persist them to the seed file. Writes the current DB to <code>seed_data.json</code>. Do this whenever you add competitors via the UI so the file stays in sync. You do <em>not</em> need to click Run seed after this.</li>
+      <li><strong>Export seed</strong> — <em>DB → file.</em> Use when you’ve added or edited competitors in the UI and want to persist them to the seed file. Writes the current DB to <code>seed_data.json</code>. On Render (read-only disk), Export may fail; then run <code>.venv/bin/python scripts/export_seed_with_env.py</code> locally with <code>DATABASE_URL</code> in <code>.env</code> set to Render’s <strong>External</strong> Database URL (see <code>.env.example</code>).</li>
       <li><strong>Force refresh &amp; reset baseline</strong> — Runs <strong>seed (file → DB)</strong> first, then deletes all snapshots and events, runs all collectors for all channels, then sets each competitor’s baseline to the time the run completed (so “Baseline set” shows that date). Use when the seed file is up to date (e.g. after <strong>Export seed</strong> if you added in UI), after editing the seed file, or when changing press/LLM logic. Does <em>not</em> run Export seed; use <strong>Export seed</strong> separately to save UI changes back to the file.</li>
     </ul>
     <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px;">
@@ -298,7 +298,7 @@
           statusEl.textContent = baselineDate ? 'Refresh complete. Baseline set to ' + decodeURIComponent(baselineDate) + '.' : 'Refresh complete.';
         } else if (params.get('seed_run')) statusEl.textContent = 'Seed run complete (file → DB).';
         else if (params.get('export_seed') === '1') statusEl.textContent = 'Export seed complete (DB → file).';
-        else if (params.get('export_seed') === 'failed') { statusEl.textContent = 'Export seed failed (check server logs).'; statusEl.style.color = 'var(--warning, #b8860b)'; }
+        else if (params.get('export_seed') === 'failed') { statusEl.textContent = 'Export seed failed (e.g. read-only disk). Run .venv/bin/python scripts/export_seed_with_env.py locally with DATABASE_URL in .env (External URL).'; statusEl.style.color = 'var(--warning, #b8860b)'; }
         else if (params.get('force_refresh') === 'failed') { statusEl.textContent = 'Force refresh failed (check server logs). If another refresh is running, wait for it to finish.'; statusEl.style.color = 'var(--warning, #b8860b)'; }
         else statusEl.textContent = '';
         if (params.get('refreshed') || params.get('seed_run') || params.get('export_seed') === '1') statusEl.style.color = 'var(--accent)';

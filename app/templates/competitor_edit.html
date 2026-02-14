@@ -123,7 +123,7 @@
 
   <div class="card">
     <h3>Source Endpoints</h3>
-    <p class="meta card-desc">Changes here are saved to the database and synced to <code>seed_data.json</code> automatically. The next run will use the updated sources and keywords.</p>
+    <p class="meta card-desc">Changes here are saved to the database and synced to <code>seed_data.json</code> when the server can write the file. If sync fails (e.g. on Render), run <code>.venv/bin/python scripts/export_seed_with_env.py</code> locally with <code>DATABASE_URL</code> in <code>.env</code> (Render’s External URL). The next run will use the updated sources and keywords.</p>
 
     <div class="add-source-section">
       <h4>Add new source</h4>

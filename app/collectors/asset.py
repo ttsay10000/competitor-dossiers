@@ -1637,6 +1637,37 @@ _ASSET_CHAIN_MIN_PROPERTIES = 11
 # first result with >= 1 property (so seed-added competitors are never excluded by a strict minimum).
 _DEFAULT_ASSET_STRATEGY_CHAIN = ["sitemap_first", "js_exhaust", "html"]
 
+# Canonical URL -> single strategy for known competitors. No chain, no fallback; one path per competitor.
+# Format: (host_lower_without_www, path_rstrip_slash) -> strategy name. Ensures prioritization changes don't break runs.
+# Matches seed_data.json asset URLs: AKA uses homepage /; others use paths below.
+_ASSET_CANONICAL_STRATEGY: list[tuple[str, str, str]] = [
+    ("stayaka.com", "/", "sitemap_first"),
+    ("placemakr.com", "/locations", "html"),
+    ("avantstay.com", "/search", "sitemap_first"),
+    ("larkhospitality.com", "/portfolio", "js_exhaust"),
+    ("theblueground.com", "/destinations", "blueground_destinations"),
+    ("hellolanding.com", "/locations", "landing_locations"),
+    ("rovetravel.com", "/search", "js_exhaust"),
+    ("vacasa.com", "/search", "sitemap_first"),
+    ("kasa.com", "/locations", "kasa_locations"),
+    ("kasaliving.com", "/locations", "kasa_locations"),
+]
+
+
+def _canonical_asset_strategy(source_url: str) -> Optional[str]:
+    """Return the single strategy for this asset URL if it's a known competitor; else None (use chain/infer)."""
+    if not source_url:
+        return None
+    parsed = urlparse(source_url)
+    host = (parsed.netloc or "").lower().strip()
+    if host.startswith("www."):
+        host = host[4:]
+    path = (parsed.path or "/").rstrip("/") or "/"
+    for h, p, strategy in _ASSET_CANONICAL_STRATEGY:
+        if h in host and path == p:
+            return strategy
+    return None
+
 
 def collect_asset_snapshot(
     source_url: str,
@@ -1856,6 +1887,25 @@ def collect_asset_snapshot(
 
     def run_one_strategy(strategy: str) -> dict[str, Any]:
         """Run a single strategy by name; returns snapshot dict. Used for both chain and single-strategy."""
+        if strategy == "kasa_locations":
+            # Kasa only: one fetch + parser. No Playwright, no load_more, no link merge — yields 77 properties.
+            fetch_headers = {"User-Agent": USER_AGENT_BROWSER}
+            fetched = fetch_url(source_url, headers=fetch_headers)
+            if fetched.status_code != 200:
+                raise RuntimeError(
+                    f"Asset fetch failed: {fetched.url} returned HTTP {fetched.status_code}. "
+                    "Refusing to parse or persist; check Runs for this error."
+                )
+            parsed = urlparse(source_url)
+            base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else source_url
+            kasa_props = _extract_kasa_locations_html(fetched.text, source_url, base_url)
+            return {
+                "source_url": fetched.url,
+                "raw_content": fetched.text,
+                "raw_hash": fetched.raw_hash,
+                "properties": normalize_properties(kasa_props),
+                "note": "kasa_locations",
+            }
         if strategy == "landing_locations":
             parsed = urlparse(source_url)
             base_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else source_url
@@ -2019,6 +2069,11 @@ def collect_asset_snapshot(
             return html_snapshot
         sitemap_snapshot = fetch_from_sitemap()
         return sitemap_snapshot or html_snapshot
+
+    # Known competitors: run exactly one strategy (no chain, no infer). Avoids prioritization/fallback issues.
+    canonical = _canonical_asset_strategy(source_url)
+    if canonical is not None:
+        return run_one_strategy(canonical)
 
     # --- Strategy chain: try strategies in order until one returns >= min_properties ---
     # Use explicit chain, or default chain for unknown sources (no strategy_chain and no explicit strategy).

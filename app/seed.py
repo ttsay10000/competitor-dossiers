@@ -169,7 +169,7 @@ SEED_COMPETITORS = [
             {"channel": "talent", "url": "https://job-boards.greenhouse.io/vacasa", "confidence": "medium"},
         ],
     },
-    # Kasa Living: asset page is like Lark — property cards/landing; needs JS + optional load_more + LLM extraction.
+    # Kasa Living: canonical path is kasa_locations (HTTP + parser only, 77 properties). No chain.
     {
         "name": "Kasa Living",
         "primary_domain": "kasa.com",
@@ -178,34 +178,7 @@ SEED_COMPETITORS = [
                 "channel": "asset",
                 "url": "https://kasa.com/locations",
                 "confidence": "high",
-                "js_required": True,
-                "extra_options": {
-                    "strategy": "js_exhaust",
-                    "load_more": {
-                        "button_text": "Load more",
-                        "post_load_wait_ms": 3000,
-                        "click_selector": [
-                            "a:has-text('Load more')",
-                            "button:has-text('Load more')",
-                            ":text('Load more')",
-                            "button:has-text('Load More')",
-                            "a:has-text('Load more')",
-                            "a:has-text('Load More')",
-                            "button:has-text('View more')",
-                            "a:has-text('View more')",
-                            "[data-testid='load-more']",
-                            "button:has-text('Show more')",
-                            "a:has-text('Show more')",
-                        ],
-                        "stop_when_selector_gone": True,
-                        "wait_after_click_ms": 2000,
-                        "wait_for_selector_timeout_ms": 10000,
-                        "wait_after_gone_ms": 3000,
-                        "wait_reappear_attempts": 5,
-                        "max_clicks": 200,
-                    },
-                    "llm_extract": True,
-                },
+                "extra_options": {"strategy": "kasa_locations"},
             },
             {"channel": "talent", "url": "https://kasa.com/careers", "confidence": "high"},
             {

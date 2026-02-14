@@ -80,12 +80,12 @@
 
     <div class="card" style="border-left: 4px solid var(--muted); margin-top: 16px;">
       {% if seed_sync_failed %}
-      <p class="meta" style="margin: 0 0 12px 0; color: var(--warning, #b8860b);"><strong>Note:</strong> We couldn’t update <code>seed_data.json</code> on this server (e.g. read-only filesystem). The competitor is in the database and all flows (Populate, dossier, runs) will use it. Run <code>python -m app.cli --export-seed</code> locally with this app’s <code>DATABASE_URL</code> to write the file, then commit it.</p>
+      <p class="meta" style="margin: 0 0 12px 0; color: var(--warning, #b8860b);"><strong>Note:</strong> We couldn’t update <code>seed_data.json</code> on this server (e.g. read-only filesystem). The competitor is in the database. Put Render’s <strong>External</strong> Database URL in <code>.env</code> as <code>DATABASE_URL</code> (see <code>.env.example</code>), then run <code>.venv/bin/python scripts/export_seed_with_env.py</code> from the project root and commit <code>seed_data.json</code>.</p>
       {% endif %}
       {% if export_seed == '1' %}
       <p class="meta" style="margin: 0 0 12px 0; color: var(--accent);"><strong>Seed file updated.</strong> <code>seed_data.json</code> now includes this competitor. Commit the file in your repo so future deploys and other environments have it.</p>
       {% elif export_seed == 'failed' %}
-      <p class="meta" style="margin: 0 0 12px 0; color: var(--warning, #b8860b);"><strong>Export failed.</strong> We couldn’t write <code>seed_data.json</code> (e.g. read-only filesystem). The competitor is in the database. Run <code>python -m app.cli --export-seed</code> locally with this app’s <code>DATABASE_URL</code>, then commit the file.</p>
+      <p class="meta" style="margin: 0 0 12px 0; color: var(--warning, #b8860b);"><strong>Export failed.</strong> We couldn’t write <code>seed_data.json</code> (e.g. read-only filesystem). Put Render’s <strong>External</strong> Database URL in <code>.env</code> as <code>DATABASE_URL</code>, then run <code>.venv/bin/python scripts/export_seed_with_env.py</code> from the project root and commit the file.</p>
       {% endif %}
       <h3 style="margin: 0 0 8px 0;">Add this competitor to the seed file</h3>
       <p class="meta" style="margin: 0 0 8px 0;"><strong>Where you’re adding:</strong> The competitor is already saved in the <strong>database</strong>. Clicking below writes the <strong>whole DB</strong> (including <strong>{{ competitor.name }}</strong>) to the <strong>seed file</strong> (<code>seed_data.json</code>) in this app’s project. That way the new competitor is in the repo and will be there on future deploys and when anyone runs seed.</p>
@@ -97,8 +97,8 @@
         </form>
         <span class="meta">or run locally:</span>
       </div>
-      <pre style="margin: 0; padding: 12px; background: var(--bg-muted); border-radius: 6px; overflow-x: auto; font-size: 0.9rem;"><code>python -m app.cli --export-seed</code></pre>
-      <p class="meta" style="margin: 8px 0 0 0;">Then commit the updated <code>seed_data.json</code> in your repo. If you added the competitor on a deployed server (e.g. Render), run the command locally with that server’s <code>DATABASE_URL</code> so the file in your repo is updated.</p>
+      <pre style="margin: 0; padding: 12px; background: var(--bg-muted); border-radius: 6px; overflow-x: auto; font-size: 0.9rem;"><code>.venv/bin/python scripts/export_seed_with_env.py</code></pre>
+      <p class="meta" style="margin: 8px 0 0 0;">Put Render’s <strong>External</strong> Database URL in <code>.env</code> as <code>DATABASE_URL</code> (see <code>.env.example</code>). Then run the command above from the project root and commit <code>seed_data.json</code>.</p>
     </div>
     <div style="display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px;">
       <a href="/dossier/{{ competitor.id }}"><button>View dossier</button></a>
