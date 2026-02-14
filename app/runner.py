@@ -63,7 +63,7 @@ RUNNER_CHANNELS = ("talent", "asset", "press", "homepage", "public_records", "re
 
 # Competitors that skip LLM for asset enrichment and use only URL/HTML + rule-based state (e.g. Vacasa).
 # All other competitors use enrich_properties_with_llm. Add names here normalized to lowercase.
-ASSET_ENRICH_URL_AND_RULES_ONLY = frozenset({"vacasa"})
+ASSET_ENRICH_URL_AND_RULES_ONLY = frozenset({"vacasa", "rove"})
 
 # Common paths to probe for digital footprint when product_paths is not set per endpoint.
 # Crawled for every competitor (homepage or primary_domain) to detect changes / coming-soon signals.

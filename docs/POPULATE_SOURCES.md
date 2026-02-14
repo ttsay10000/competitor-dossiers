@@ -121,7 +121,7 @@ The asset collector supports a **generic flow** so each source can try several s
 | **Lark**      | larkhospitality.com/portfolio/ | `strategy: "js_exhaust"` | Single strategy: Playwright + Load more + Lark blocks (~69 properties). No chain fallback. |
 | **Any new competitor** | (your URL)              | Default chain: `["sitemap_first", "js_exhaust", "html"]`, min 5 | No config needed: we try sitemap → js_exhaust → html and accept the first result with ≥ 5 properties. |
 
-**Canonical map:** For the exact asset URLs in `seed_data.json`, `app/collectors/asset.py` defines a **canonical URL → single strategy** map (e.g. AKA homepage → sitemap_first, Kasa /locations → kasa_locations, Rove /search → js_exhaust). When a source URL matches that map, we run only that strategy (no chain). This is kept in sync with the seed so competitor-specific logic is consistent.
+**Canonical map:** For the exact asset URLs in `seed_data.json`, `app/collectors/asset.py` defines a **canonical URL → single strategy** map (e.g. AKA homepage → sitemap_first, Kasa /locations → kasa_locations, Rove /search → sitemap_first). When a source URL matches that map, we run only that strategy (no chain). This is kept in sync with the seed so competitor-specific logic is consistent.
 
 **Why a single global order (e.g. html → js → sitemap) is not used:** For AvantStay, HTML of the search page can return a handful of links; we’d wrongly “succeed” and never try sitemap. So the **order is per source** when you set a chain; for **unknown** sources the default chain tries sitemap first, then JS, then HTML.
 

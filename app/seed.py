@@ -382,6 +382,7 @@ SEED_COMPETITORS = [
                 "channel": "asset",
                 "url": "https://rovetravel.com/search",
                 "confidence": "high",
+                "use_sitemap_first": True,
                 "extra_options": {
                     "strategy_chain": [
                         "sitemap_first",
@@ -398,7 +399,7 @@ SEED_COMPETITORS = [
                     "google_news_search_phrases": [
                         "furnished rentals"
                     ],
-                    "press_search_name": "Rove"
+                    "press_search_name": "Rove Travel"
                 }
             },
             {

@@ -1703,9 +1703,9 @@ def _canonical_asset_strategy(source_url: str) -> Optional[str]:
     host = (parsed.netloc or "").lower().strip()
     if host.startswith("www."):
         host = host[4:]
-    path = (parsed.path or "/").rstrip("/") or "/"
+    path = ((parsed.path or "/").rstrip("/") or "/").lower()
     for h, p, strategy in _ASSET_CANONICAL_STRATEGY:
-        if h in host and path == p:
+        if h in host and path == p.lower():
             return strategy
     return None
 

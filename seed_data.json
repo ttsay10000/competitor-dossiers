@@ -310,6 +310,7 @@
           "channel": "asset",
           "url": "https://rovetravel.com/search",
           "confidence": "high",
+          "use_sitemap_first": true,
           "extra_options": {
             "strategy_chain": [
               "sitemap_first",
@@ -326,7 +327,7 @@
             "google_news_search_phrases": [
               "furnished rentals"
             ],
-            "press_search_name": "Rove"
+            "press_search_name": "Rove Travel"
           }
         },
         {
