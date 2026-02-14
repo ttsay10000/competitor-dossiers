@@ -820,6 +820,10 @@ def _headline_looks_like_wrong_entity(competitor_name: str, title: str, outlet: 
         )
     ):
         return True
+    # Rove: Karl Rove (GOP strategist), Rove Miles (loyalty/rewards program) — not Rove Travel
+    if (competitor_name or "").strip().lower() == "rove":
+        if "karl rove" in combined or "rove miles" in combined:
+            return True
     return False
 
 
@@ -995,6 +999,14 @@ def _classify_press_headlines_with_llm(
             "any article whose body is about a different subject.\n"
             "RELEVANT: Lark Hotels openings, Lark Hospitality, Lark partners with Mews/olive, Lark appoints EVP/CFO, take over property, press releases about Lark hotels."
         )
+    elif (competitor_name or "").strip().lower() == "rove":
+        company_note = (
+            "Target company: Rove (Rove Travel / rovetravel.com) — furnished rental/hospitality company only.\n"
+            "IRRELEVANT (set topic=irrelevant): Karl Rove (GOP/Republican strategist, political commentator); "
+            "Rove Miles (loyalty/rewards program, airline miles, hotel points); political news, elections, midterms; "
+            "any article about a person or program that is not Rove Travel.\n"
+            "RELEVANT: Rove Travel properties, rovetravel.com, furnished rentals, hospitality, openings, partnerships."
+        )
     user = (
         f"{company_note}\n\n"
         "Items (index: title | outlet | url; when present, 'body:' is the article main text only—use it to assign topic and relevance).\n\n"
@@ -1033,6 +1045,12 @@ def _classify_press_headlines_with_llm(
             elif (competitor_name or "").strip().lower() in ("lark", "lark hotels") and "rusty bush lark" in ((out.get("title") or "") + " " + (out.get("outlet") or "") + " " + (out.get("source") or "")).lower():
                 out["is_about_company"] = False
                 out["topic"] = "irrelevant"
+            # Override: Karl Rove, Rove Miles — Rove-specific (not Rove Travel)
+            elif (competitor_name or "").strip().lower() == "rove":
+                _rove_text = ((out.get("title") or "") + " " + (out.get("snippet") or "") + " " + (out.get("outlet") or "") + " " + (out.get("source") or "")).lower()
+                if "karl rove" in _rove_text or "rove miles" in _rove_text:
+                    out["is_about_company"] = False
+                    out["topic"] = "irrelevant"
             # Override: common-word/other entity (bird, "a lark", Little Lark restaurant, Meadow Lark, etc.) → irrelevant
             elif _headline_looks_like_common_word_or_other_entity(competitor_name, out.get("title") or "", out.get("outlet") or out.get("source") or ""):
                 out["is_about_company"] = False
@@ -1098,14 +1116,24 @@ def _classify_press_headlines_fallback(competitor_name: str, items: List[dict]) 
         "symphony.org", "symphony debut", "landmark bancorp", "nasdaq:lark", "asx:lrk",
         "lark distilling", "lark ranch",
     )
+    # Rove-specific: Karl Rove (GOP strategist), Rove Miles (loyalty/rewards) — not Rove Travel
+    wrong_entity_rove = ("karl rove", "rove miles", "gop strategist", "republican strategist")
     use_lark_phrases = "lark" in name_lower
-    wrong_entity_phrases = wrong_entity_lark + wrong_entity_generic if use_lark_phrases else wrong_entity_generic
+    use_rove_phrases = (competitor_name or "").strip().lower() == "rove"
+    wrong_entity_phrases = (
+        wrong_entity_lark + wrong_entity_generic
+        if use_lark_phrases
+        else wrong_entity_rove + wrong_entity_generic
+        if use_rove_phrases
+        else wrong_entity_generic
+    )
     result: List[dict] = []
     for it in items:
         out = dict(it)
         title = (it.get("title") or "").lower()
         url = (it.get("url") or it.get("link") or "").lower()
-        text = f"{title} {url}"
+        snippet = (it.get("snippet") or it.get("feed_snippet") or "").lower()
+        text = f"{title} {snippet} {url}"
 
         is_about = name_lower in title or name_lower in url
         if is_about and any(n in url for n in url_noise):

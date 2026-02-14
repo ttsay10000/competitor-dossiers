@@ -399,7 +399,7 @@ SEED_COMPETITORS = [
                     "google_news_search_phrases": [
                         "furnished rentals"
                     ],
-                    "press_search_name": "Rove Travel"
+                    "press_search_name": "Rove"
                 }
             },
             {
