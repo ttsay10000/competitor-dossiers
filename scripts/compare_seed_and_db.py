@@ -20,6 +20,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# Load .env so DATABASE_URL (and optionally EXTERNAL) are set
+_env_file = ROOT / ".env"
+if _env_file.exists():
+    with open(_env_file) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip().strip("'\"").replace("\\n", "\n")
+            if key:
+                os.environ.setdefault(key, value)
+# Use external URL for DB when comparing from local (internal host unreachable)
+_export_url = os.environ.get("DATABASE_URL_EXTERNAL") or os.environ.get("DATABASE_URL")
+if _export_url:
+    os.environ["DATABASE_URL_INTERNAL"] = _export_url
+    os.environ["DATABASE_URL"] = _export_url
+
 
 def _normalize_source(s: dict) -> dict:
     """Normalize a source dict for comparison (order-independent, consistent types)."""
@@ -117,27 +135,26 @@ def main() -> int:
                 .order_by(Competitor.name.asc())
                 .all()
             )
+            db_by_name = {}
+            for c in db_competitors:
+                name = (c.name or "").strip()
+                if not name:
+                    continue
+                endpoints = sorted(c.source_endpoints or [], key=lambda e: (e.channel, e.id or 0, e.url or ""))
+                sources = []
+                for e in endpoints:
+                    s = {"channel": e.channel, "url": (e.url or "").strip(), "confidence": (e.confidence or "high").strip()}
+                    if e.js_required:
+                        s["js_required"] = True
+                    if e.use_sitemap_first:
+                        s["use_sitemap_first"] = True
+                    if e.extra_options is not None:
+                        s["extra_options"] = dict(sorted(e.extra_options.items()))
+                    sources.append(s)
+                db_by_name[name] = {"primary_domain": c.primary_domain, "sources": sources}
     except Exception as e:
         print(f"ERROR: DB query failed: {e}", file=sys.stderr)
         return 1
-
-    db_by_name = {}
-    for c in db_competitors:
-        name = (c.name or "").strip()
-        if not name:
-            continue
-        endpoints = sorted(c.source_endpoints or [], key=lambda e: (e.channel, e.extra_options or {}, e.url))
-        sources = []
-        for e in endpoints:
-            s = {"channel": e.channel, "url": (e.url or "").strip(), "confidence": (e.confidence or "high").strip()}
-            if e.js_required:
-                s["js_required"] = True
-            if e.use_sitemap_first:
-                s["use_sitemap_first"] = True
-            if e.extra_options is not None:
-                s["extra_options"] = dict(sorted(e.extra_options.items()))
-            sources.append(s)
-        db_by_name[name] = {"primary_domain": c.primary_domain, "sources": sources}
 
     # Report
     file_names = set(file_by_name)

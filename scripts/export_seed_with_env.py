@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Run export-seed (DB → seed_data.json) using DATABASE_URL from .env.
+Run export-seed (DB → seed_data.json) using DB URL from .env.
 
 Use when Export seed fails in the UI (e.g. on Render's read-only filesystem).
-Put Render's External Database URL in .env as DATABASE_URL, then run:
+Uses DATABASE_URL_EXTERNAL if set (Render External URL), else DATABASE_URL. Put the
+URL you want to export from in .env, then run:
 
   .venv/bin/python scripts/export_seed_with_env.py
 
-from the project root. Commit the updated seed_data.json.
+from the project root. Commit the updated seed_data.json and app/seed.py.
 """
 import os
 import sys
@@ -16,9 +17,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-# Load .env from project root so DATABASE_URL (e.g. Render external URL) is set
-env_file = ROOT / ".env"
-if env_file.exists():
+def _load_dotenv():
+    env_file = ROOT / ".env"
+    if not env_file.exists():
+        return
     with open(env_file) as f:
         for line in f:
             line = line.strip()
@@ -30,10 +32,15 @@ if env_file.exists():
                 value = value.strip().strip("'\"").replace("\\n", "\n")
                 if key:
                     os.environ.setdefault(key, value)
-else:
-    print("No .env found. Set DATABASE_URL in .env (see .env.example) or in the environment.", file=sys.stderr)
-    if not os.environ.get("DATABASE_URL"):
-        sys.exit(1)
+
+_load_dotenv()
+
+# Export to seed: prefer external URL (for pulling from Render when local)
+export_url = os.environ.get("DATABASE_URL_EXTERNAL") or os.environ.get("DATABASE_URL")
+if not export_url:
+    print("No .env found or DATABASE_URL/DATABASE_URL_EXTERNAL set. Set DATABASE_URL_EXTERNAL (Render External) or DATABASE_URL in .env (see .env.example).", file=sys.stderr)
+    sys.exit(1)
+os.environ["DATABASE_URL"] = export_url
 
 from app.seed import export_seed_to_file
 

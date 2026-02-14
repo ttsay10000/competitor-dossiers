@@ -8,7 +8,7 @@
 | **Export seed** | DB → File | You added or edited competitors in the UI and want to save that to the repo. Writes current DB to `seed_data.json`. |
 
 - **Run seed** (file → DB): upserts from file. Does not remove DB-only competitors or sources.
-- **Export seed** (DB → file): overwrites the file with the full DB. So the file becomes a snapshot of the DB.
+- **Export seed** (DB → file): overwrites `seed_data.json` with the full DB, and syncs `SEED_COMPETITORS` in `app/seed.py` so the fallback matches. Commit both files.
 
 ## Which is “latest”?
 
@@ -21,11 +21,11 @@
 
 - **UI**: Competitors page → “Export seed” button. Also after add/edit/delete competitor, the app calls `_sync_seed_file()` (same as Export) so the file is updated automatically — **unless** the server has a read-only filesystem (e.g. Render). On Render, that auto-sync can fail; the change is still in the DB but not written to the file.
 - **CLI**: `python -m app.cli --export-seed` (requires DB connection, no `--local`). Uses `DATABASE_URL` from the environment.
-- **Script (for Render external DB)**: From project root, put Render’s **External** Database URL in `.env` as `DATABASE_URL` (see `.env.example`), then run:
+- **Script (for Render external DB)**: From project root, put Render’s **External** Database URL in `.env` as `DATABASE_URL_EXTERNAL` (or `DATABASE_URL`; see `.env.example`), then run:
   ```bash
   .venv/bin/python scripts/export_seed_with_env.py
   ```
-  This loads `.env` and runs export-seed so you can write `seed_data.json` locally while connected to Render’s DB. Commit the updated file.
+  The script uses `DATABASE_URL_EXTERNAL` when set so you can keep `DATABASE_URL` for run-seed (e.g. local or internal). Commit the updated `seed_data.json` and `app/seed.py` (Export syncs the SEED_COMPETITORS fallback).
 
 ## How to check that Export is working and file/DB are in sync
 

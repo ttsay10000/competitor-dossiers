@@ -1,14 +1,58 @@
 from pathlib import Path
 import json
+import re
 from typing import Any, Optional
 
-from .db import get_session
+from .db import get_export_session, get_session
 from .models import Competitor, CompetitorReviewProperty, SourceEndpoint
+
+
+def _seed_py_path() -> Path:
+    """Path to seed.py (this module)."""
+    return Path(__file__).resolve()
 
 
 def _seed_data_path() -> Path:
     """Path to seed_data.json in project root (committed; survives redeploys)."""
     return Path(__file__).resolve().parent.parent / "seed_data.json"
+
+
+def _sync_seed_fallback_to_py(competitors: list[dict[str, Any]]) -> bool:
+    """
+    Update SEED_COMPETITORS in seed.py to match the given competitors list.
+    Keeps fallback in sync when Export runs (so deploy without seed_data.json still gets UI-added competitors).
+    Returns True if seed.py was updated, False on error or no change.
+    """
+    try:
+        seed_path = _seed_py_path()
+        content = seed_path.read_text()
+        raw = json.dumps(competitors, indent=4)
+        py_literal = re.sub(r"\btrue\b", "True", raw)
+        py_literal = re.sub(r"\bfalse\b", "False", py_literal)
+        py_literal = re.sub(r"\bnull\b", "None", py_literal)
+        new_block = "SEED_COMPETITORS = " + py_literal
+        # Match only at line start (avoid matching inside comments in this function)
+        match = re.search(r"^SEED_COMPETITORS\s*=\s*\[", content, re.MULTILINE)
+        if not match:
+            return False
+        start = match.start()
+        brace_start = match.end() - 1
+        depth = 1
+        i = brace_start + 1
+        while i < len(content) and depth > 0:
+            if content[i] == "[":
+                depth += 1
+            elif content[i] == "]":
+                depth -= 1
+            i += 1
+        end = i
+        new_content = content[:start] + new_block + content[end:]
+        if new_content == content:
+            return False
+        seed_path.write_text(new_content)
+        return True
+    except Exception:
+        return False
 
 
 def load_seed_competitors() -> list[dict[str, Any]]:
@@ -29,24 +73,36 @@ def load_seed_competitors() -> list[dict[str, Any]]:
 
 SEED_COMPETITORS = [
     {
-        "name": "Placemakr",
-        "primary_domain": "placemakr.com",
+        "name": "AKA",
+        "primary_domain": "stayaka.com",
         "sources": [
-            # Use Lever jobs URL so we get full list via API; placemakr.com/corporate/join-our-team only gave 3 (generic scrape).
-            {"channel": "talent", "url": "https://jobs.lever.co/placemakr", "confidence": "high"},
             {
                 "channel": "asset",
-                "url": "https://www.placemakr.com/locations",
-                "confidence": "high",
-                "extra_options": {"strategy_chain": ["html"], "min_properties_accept": 1},
+                "url": "https://www.stayaka.com/",
+                "confidence": "high"
             },
-        ],
+            {
+                "channel": "press",
+                "url": "https://stayaka.com",
+                "confidence": "high",
+                "extra_options": {
+                    "google_news_search_phrases": [
+                        "AKA furnished rentals"
+                    ],
+                    "press_search_name": "AKA furnished rentals"
+                }
+            },
+            {
+                "channel": "talent",
+                "url": "https://www.indeed.com/cmp/Aka-Hotels-Hotel-Residences/jobs#cmp-skip-header-desktop",
+                "confidence": "high"
+            }
+        ]
     },
     {
         "name": "AvantStay",
         "primary_domain": "avantstay.com",
         "sources": [
-            {"channel": "talent", "url": "https://careers.kula.ai/avantstay", "confidence": "high"},
             {
                 "channel": "asset",
                 "url": "https://avantstay.com/search",
@@ -55,20 +111,167 @@ SEED_COMPETITORS = [
                 "use_sitemap_first": True,
                 "extra_options": {
                     "llm_extract": True,
-                    "strategy_chain": ["sitemap_first", "html"],
-                    "min_properties_accept": 5,
-                },
+                    "strategy_chain": [
+                        "sitemap_first",
+                        "html"
+                    ],
+                    "min_properties_accept": 5
+                }
             },
-        ],
+            {
+                "channel": "press",
+                "url": "https://avantstay.com/blog/",
+                "confidence": "high"
+            },
+            {
+                "channel": "social",
+                "url": "https://www.linkedin.com/company/avantstay/posts/?feedView=all",
+                "confidence": "high",
+                "extra_options": {
+                    "platform": "linkedin"
+                }
+            },
+            {
+                "channel": "talent",
+                "url": "https://careers.kula.ai/avantstay",
+                "confidence": "high"
+            }
+        ]
     },
-    # Lark: single strategy "js_exhaust" only (no strategy_chain). Running Lark in the same
-    # process as Avantstay can cause flakiness (e.g. Playwright/memory); run asset separately
-    # per competitor when needed (e.g. --competitor Lark).
+    {
+        "name": "Blueground",
+        "primary_domain": "theblueground.com",
+        "sources": [
+            {
+                "channel": "asset",
+                "url": "https://www.theblueground.com/destinations",
+                "confidence": "medium",
+                "extra_options": {
+                    "strategy": "blueground_destinations",
+                    "max_destinations": None
+                }
+            },
+            {
+                "channel": "press",
+                "url": "https://www.theblueground.com/blog",
+                "confidence": "medium"
+            },
+            {
+                "channel": "social",
+                "url": "https://www.linkedin.com/company/blueground-co/posts/?feedView=all",
+                "confidence": "high",
+                "extra_options": {
+                    "platform": "linkedin"
+                }
+            },
+            {
+                "channel": "talent",
+                "url": "https://www.theblueground.com/careers",
+                "confidence": "medium",
+                "js_required": True
+            }
+        ]
+    },
+    {
+        "name": "Kasa Living",
+        "primary_domain": "kasa.com",
+        "sources": [
+            {
+                "channel": "asset",
+                "url": "https://kasa.com/locations",
+                "confidence": "high",
+                "js_required": True,
+                "extra_options": {
+                    "strategy": "js_exhaust",
+                    "load_more": {
+                        "button_text": "Load more",
+                        "post_load_wait_ms": 3000,
+                        "click_selector": [
+                            "a:has-text('Load more')",
+                            "button:has-text('Load more')",
+                            ":text('Load more')",
+                            "button:has-text('Load more')",
+                            "button:has-text('Load More')",
+                            "a:has-text('Load more')",
+                            "a:has-text('Load More')",
+                            "button:has-text('View more')",
+                            "a:has-text('View more')",
+                            "[data-testid='load-more']",
+                            "button:has-text('Show more')",
+                            "a:has-text('Show more')"
+                        ],
+                        "stop_when_selector_gone": True,
+                        "wait_after_click_ms": 2000,
+                        "wait_for_selector_timeout_ms": 10000,
+                        "wait_after_gone_ms": 3000,
+                        "wait_reappear_attempts": 5,
+                        "max_clicks": 200
+                    },
+                    "llm_extract": True
+                }
+            },
+            {
+                "channel": "social",
+                "url": "https://www.linkedin.com/company/kasa-living/posts/?feedView=all",
+                "confidence": "high",
+                "extra_options": {
+                    "platform": "linkedin"
+                }
+            },
+            {
+                "channel": "talent",
+                "url": "https://kasa.com/careers",
+                "confidence": "high"
+            }
+        ]
+    },
+    {
+        "name": "Landing",
+        "primary_domain": "hellolanding.com",
+        "sources": [
+            {
+                "channel": "asset",
+                "url": "https://www.hellolanding.com/locations",
+                "confidence": "high",
+                "extra_options": {
+                    "strategy": "landing_locations"
+                }
+            },
+            {
+                "channel": "press",
+                "url": "https://www.hellolanding.com/blog",
+                "confidence": "medium"
+            },
+            {
+                "channel": "press",
+                "url": "https://hellolanding.com",
+                "confidence": "high",
+                "extra_options": {
+                    "google_news_search_phrases": [
+                        "Landing furnished rentals"
+                    ],
+                    "press_search_name": "Landing furnished rentals"
+                }
+            },
+            {
+                "channel": "social",
+                "url": "https://www.linkedin.com/company/hellolanding/posts/?feedView=all",
+                "confidence": "high",
+                "extra_options": {
+                    "platform": "linkedin"
+                }
+            },
+            {
+                "channel": "talent",
+                "url": "https://www.hellolanding.com/p/careers/",
+                "confidence": "medium"
+            }
+        ]
+    },
     {
         "name": "Lark",
         "primary_domain": "larkhospitality.com",
         "sources": [
-            {"channel": "talent", "url": "https://ats.wizehire.com/career-site/lark-hospitality", "confidence": "high"},
             {
                 "channel": "asset",
                 "url": "https://www.larkhospitality.com/portfolio/",
@@ -91,51 +294,86 @@ SEED_COMPETITORS = [
                             "a:has-text('View more')",
                             "[data-testid='load-more']",
                             "button:has-text('Show more')",
-                            "a:has-text('Show more')",
+                            "a:has-text('Show more')"
                         ],
                         "stop_when_selector_gone": True,
                         "wait_after_click_ms": 2000,
                         "wait_for_selector_timeout_ms": 10000,
                         "wait_after_gone_ms": 3000,
                         "wait_reappear_attempts": 5,
-                        "max_clicks": 200,
+                        "max_clicks": 200
                     },
-                    "llm_extract": True,
-                },
+                    "llm_extract": True
+                }
             },
-        ],
-    },
-    # Blueground: same Playwright as Lark/AvantStay (talent=JS careers, asset=blueground_destinations).
-    {
-        "name": "Blueground",
-        "primary_domain": "theblueground.com",
-        "sources": [
-            {"channel": "talent", "url": "https://www.theblueground.com/careers", "confidence": "medium", "js_required": True},
             {
-                "channel": "asset",
-                "url": "https://www.theblueground.com/destinations",
-                "confidence": "medium",
-                "extra_options": {"strategy": "blueground_destinations", "max_destinations": None},
-            },
-        ],
-    },
-    # Fallback list must include all competitors that are in seed_data.json so that if the file
-    # is missing or unreadable on deploy (e.g. Render), the DB still gets them and cron runs include them.
-    {
-        "name": "Landing",
-        "primary_domain": "hellolanding.com",
-        "sources": [
-            {
-                "channel": "asset",
-                "url": "https://www.hellolanding.com/locations",
+                "channel": "press",
+                "url": "https://www.larkhospitality.com/press/",
                 "confidence": "high",
-                "extra_options": {"strategy": "landing_locations"},
+                "extra_options": {
+                    "press_search_name": "Lark Hotels"
+                }
             },
-            {"channel": "talent", "url": "https://www.hellolanding.com/p/careers/", "confidence": "medium"},
-        ],
+            {
+                "channel": "social",
+                "url": "https://www.linkedin.com/company/lark-hotels/posts/?feedView=all",
+                "confidence": "high",
+                "extra_options": {
+                    "platform": "linkedin"
+                }
+            },
+            {
+                "channel": "talent",
+                "url": "https://ats.wizehire.com/career-site/lark-hospitality",
+                "confidence": "high"
+            }
+        ]
     },
-    # Rove: /search is SPA with infinite scroll; need Playwright + scroll to get full list (not just ~10 above fold).
-    # Try js_exhaust first so we scroll and get all listings; sitemap often has only ~10 /listing/ URLs.
+    {
+        "name": "Placemakr",
+        "primary_domain": "placemakr.com",
+        "sources": [
+            {
+                "channel": "asset",
+                "url": "https://www.placemakr.com/locations",
+                "confidence": "high",
+                "extra_options": {
+                    "strategy_chain": [
+                        "html"
+                    ],
+                    "min_properties_accept": 1
+                }
+            },
+            {
+                "channel": "homepage",
+                "url": "https://www.placemakr.com",
+                "confidence": "high",
+                "extra_options": {
+                    "product_paths": [
+                        "/locations"
+                    ]
+                }
+            },
+            {
+                "channel": "press",
+                "url": "https://www.placemakr.com/blog",
+                "confidence": "high"
+            },
+            {
+                "channel": "social",
+                "url": "https://www.linkedin.com/company/placemakr/posts/?feedView=all",
+                "confidence": "high",
+                "extra_options": {
+                    "platform": "linkedin"
+                }
+            },
+            {
+                "channel": "talent",
+                "url": "https://jobs.lever.co/placemakr",
+                "confidence": "high"
+            }
+        ]
+    },
     {
         "name": "Rove",
         "primary_domain": "rovetravel.com",
@@ -146,15 +384,44 @@ SEED_COMPETITORS = [
                 "confidence": "high",
                 "js_required": True,
                 "extra_options": {
-                    "strategy_chain": ["js_exhaust", "sitemap_first", "html"],
-                    "load_more": {"scroll_window": True, "scroll_wait_sec": 1.5, "max_scrolls": 150},
-                },
+                    "strategy_chain": [
+                        "js_exhaust",
+                        "sitemap_first",
+                        "html"
+                    ],
+                    "load_more": {
+                        "scroll_window": True,
+                        "scroll_wait_sec": 1.5,
+                        "max_scrolls": 150
+                    }
+                }
             },
-            {"channel": "talent", "url": "https://jobs.gem.com/rove", "confidence": "high"},
-        ],
+            {
+                "channel": "press",
+                "url": "https://rovetravel.com",
+                "confidence": "high",
+                "extra_options": {
+                    "google_news_search_phrases": [
+                        "Rove furnished rentals"
+                    ],
+                    "press_search_name": "Rove furnished rentals"
+                }
+            },
+            {
+                "channel": "social",
+                "url": "https://www.linkedin.com/company/rovetravel/posts/?feedView=all",
+                "confidence": "high",
+                "extra_options": {
+                    "platform": "linkedin"
+                }
+            },
+            {
+                "channel": "talent",
+                "url": "https://jobs.gem.com/rove",
+                "confidence": "high"
+            }
+        ]
     },
-    # Vacasa: sitemap first, then HTML fallback. (HTML-only was used when search had ~26k in static HTML;
-    # if the site now uses JS for listings, HTML returns ~1; sitemap still lists all /unit/12345 URLs.)
     {
         "name": "Vacasa",
         "primary_domain": "vacasa.com",
@@ -164,31 +431,34 @@ SEED_COMPETITORS = [
                 "url": "https://www.vacasa.com/search?place=/usa/",
                 "confidence": "high",
                 "use_sitemap_first": True,
-                "extra_options": {"strategy_chain": ["sitemap_first", "html"], "min_properties_accept": 5},
+                "extra_options": {
+                    "strategy_chain": [
+                        "sitemap_first",
+                        "html"
+                    ],
+                    "min_properties_accept": 5
+                }
             },
-            {"channel": "talent", "url": "https://job-boards.greenhouse.io/vacasa", "confidence": "medium"},
-        ],
-    },
-    # Kasa Living: canonical path is kasa_locations (HTTP + parser only, 77 properties). No chain.
-    {
-        "name": "Kasa Living",
-        "primary_domain": "kasa.com",
-        "sources": [
             {
-                "channel": "asset",
-                "url": "https://kasa.com/locations",
-                "confidence": "high",
-                "extra_options": {"strategy": "kasa_locations"},
+                "channel": "press",
+                "url": "https://www.vacasa.com/blog",
+                "confidence": "medium"
             },
-            {"channel": "talent", "url": "https://kasa.com/careers", "confidence": "high"},
             {
                 "channel": "social",
-                "url": "https://www.linkedin.com/company/kasa-living/posts/?feedView=all",
+                "url": "https://www.linkedin.com/company/vacasa/posts/?feedView=all",
                 "confidence": "high",
-                "extra_options": {"platform": "linkedin"},
+                "extra_options": {
+                    "platform": "linkedin"
+                }
             },
-        ],
-    },
+            {
+                "channel": "talent",
+                "url": "https://job-boards.greenhouse.io/vacasa",
+                "confidence": "medium"
+            }
+        ]
+    }
 ]
 
 
@@ -311,8 +581,8 @@ def run_seed() -> None:
 
 
 def export_seed_to_file() -> None:
-    """Write current DB competitors and sources to seed_data.json. Run after adding competitors in the UI."""
-    with get_session() as session:
+    """Write current DB competitors and sources to seed_data.json. Uses external DB URL when DATABASE_URL_EXTERNAL is set."""
+    with get_export_session() as session:
         competitors = session.query(Competitor).order_by(Competitor.name.asc()).all()
         out = []
         for c in competitors:
@@ -350,6 +620,8 @@ def export_seed_to_file() -> None:
     path = _seed_data_path()
     path.write_text(json.dumps({"competitors": out}, indent=2) + "\n")
     print(f"Wrote {len(out)} competitor(s) to {path}", flush=True)
+    if _sync_seed_fallback_to_py(out):
+        print("Synced SEED_COMPETITORS fallback in seed.py", flush=True)
 
 
 if __name__ == "__main__":

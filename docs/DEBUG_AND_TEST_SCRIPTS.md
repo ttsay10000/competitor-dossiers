@@ -43,12 +43,14 @@ Index of all scripts in `scripts/` and `tests/`. These are for local development
 
 | Script | Purpose | Requires |
 |--------|---------|----------|
-| `export_seed_with_env.py` | Export DB → `seed_data.json` using `DATABASE_URL` from `.env`. Use when Export seed fails in UI (e.g. Render read-only). | `DATABASE_URL` |
+| `run_seed_with_env.py` | Run seed (file → DB) using `DATABASE_URL` from `.env`. Use internal URL on Render; locally use localhost or Render External. | `DATABASE_URL` |
+| `export_seed_with_env.py` | Export DB → `seed_data.json`. Uses `DATABASE_URL_EXTERNAL` if set (e.g. Render External), else `DATABASE_URL`. Use when Export seed fails in UI (e.g. Render read-only). | `DATABASE_URL_EXTERNAL` or `DATABASE_URL` |
 | `compare_seed_and_db.py` | Compare `seed_data.json` vs database (competitors + sources). Verify export/import parity. | `DATABASE_URL` |
 | `run_asset_counts.py` | Run asset collection per competitor from seed; write results to `asset_count_results.json`. Vacasa and Blueground run last. | Network; `PLAYWRIGHT_ENABLED=true` for JS sources |
 
 **Usage examples:**
 ```bash
+.venv/bin/python scripts/run_seed_with_env.py      # seed locally using .env DATABASE_URL
 .venv/bin/python scripts/export_seed_with_env.py
 .venv/bin/python scripts/compare_seed_and_db.py
 python scripts/run_asset_counts.py --competitor "AKA"

@@ -16,6 +16,14 @@ engine = create_engine(
 )
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
+# Export seed (DB → file) uses external URL when DATABASE_URL_EXTERNAL is set
+export_engine = create_engine(
+    settings.database_url_export,
+    pool_pre_ping=True,
+    pool_recycle=300,
+)
+ExportSessionLocal = sessionmaker(bind=export_engine, autocommit=False, autoflush=False)
+
 
 class Base(DeclarativeBase):
     pass
@@ -24,6 +32,20 @@ class Base(DeclarativeBase):
 @contextmanager
 def get_session():
     session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+@contextmanager
+def get_export_session():
+    """Session for export seed (DB → file); uses DATABASE_URL_EXTERNAL when set."""
+    session = ExportSessionLocal()
     try:
         yield session
         session.commit()

@@ -6,18 +6,27 @@ press summarization, asset extraction, talent/press enrichment).
 import os
 
 
+def _normalize_db_url(url: str) -> str:
+    if not url:
+        return url
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if "dpg-" in url and "?" not in url:
+        url = url.rstrip("/") + "?sslmode=require"
+    if ("postgresql://" in url or "postgresql+psycopg://" in url) and not url.startswith("postgresql+psycopg://"):
+        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return url
+
+
 class Settings:
     def __init__(self) -> None:
-        url = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/competitor_signals")
-        # Normalize to postgresql:// then use psycopg driver (Python 3.13 compatible)
-        if url and url.startswith("postgres://"):
-            url = "postgresql://" + url[len("postgres://"):]
-        # Render Postgres (and many cloud DBs) require SSL; add sslmode if URL looks like Render and has no params
-        if url and "dpg-" in url and "?" not in url:
-            url = url.rstrip("/") + "?sslmode=require"
-        if url and ("postgresql://" in url or "postgresql+psycopg://" in url) and not url.startswith("postgresql+psycopg://"):
-            url = url.replace("postgresql://", "postgresql+psycopg://", 1)
-        self.database_url = url
+        # Run seed (file → DB) and general app: prefer internal, else DATABASE_URL
+        default_url = "postgresql://postgres:postgres@localhost:5432/competitor_signals"
+        url = os.getenv("DATABASE_URL_INTERNAL") or os.getenv("DATABASE_URL", default_url)
+        self.database_url = _normalize_db_url(url)
+        # Export seed (DB → file) only: prefer external, else same as database_url
+        export_url = os.getenv("DATABASE_URL_EXTERNAL") or os.getenv("DATABASE_URL", default_url)
+        self.database_url_export = _normalize_db_url(export_url)
         # Treat unset or empty as enabled (Dockerfile sets ENV PLAYWRIGHT_ENABLED=true). Only "0"/"false"/"no" disable.
         _pw = (os.getenv("PLAYWRIGHT_ENABLED") or "true").strip().lower()
         self.playwright_enabled = _pw not in ("0", "false", "no")

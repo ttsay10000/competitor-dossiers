@@ -8,6 +8,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from .diff.asset_diff import resolve_destination_slug_to_state, US_STATE_ABBREV
+from .rules.press_rules import PARTNER_KEYWORDS
 
 
 def _extract_first_json_object(text: str) -> Optional[Dict[str, Any]]:
@@ -163,6 +164,77 @@ def _location_label_to_state(loc: str) -> str:
         if part in _US_STATES:
             return part
     return "Other"
+
+
+_PARTNERSHIP_HINTS = (*PARTNER_KEYWORDS, "partners", "partnered", "partner with")
+
+def _is_partnership_signal(text: str, event_type: Optional[str] = None) -> bool:
+    """True if this text or event looks like a partnership signal (partners with X, alliance, etc.)."""
+    if event_type and event_type.startswith("partner."):
+        return True
+    lower = (text or "").lower()
+    return any(kw in lower for kw in _PARTNERSHIP_HINTS)
+
+
+def _research_partners_batch(texts: List[str], competitor_name: str) -> Dict[str, str]:
+    """
+    Use LLM to extract partner company names from partnership headlines and return
+    a very short (3-8 word) description of each partner, e.g. {"Vidle House": "travel healthcare housing provider"}.
+    Returns empty dict if no client or API fails.
+    """
+    from .config import get_openai_client
+    client = get_openai_client()
+    if not client or not texts:
+        return {}
+    # Dedupe and limit to avoid huge prompts
+    seen: set[str] = set()
+    unique_texts = []
+    for t in texts[:15]:
+        t = (t or "").strip()
+        if t and t not in seen:
+            seen.add(t)
+            unique_texts.append(t)
+    if not unique_texts:
+        return {}
+    system = """You extract partner company names from partnership-related headlines. The COMPETITOR is given; partners are OTHER companies (not the competitor).
+
+For each headline, identify any named partner companies. For each partner, provide a VERY SHORT description (3–8 words) of what that company does—e.g. "travel healthcare housing provider", "hotel tech platform", "extended-stay hotel brand". Use industry knowledge; if unknown, infer from context or skip.
+
+Return JSON only: {"Partner Name": "short description", ...}. Use exact partner names as they appear. Include only partners, not the competitor. If no clear partner in a headline, omit it."""
+    user = f"Competitor: {competitor_name}\n\nHeadlines (one per line):\n" + "\n".join(f"- {t}" for t in unique_texts)
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            max_tokens=512,
+            temperature=0.1,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        if not content:
+            return {}
+        if content.startswith("```"):
+            content = re.sub(r"^```\w*\n?", "", content).rstrip("`\n")
+        data = json.loads(content)
+        if not isinstance(data, dict):
+            return {}
+        return {k.strip(): (v or "").strip() for k, v in data.items() if k and v}
+    except Exception:
+        return {}
+
+
+def _enrich_line_with_partner_descriptions(line: str, partner_descriptions: Dict[str, str]) -> str:
+    """Insert (short description) after each partner name's first occurrence. E.g. 'partners with Vidle House' -> 'partners with Vidle House (travel healthcare housing provider)'."""
+    if not partner_descriptions:
+        return line
+    result = line
+    for partner, desc in partner_descriptions.items():
+        if not partner or not desc:
+            continue
+        # Insert after first occurrence of partner name (word-boundary aware)
+        pattern = re.escape(partner)
+        replacement = f"{partner} ({desc})"
+        result, n = re.subn(rf"\b{pattern}\b", replacement, result, count=1)
+    return result
 
 
 def _aggregate_properties_by_state(properties_by_location: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -334,17 +406,53 @@ def _build_context_text(context: Dict[str, Any]) -> str:
                 news_in_window.append(n)  # keep if unparseable
         else:
             news_in_window.append(n)  # no date: include
+    competitor_name = context.get("competitor", {}).get("name", "Competitor")
+    all_partnership_texts: List[str] = []
+    news_lines: List[str] = []
+
     news_pool = news_in_window if news_in_window else top_news[:MAX_NEWS_FOR_SUMMARY]
     if news_pool:
-        lines = []
         for n in news_pool[:MAX_NEWS_FOR_SUMMARY]:
             title = (n.get("bullet") or n.get("title") or n.get("display_title") or "Untitled")[:100]
             date_str = n.get("date")
             group = n.get("group_title")
-            lines.append(f"({date_str}) {title}" + (f" [{group}]" if group else ""))
+            raw_line = f"({date_str}) {title}" + (f" [{group}]" if group else "")
+            if _is_partnership_signal(title or "") or _is_partnership_signal(group or ""):
+                all_partnership_texts.append(title or group or raw_line)
+            news_lines.append(raw_line)
+
+    event_bits: List[str] = []
+    events_week = context.get("events_this_week") or []
+    if events_week:
+        def _event_date_key(e: dict) -> str:
+            return e.get("occurred_at_str") or e.get("detected_at_str") or "0000-00-00"
+        events_week = sorted(events_week, key=_event_date_key, reverse=True)
+        events_week = sorted(events_week, key=lambda e: _event_priority_rank((e.get("type") or "").strip()))
+        for e in events_week:
+            title = (e.get("title") or "").strip()
+            if not title:
+                continue
+            etype = (e.get("type") or "").strip()
+            if _is_partnership_signal(title, etype):
+                all_partnership_texts.append(title)
+            if etype == "narrative.social_signal":
+                event_bits.append(f"{title} [social]")
+            elif etype and etype.startswith("narrative."):
+                event_bits.append(f"{title} [website/digital footprint]")
+            elif etype:
+                event_bits.append(f"{title} [{etype}]")
+            else:
+                event_bits.append(title)
+
+    partner_descriptions = _research_partners_batch(all_partnership_texts, competitor_name)
+    if partner_descriptions:
+        news_lines = [_enrich_line_with_partner_descriptions(ln, partner_descriptions) for ln in news_lines]
+        event_bits = [_enrich_line_with_partner_descriptions(b, partner_descriptions) for b in event_bits]
+
+    if news_lines:
         parts.append(
             "Top news (ONLY use these—no other press; past 45 days; synthesize into 1–2 bullets max): "
-            + " | ".join(lines)
+            + " | ".join(news_lines)
         )
     else:
         parts.append("Top news: none.")
@@ -367,31 +475,8 @@ def _build_context_text(context: Dict[str, Any]) -> str:
             parts.append("Review sentiment (significant changes / current snapshot): " + " | ".join(lines))
 
     # 5. Events: website changes [digital footprint], social [social], and other signals since last refresh.
-    events_week = context.get("events_this_week") or []
-    if events_week:
-        def _event_date_key(e: dict) -> str:
-            return e.get("occurred_at_str") or e.get("detected_at_str") or "0000-00-00"
-        events_week = sorted(events_week, key=_event_date_key, reverse=True)
-        events_week = sorted(
-            events_week,
-            key=lambda e: _event_priority_rank((e.get("type") or "").strip()),
-        )
-        event_bits = []
-        for e in events_week:
-            title = (e.get("title") or "").strip()
-            if not title:
-                continue
-            etype = (e.get("type") or "").strip()
-            if etype == "narrative.social_signal":
-                event_bits.append(f"{title} [social]")
-            elif etype and etype.startswith("narrative."):
-                event_bits.append(f"{title} [website/digital footprint]")
-            elif etype:
-                event_bits.append(f"{title} [{etype}]")
-            else:
-                event_bits.append(title)
-        if event_bits:
-            parts.append("Signals since last refresh (website changes, social, talent/asset events): " + "; ".join(event_bits))
+    if event_bits:
+        parts.append("Signals since last refresh (website changes, social, talent/asset events): " + "; ".join(event_bits))
 
     return "\n\n".join(parts)
 
@@ -414,6 +499,8 @@ def generate_executive_summary(context: Dict[str, Any]) -> Optional[str]:
 The data you receive contains ONLY: (1) Top news from the past 45 days (at most 5 items—this is the ONLY news source; there is no other press list); (2) Asset/property changes vs baseline (or baseline footprint if no refresh); (3) Job count changes vs baseline (or baseline count if no refresh); (4) Website/digital footprint changes since last refresh; (5) Social media and review updates (new or significant). When the input says "only baseline" or "no refresh yet", summarize current state; when it says "changes since baseline", summarize only those changes. When the input says "No changes since last refresh", include a brief bullet noting this (e.g. "No changes to properties, jobs, or signals since last refresh")—this is common and worth stating explicitly.
 
 NEWS: Use ONLY the items listed in the "Top news" section of the Data block. Do not use prior knowledge, training data, or any other source for news. Do not mention any article, funding round, partnership, or event that is not explicitly listed in that section—even if you know of older or other stories about this company. If the Data says "Top news: none" or the list is empty, do not add any news bullet. Do NOT list or recite each news article; synthesize into at most 1–2 bullets total (the single most important development from the listed items only). If multiple listed items are the same story, one bullet only.
+
+PARTNERSHIPS: When a partnership is mentioned and the Data includes a parenthetical description of the partner (e.g. "Vidle House (travel healthcare housing provider)"), preserve that parenthetical in your bullet—it provides useful context for the exec team.
 
 PRIORITY: Order bullets by importance to competitive dynamics, not by section order. Put the single most important change first (e.g. major news, market entry/exit, key hire). Then the next most important. Include only changes that materially alter competitive dynamics (market entry/exit, meaningful inventory, pricing/fees, key hiring, major product/positioning, partnerships, regulatory). Drop cosmetic or one-off items. Include social/review sentiment only when it reflects major change.
 
