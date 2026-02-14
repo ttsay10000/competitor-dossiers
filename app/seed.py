@@ -87,9 +87,9 @@ SEED_COMPETITORS = [
                 "confidence": "high",
                 "extra_options": {
                     "google_news_search_phrases": [
-                        "AKA furnished rentals"
+                        "furnished rentals"
                     ],
-                    "press_search_name": "AKA furnished rentals"
+                    "press_search_name": "AKA"
                 }
             },
             {
@@ -220,7 +220,7 @@ SEED_COMPETITORS = [
             },
             {
                 "channel": "talent",
-                "url": "https://kasa.com/careers",
+                "url": "https://job-boards.greenhouse.io/kasaliving",
                 "confidence": "high"
             }
         ]
@@ -248,9 +248,9 @@ SEED_COMPETITORS = [
                 "confidence": "high",
                 "extra_options": {
                     "google_news_search_phrases": [
-                        "Landing furnished rentals"
+                        "furnished rentals"
                     ],
-                    "press_search_name": "Landing furnished rentals"
+                    "press_search_name": "Landing"
                 }
             },
             {
@@ -402,9 +402,9 @@ SEED_COMPETITORS = [
                 "confidence": "high",
                 "extra_options": {
                     "google_news_search_phrases": [
-                        "Rove furnished rentals"
+                        "furnished rentals"
                     ],
-                    "press_search_name": "Rove furnished rentals"
+                    "press_search_name": "Rove"
                 }
             },
             {

@@ -69,7 +69,11 @@
 
   <div class="edit-page">
   <h1>Edit Competitor</h1>
-
+  {% if seed_sync_failed %}
+  <div class="card" style="border-left: 4px solid var(--warning, #b8860b); margin-bottom: 16px;">
+    <p class="meta" style="margin: 0;"><strong>Seed file not updated.</strong> Your changes are saved in the database, but we couldn’t write <code>seed_data.json</code> on this server (e.g. read-only filesystem on Render). To persist sources and keywords to the repo, put Render’s <strong>External</strong> Database URL in <code>.env</code> as <code>DATABASE_URL_EXTERNAL</code> or <code>DATABASE_URL</code>, then run <code>.venv/bin/python scripts/export_seed_with_env.py</code> from the project root and commit <code>seed_data.json</code> and <code>app/seed.py</code>.</p>
+  </div>
+  {% endif %}
   <div class="card">
     <h3>Last Runs</h3>
     {% if last_runs %}
@@ -127,7 +131,7 @@
 
     <div class="add-source-section">
       <h4>Add new source</h4>
-      <p class="meta" style="margin: 0 0 12px 0;">For talent and asset, the first source (Primary) is used; if it fails, the system tries the next (Secondary). <strong>Press</strong>: no URL needed — we search Google News using the competitor name in quotes plus any optional keywords you add.</p>
+      <p class="meta" style="margin: 0 0 12px 0;">For talent and asset, the first source (Primary) is used; if it fails, the system tries the next (Secondary). <strong>Press</strong>: no URL needed — we search Google News with only the competitor name in quotes (strict); optional keywords are added <em>without</em> quotes so they match loosely (e.g. furnished rentals = articles containing those words anywhere).</p>
       {% if source_error == "url_required" %}
       <p class="meta" style="color: var(--accent); margin: 0 0 8px 0;">URL is required for this channel. For press, you can leave URL empty.</p>
       {% endif %}
@@ -170,8 +174,8 @@
           </div>
           <div>
             <label>Keywords <span class="meta">(press only)</span></label>
-            <input name="google_news_search_phrases" placeholder="e.g. furnished rentals" title="Competitor name is always searched in quotes; add optional broad keywords here, comma-separated." />
-            <p class="meta" style="margin: 2px 0 0 0;">Search is always <code>"{{ competitor.name }}"</code> (exact). Add optional broad keywords above to improve relevance (e.g. furnished rentals).</p>
+            <input name="google_news_search_phrases" placeholder="e.g. furnished rentals" title="Only the competitor name is in quotes; keywords here are unquoted (loose match), comma-separated." />
+            <p class="meta" style="margin: 2px 0 0 0;">Query: <code>"{{ competitor.name }}"</code> (exact) + your keywords <em>unquoted</em> (loose). E.g. furnished rentals = articles with those words anywhere, not as a strict phrase.</p>
           </div>
           <div>
             <button type="submit">Add Source</button>
@@ -262,7 +266,7 @@
                       <div>
                         {% set phrases = (endpoint.extra_options or {}).get('google_news_search_phrases') %}
                         <label>Keywords</label>
-                        <input name="google_news_search_phrases" placeholder="e.g. furnished rentals (optional)" value="{{ (phrases | join(', ')) if (phrases is iterable and phrases is not string) else (phrases if phrases is string else '') }}" title="Competitor name is always in quotes; these are optional broad keywords." />
+                        <input name="google_news_search_phrases" placeholder="e.g. furnished rentals (optional)" value="{{ (phrases | join(', ')) if (phrases is iterable and phrases is not string) else (phrases if phrases is string else '') }}" title="Only competitor name is quoted; these keywords are unquoted (loose match)." />
                       </div>
                       {% endif %}
                       <div style="align-self: flex-end;">

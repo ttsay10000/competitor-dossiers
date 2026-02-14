@@ -14,10 +14,10 @@
           "url": "https://stayaka.com",
           "confidence": "high",
           "extra_options": {
-            "google_news_search_phrases": [
-              "AKA furnished rentals"
-            ],
-            "press_search_name": "AKA furnished rentals"
+"google_news_search_phrases": [
+            "furnished rentals"
+          ],
+          "press_search_name": "AKA"
           }
         },
         {
@@ -148,7 +148,7 @@
         },
         {
           "channel": "talent",
-          "url": "https://kasa.com/careers",
+          "url": "https://job-boards.greenhouse.io/kasaliving",
           "confidence": "high"
         }
       ]
@@ -176,9 +176,9 @@
           "confidence": "high",
           "extra_options": {
             "google_news_search_phrases": [
-              "Landing furnished rentals"
+              "furnished rentals"
             ],
-            "press_search_name": "Landing furnished rentals"
+            "press_search_name": "Landing"
           }
         },
         {
@@ -330,9 +330,9 @@
           "confidence": "high",
           "extra_options": {
             "google_news_search_phrases": [
-              "Rove furnished rentals"
+              "furnished rentals"
             ],
-            "press_search_name": "Rove furnished rentals"
+            "press_search_name": "Rove"
           }
         },
         {
