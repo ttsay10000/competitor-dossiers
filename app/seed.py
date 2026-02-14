@@ -382,18 +382,12 @@ SEED_COMPETITORS = [
                 "channel": "asset",
                 "url": "https://rovetravel.com/search",
                 "confidence": "high",
-                "js_required": True,
                 "extra_options": {
                     "strategy_chain": [
-                        "js_exhaust",
                         "sitemap_first",
+                        "js_exhaust",
                         "html"
-                    ],
-                    "load_more": {
-                        "scroll_window": True,
-                        "scroll_wait_sec": 1.5,
-                        "max_scrolls": 150
-                    }
+                    ]
                 }
             },
             {

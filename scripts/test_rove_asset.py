@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Test Rove asset flow: sitemap fetch + collect_asset_snapshot."""
+"""Test Rove asset flow: sitemap fetch + collect_asset_snapshot.
+
+Rove uses sitemap_first (canonical). Sitemap returns ~305 /listing/ URLs via _same_site_netloc
+(www.rovetravel.com matches rovetravel.com). No Playwright needed.
+"""
 import sys
 from pathlib import Path
 
@@ -19,7 +23,7 @@ SOURCE_URL = "https://rovetravel.com/search"
 
 def main() -> None:
     print("=" * 60)
-    print("1. Sitemap fetch")
+    print("1. Sitemap fetch (305 /listing/ URLs via _same_site_netloc)")
     print("=" * 60)
     for sitemap_url in discover_sitemap(SOURCE_URL):
         print(f"  Fetching: {sitemap_url}")
@@ -38,9 +42,9 @@ def main() -> None:
             break
 
     print("\n" + "=" * 60)
-    print("2. collect_asset_snapshot (full flow)")
+    print("2. collect_asset_snapshot (305 version: sitemap_first, no Playwright)")
     print("=" * 60)
-    snapshot = collect_asset_snapshot(SOURCE_URL, extra_options={"strategy_chain": ["sitemap_first", "html"]})
+    snapshot = collect_asset_snapshot(SOURCE_URL, extra_options={})
     props = snapshot.get("properties") or []
     note = snapshot.get("note", "")
     print(f"  Note: {note}")

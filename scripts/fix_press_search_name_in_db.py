@@ -30,10 +30,12 @@ if _env.exists():
             if k:
                 os.environ.setdefault(k, v)
 
-# Use external URL when set (reachable from local; internal host often unreachable)
-_export_url = os.environ.get("DATABASE_URL_EXTERNAL") or os.environ.get("DATABASE_URL")
-if _export_url:
-    os.environ["DATABASE_URL"] = _export_url
+# This script only: use external URL for this run (no .env edits). Process env is set so
+# that when we import app.db below, config uses this URL instead of INTERNAL.
+_external_url = os.environ.get("DATABASE_URL_EXTERNAL") or os.environ.get("DATABASE_URL")
+if _external_url:
+    os.environ["DATABASE_URL"] = _external_url
+    os.environ.pop("DATABASE_URL_INTERNAL", None)
 
 # Maps old (wrong) press_search_name -> (company_name_only, keywords_list)
 FIXES = {

@@ -1688,7 +1688,7 @@ _ASSET_CANONICAL_STRATEGY: list[tuple[str, str, str]] = [
     ("larkhospitality.com", "/portfolio", "js_exhaust"),
     ("theblueground.com", "/destinations", "blueground_destinations"),
     ("hellolanding.com", "/locations", "landing_locations"),
-    ("rovetravel.com", "/search", "js_exhaust"),
+    ("rovetravel.com", "/search", "sitemap_first"),
     ("vacasa.com", "/search", "sitemap_first"),
     ("kasa.com", "/locations", "kasa_locations"),
     ("kasaliving.com", "/locations", "kasa_locations"),
@@ -2128,10 +2128,6 @@ def collect_asset_snapshot(
         # Landing locations page: try landing_locations first so we never run generic HTML/link extraction (which can let cities through).
         if chain and _is_landing_locations_url(source_url) and (chain[0] if chain else None) != "landing_locations":
             chain = ["landing_locations"] + list(chain)
-        # Rove search: try js_exhaust first so we scroll to get full list; sitemap often has only ~10 /listing/ URLs (DB may have stale chain order).
-        if chain and _is_rove_search_url(source_url) and (chain[0] if chain else None) != "js_exhaust":
-            rest = [s for s in chain if s != "js_exhaust"]
-            chain = ["js_exhaust"] + rest
     # Seed-added competitors often have no extra_options; accept any non-empty result (min_accept=1).
     # Explicit strategy_chain in opts keeps stricter min (5) unless they set min_properties_accept.
     using_default_chain = chain == _DEFAULT_ASSET_STRATEGY_CHAIN
